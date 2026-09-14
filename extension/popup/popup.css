@@ -1,0 +1,385 @@
+/*
+ * The toolbar popup. 360px of the most useful thing the bridge can say.
+ *
+ * The bar it has to clear: everything that matters is readable in under a
+ * second without scrolling. That constrains the content to the current line's
+ * identity and state, the arm control, and two escape hatches. Everything else
+ * belongs on the board.
+ *
+ * Same rule as every other stylesheet here: no literal colors, ui/tokens.css
+ * owns the palette.
+ */
+
+body.popup-surface {
+  width: var(--sb-popup-w);
+  min-height: var(--sb-h-popup-min);
+  background: var(--sb-bg);
+  font-size: var(--sb-fs-sm);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Top strip                                                                   */
+/* -------------------------------------------------------------------------- */
+
+.pop-top {
+  display: flex;
+  align-items: center;
+  gap: var(--sb-sp-2);
+  padding: var(--sb-sp-3) var(--sb-sp-4);
+  border-bottom: var(--sb-hairline) solid var(--sb-border);
+  background: var(--sb-surface);
+}
+
+.pop-mark {
+  display: grid;
+  place-items: center;
+  width: var(--sb-tile-md);
+  height: var(--sb-tile-md);
+  flex: none;
+  border: var(--sb-hairline) solid var(--sb-accent-line);
+  border-radius: var(--sb-r-md);
+  background: var(--sb-accent-wash);
+  color: var(--sb-accent-ink);
+}
+
+.pop-name {
+  font-family: var(--sb-font-display);
+  font-size: var(--sb-fs-lg);
+  font-weight: var(--sb-fw-semibold);
+  letter-spacing: var(--sb-track-tight);
+}
+
+.pop-status {
+  margin-left: auto;
+  padding: var(--sb-sp-xs) var(--sb-sp-2);
+  font-size: var(--sb-fs-2xs);
+  font-weight: var(--sb-fw-semibold);
+  letter-spacing: var(--sb-track-wide);
+  text-transform: uppercase;
+  border: var(--sb-hairline) solid var(--sb-border);
+  border-radius: var(--sb-r-full);
+  background: var(--sb-surface-inset);
+  color: var(--sb-text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sb-sp-s);
+  white-space: nowrap;
+}
+
+.pop-status[data-state="connected"] {
+  border-color: var(--sb-accent-line);
+  background: var(--sb-accent-wash);
+  color: var(--sb-accent-ink);
+}
+
+.pop-status[data-state="down"] {
+  border-color: var(--sb-warn-line);
+  background: var(--sb-warn-wash);
+  color: var(--sb-warn-ink);
+}
+
+.pop-status[data-state="panic"] {
+  border-color: var(--sb-danger-line);
+  background: var(--sb-danger-wash);
+  color: var(--sb-danger-ink);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Body                                                                        */
+/* -------------------------------------------------------------------------- */
+
+.pop-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.pop-fatal {
+  display: flex;
+  gap: var(--sb-sp-2);
+  padding: var(--sb-sp-4);
+  color: var(--sb-danger-ink);
+  background: var(--sb-danger-wash);
+  border-bottom: var(--sb-hairline) solid var(--sb-danger-line);
+  font-size: var(--sb-fs-sm);
+}
+
+.pop-line {
+  padding: var(--sb-sp-4);
+  border-bottom: var(--sb-hairline) solid var(--sb-border);
+}
+
+.pop-line__head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sb-sp-2);
+}
+
+.pop-line__lamp {
+  margin-top: var(--sb-lamp-nudge);
+}
+
+.pop-line__id {
+  flex: 1;
+  min-width: 0;
+}
+
+.pop-line__label {
+  font-size: var(--sb-fs-md);
+  font-weight: var(--sb-fw-semibold);
+  letter-spacing: var(--sb-track-tight);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pop-line__sub {
+  display: flex;
+  align-items: center;
+  gap: var(--sb-sp-s);
+  margin-top: var(--sb-sp-hair);
+  font-size: var(--sb-fs-xs);
+  color: var(--sb-text-muted);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.pop-line__sub .vendor {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sb-sp-1);
+  color: var(--sb-text);
+  font-weight: var(--sb-fw-medium);
+}
+
+.pop-line__detail {
+  margin-top: var(--sb-sp-2);
+  font-size: var(--sb-fs-xs);
+  color: var(--sb-text-muted);
+}
+
+.pop-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--sb-sp-2);
+  margin-top: var(--sb-sp-3);
+  padding-top: var(--sb-sp-3);
+  border-top: var(--sb-hairline) solid var(--sb-border);
+}
+
+.pop-stat dt {
+  font-size: var(--sb-fs-2xs);
+  font-weight: var(--sb-fw-semibold);
+  letter-spacing: var(--sb-track-wide);
+  text-transform: uppercase;
+  color: var(--sb-text-faint);
+}
+
+.pop-stat dd {
+  font-size: var(--sb-fs-md);
+  font-weight: var(--sb-fw-medium);
+  font-variant-numeric: tabular-nums;
+}
+
+.pop-stat dd .unit {
+  font-size: var(--sb-fs-2xs);
+  font-weight: var(--sb-fw-regular);
+  color: var(--sb-text-faint);
+  margin-left: var(--sb-sp-2xs);
+}
+
+/* ---- Claim callout --------------------------------------------------------- */
+
+.pop-claim {
+  display: flex;
+  gap: var(--sb-sp-2);
+  padding: var(--sb-sp-3) var(--sb-sp-4);
+  border-bottom: var(--sb-hairline) solid var(--sb-accent-line);
+  background: var(--sb-accent-wash);
+}
+
+.pop-claim__mark {
+  flex: none;
+  margin-top: var(--sb-sp-2xs);
+  color: var(--sb-accent-ink);
+}
+
+.pop-claim__title {
+  font-size: var(--sb-fs-sm);
+  font-weight: var(--sb-fw-semibold);
+  color: var(--sb-accent-ink);
+}
+
+.pop-claim__body {
+  font-size: var(--sb-fs-xs);
+  color: var(--sb-text-muted);
+}
+
+/* ---- Broker down ----------------------------------------------------------- */
+
+.pop-down {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sb-sp-2);
+  padding: var(--sb-sp-3) var(--sb-sp-4);
+  border-bottom: var(--sb-hairline) solid var(--sb-warn-line);
+  background: var(--sb-warn-wash);
+}
+
+.pop-down__title {
+  display: flex;
+  align-items: center;
+  gap: var(--sb-sp-m);
+  font-size: var(--sb-fs-sm);
+  font-weight: var(--sb-fw-semibold);
+  color: var(--sb-warn-ink);
+}
+
+.pop-down__body {
+  font-size: var(--sb-fs-xs);
+  color: var(--sb-text-muted);
+}
+
+.pop-down__cmd {
+  display: block;
+  padding: var(--sb-sp-2);
+  border: var(--sb-hairline) solid var(--sb-border-strong);
+  border-radius: var(--sb-r-sm);
+  background: var(--sb-surface);
+  font-family: var(--sb-font-mono);
+  font-size: var(--sb-fs-2xs);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.pop-down .sb-btn {
+  align-self: flex-start;
+}
+
+/* ---- Arming ---------------------------------------------------------------- */
+
+.pop-arm {
+  padding: var(--sb-sp-4);
+}
+
+.pop-arm__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sb-sp-2);
+}
+
+.pop-arm__count {
+  margin-left: auto;
+  font-size: var(--sb-fs-md);
+  font-weight: var(--sb-fw-semibold);
+  color: var(--sb-accent-ink);
+}
+
+.pop-arm__copy {
+  margin-top: var(--sb-sp-1);
+  font-size: var(--sb-fs-xs);
+  color: var(--sb-text-muted);
+}
+
+.pop-arm__bar {
+  margin-top: var(--sb-sp-2);
+}
+
+.pop-arm__actions {
+  display: flex;
+  gap: var(--sb-sp-2);
+  margin-top: var(--sb-sp-3);
+}
+
+.pop-arm__btn {
+  flex: 1;
+  justify-content: center;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Footer                                                                      */
+/* -------------------------------------------------------------------------- */
+
+.pop-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sb-sp-2);
+  padding: var(--sb-sp-3) var(--sb-sp-4);
+  border-top: var(--sb-hairline) solid var(--sb-border);
+  background: var(--sb-surface);
+}
+
+.pop-foot__board {
+  flex: 1;
+  justify-content: center;
+}
+
+.pop-foot__panic {
+  justify-content: center;
+  user-select: none;
+  touch-action: none;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Panic state                                                                 */
+/* -------------------------------------------------------------------------- */
+
+body[data-panic="on"] {
+  background: var(--sb-danger-wash);
+}
+
+body[data-panic="on"] .pop-line,
+body[data-panic="on"] .pop-arm {
+  opacity: 0.55;
+  filter: saturate(0.3);
+  pointer-events: none;
+}
+
+body[data-panic="on"] .pop-top {
+  border-bottom-color: var(--sb-danger-line);
+}
+
+/* The same edge the board draws. A popup is small enough to take in at a
+   glance, and this is what that glance has to say first. */
+body[data-panic="on"]::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 var(--sb-halo) var(--sb-danger);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Toast                                                                       */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Never hidden with the hidden attribute: display:none takes this aria-live
+ * region out of the accessibility tree and its messages with it. Hidden by
+ * opacity instead, and emptied by JS on close so nothing stale is announced.
+ */
+.pop-toast {
+  position: fixed;
+  left: var(--sb-sp-4);
+  right: var(--sb-sp-4);
+  bottom: var(--sb-sp-4);
+  padding: var(--sb-sp-m) var(--sb-sp-3);
+  border: var(--sb-hairline) solid var(--sb-border-strong);
+  border-radius: var(--sb-r-sm);
+  background: var(--sb-surface-raised);
+  box-shadow: var(--sb-shadow-2);
+  font-size: var(--sb-fs-xs);
+  text-align: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--sb-dur) var(--sb-ease);
+}
+
+.pop-toast[data-open="true"] {
+  opacity: 1;
+}
+
+.pop-toast[data-tone="error"] {
+  border-color: var(--sb-danger-line);
+  color: var(--sb-danger-ink);
+}

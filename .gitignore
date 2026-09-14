@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+tmp/
+
+.claude/cache/
+.playwright-cli/
+test-results/
+**/test-results/
+playwright-report/
+**/playwright-report/

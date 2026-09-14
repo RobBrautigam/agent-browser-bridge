@@ -1,0 +1,21 @@
+{
+  "$comment": "The one place the product's identity lives. Every other file reads these values (Node side: shared/config.mjs; extension side: the generated extension/lib/config.js). Change a value here, then run `npm run sync-config` so the extension copy and the manifest follow. `npm run rename -- <slug> \"<Display Name>\"` sets all of them at once.",
+
+  "productName": "Agent Browser Bridge",
+  "tagline": "Drive your real, logged-in browsers from any AI agent",
+
+  "$comment.nativeHostId": "The Chromium native messaging host name. Lowercase letters, digits, dots and underscores only. It is written into the host manifest at install time and called by the extension's connectNative(); the two must match, which is why both read it from here.",
+  "nativeHostId": "com.agent_browser_bridge.host",
+
+  "$comment.socketName": "The broker's local endpoint. On Windows this is the named pipe \\\\.\\pipe\\<socketName>; on macOS and Linux it is the file <stateDir>/<socketName>.sock. Never a TCP port: nothing in this system listens on the network.",
+  "socketName": "agent-browser-bridge",
+
+  "$comment.stateDirName": "Folder name for machine state (runtime token, route registry, audit log, screenshots, launcher). Windows: %LOCALAPPDATA%\\<stateDirName>. macOS: ~/Library/Application Support/<stateDirName>. Linux: $XDG_STATE_HOME/<stateDirName> or ~/.local/state/<stateDirName>. Override the whole path with the BRIDGE_HOME environment variable.",
+  "stateDirName": "agent-browser-bridge",
+
+  "$comment.serviceName": "The always-on broker's supervisor entry: the Windows Task Scheduler task name, the launchd label suffix on macOS (<nativeHostId>.broker), and the systemd user unit name on Linux (<serviceName>-broker).",
+  "serviceName": "Agent Browser Bridge broker",
+
+  "$comment.mcpServerName": "The key written into your agent's MCP config (~/.claude.json, ~/.cursor/mcp.json, ~/.codex/config.toml). Tool names are fixed (browser_*, bridge_*) and do not change with this.",
+  "mcpServerName": "agent-browser-bridge"
+}

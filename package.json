@@ -1,0 +1,35 @@
+{
+  "name": "agent-browser-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent Browser Bridge - Drive your real, logged-in browsers from any AI agent.",
+  "license": "MIT",
+  "author": "Rob Brautigam",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RobBrautigam/agent-browser-bridge.git"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "gate": "node scripts/gate.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "broker": "node bridged/index.mjs",
+    "e2e": "node scripts/e2e.mjs",
+    "keygen": "node scripts/keygen.mjs",
+    "icons": "node scripts/gen-icons.mjs",
+    "sync-config": "node scripts/sync-config.mjs",
+    "rename": "node scripts/rename.mjs",
+    "install:host": "node scripts/install-host.mjs",
+    "install:broker": "node scripts/install-broker.mjs",
+    "install:mcp": "node scripts/install-mcp.mjs",
+    "hooks:install": "node scripts/install-hooks.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0",
+    "zod": "4.5.2"
+  }
+}

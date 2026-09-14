@@ -1,0 +1,793 @@
+/*
+ * Design tokens.
+ *
+ * This is the ONLY file in the extension allowed to contain a literal color.
+ * Every other stylesheet composes from the custom properties defined here, so
+ * a palette change is a one-file change and a theme can never half-apply.
+ *
+ * Theming contract (three states, because the viewer has three):
+ *   1. bare :root                       the complete LIGHT palette
+ *   2. @media (prefers-color-scheme: dark) :root:not([data-theme="light"])
+ *                                       the DARK palette for a system-dark
+ *                                       viewer who has not overridden it
+ *   3. :root[data-theme="dark"]         the DARK palette when the toggle wins
+ *
+ * The :not([data-theme="light"]) guard on rule 2 is what lets a manual LIGHT
+ * choice survive a system-dark preference. Without it the toggle only works in
+ * one direction, which is the classic half-broken theme switch.
+ *
+ * Naming: everything is prefixed --sb- so that nothing here can collide with a
+ * host page's variables if a fragment of this UI is ever reused elsewhere.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* ---- Surfaces and lines ------------------------------------------------ */
+  --sb-bg: #f6f7f9;
+  --sb-bg-sunken: #edeef2;
+  --sb-surface: #ffffff;
+  --sb-surface-raised: #ffffff;
+  --sb-surface-hover: #f3f4f7;
+  --sb-surface-inset: #f8f9fb;
+  --sb-border: #e2e4ea;
+  --sb-border-strong: #cbcfd8;
+
+  /* ---- Ink --------------------------------------------------------------- */
+  --sb-text: #14161a;
+  --sb-text-muted: #5c636e;
+  /* Faint is still real text: stat labels, timestamps, the footer. Measured
+     5.13:1 on --sb-surface and 4.79:1 on --sb-bg, so it clears AA on both
+     grounds it is ever painted on. A lighter gray reads better and fails. */
+  --sb-text-faint: #676e7b;
+  --sb-text-inverse: #ffffff;
+
+  /* ---- The one accent: brass. The lit lamp on a switchboard. --------------
+     The lamp is a state indicator, not decoration, so it is held to WCAG's 3:1
+     non-text contrast against the palest ground it is ever drawn on
+     (--sb-surface at #ffffff, and the page at #f6f7f9). A lighter, prettier
+     brass measured 2.62:1 there and was darkened until it cleared. */
+  --sb-accent: #b8841d;
+  --sb-accent-strong: #a9770f;
+  /* Accent used as TEXT needs its own value: the lamp brass is too light to
+     pass AA on a white surface. Measured at 5.7:1 against --sb-surface. */
+  --sb-accent-ink: #8a5d0a;
+  --sb-on-accent: #1a1204;
+
+  /* ---- State hues. Not accents; they mean one thing each. -----------------
+     The idle and ghost grays carry the same 3:1 obligation as the brass: both
+     paint a lamp, and a lamp the operator cannot see is a state the operator
+     does not have. */
+  --sb-idle: #888e99;
+  --sb-warn: #c2763a;
+  --sb-warn-ink: #8b4a13;
+  --sb-danger: #d93a40;
+  --sb-danger-strong: #b3151b;
+  --sb-danger-ink: #a8121a;
+  --sb-on-danger: #ffffff;
+  --sb-ghost: #8a8e95;
+
+  /* ---- Focus and elevation ----------------------------------------------- */
+  --sb-ring: #8a5d0a;
+  --sb-shadow-color: rgba(16, 18, 22, 0.09);
+  --sb-shadow-color-strong: rgba(16, 18, 22, 0.16);
+
+  /* ---- Derived tints. Declared once; var() inside a custom property is
+         substituted lazily, so these follow whichever palette is in force. --- */
+  --sb-accent-wash: color-mix(in srgb, var(--sb-accent) 13%, transparent);
+  --sb-accent-wash-strong: color-mix(in srgb, var(--sb-accent) 22%, transparent);
+  --sb-accent-line: color-mix(in srgb, var(--sb-accent) 55%, transparent);
+  --sb-accent-glow: color-mix(in srgb, var(--sb-accent) 34%, transparent);
+  --sb-warn-wash: color-mix(in srgb, var(--sb-warn) 13%, transparent);
+  --sb-warn-line: color-mix(in srgb, var(--sb-warn) 48%, transparent);
+  --sb-danger-wash: color-mix(in srgb, var(--sb-danger) 12%, transparent);
+  --sb-danger-line: color-mix(in srgb, var(--sb-danger) 50%, transparent);
+  --sb-idle-wash: color-mix(in srgb, var(--sb-idle) 16%, transparent);
+  --sb-scrim: color-mix(in srgb, var(--sb-bg) 78%, transparent);
+
+  /* ---- Lamp roles. One indirection so a state can be recolored centrally. - */
+  --sb-lamp-ready: var(--sb-accent);
+  --sb-lamp-idle: var(--sb-idle);
+  --sb-lamp-connecting: var(--sb-idle);
+  --sb-lamp-stale: var(--sb-warn);
+  --sb-lamp-down: var(--sb-ghost);
+  --sb-lamp-unclaimed: var(--sb-accent);
+  /* The only lamp that means "somebody could get hurt": the account signed into
+     a claimed profile stopped being the one it was claimed as. */
+  --sb-lamp-alarm: var(--sb-danger);
+
+  /* ---- Type -------------------------------------------------------------- */
+  --sb-font-sans: "Segoe UI Variable Text", "Segoe UI", -apple-system,
+    BlinkMacSystemFont, "Inter", system-ui, sans-serif;
+  --sb-font-display: "Segoe UI Variable Display", "Segoe UI Semibold", "Segoe UI",
+    -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
+  --sb-font-mono: ui-monospace, "Cascadia Mono", "Cascadia Code", "JetBrains Mono",
+    Consolas, "SF Mono", monospace;
+
+  --sb-fs-2xs: 10px;
+  --sb-fs-xs: 11px;
+  --sb-fs-sm: 12px;
+  --sb-fs-base: 13px;
+  --sb-fs-md: 14px;
+  --sb-fs-lg: 16px;
+  --sb-fs-xl: 20px;
+  --sb-fs-2xl: 26px;
+
+  --sb-lh-tight: 1.2;
+  --sb-lh: 1.55;
+
+  --sb-track-tight: -0.018em;
+  --sb-track-wide: 0.09em;
+
+  --sb-fw-regular: 400;
+  --sb-fw-medium: 500;
+  --sb-fw-semibold: 600;
+  --sb-fw-bold: 700;
+
+  /* ---- Space. Strict 8px rhythm; the 4px step exists only for icon gaps. -- */
+  --sb-sp-1: 4px;
+  --sb-sp-2: 8px;
+  --sb-sp-3: 12px;
+  --sb-sp-4: 16px;
+  --sb-sp-5: 24px;
+  --sb-sp-6: 32px;
+  --sb-sp-7: 48px;
+  --sb-sp-8: 64px;
+
+  /* ---- Radii ------------------------------------------------------------- */
+  --sb-r-xs: 3px;
+  --sb-r-sm: 5px;
+  --sb-r-md: 8px;
+  --sb-r-lg: 12px;
+  --sb-r-xl: 16px;
+  --sb-r-full: 999px;
+
+  /* ---- Motion. Short and purposeful; the lamp pulse is the only ambient. -- */
+  --sb-dur-fast: 120ms;
+  --sb-dur: 160ms;
+  --sb-dur-slow: 200ms;
+  --sb-pulse-dur: 2600ms;
+  --sb-shimmer-dur: 1400ms;
+  --sb-ease: cubic-bezier(0.2, 0, 0, 1);
+  --sb-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ---- Sub-step space ----------------------------------------------------
+     Optical adjustments the 8px rhythm cannot express: a 10px lamp sitting
+     beside 13px text, the inner padding of a segmented control, the gap
+     between a 13px glyph and its label. Named rather than typed inline so the
+     two stylesheets cannot drift apart on what "a small nudge" means. Never
+     reach for one of these where a --sb-sp-N step would do. */
+  --sb-sp-hair: 1px;
+  --sb-sp-2xs: 2px;
+  --sb-sp-xs: 3px;
+  --sb-sp-s: 5px;
+  --sb-sp-m: 6px;
+
+  /* ---- Control geometry --------------------------------------------------- */
+  --sb-ctl-pad-y: 7px;
+  --sb-stroke: 2px;
+
+  /* Tiles: the square that holds a glyph. Four steps, one per surface. */
+  --sb-tile-sm: 26px;
+  --sb-tile-md: 28px;
+  --sb-tile-lg: 34px;
+  --sb-tile-xl: 44px;
+
+  /* ---- Instrument parts --------------------------------------------------- */
+  --sb-halo: 3px; /* the ring around a lit lamp and around the self card */
+  --sb-bar-h: 4px;
+  --sb-dot: 3px;
+  --sb-lamp-nudge: 5px; /* lamp against 13px text */
+  --sb-lamp-nudge-lg: 9px; /* lamp against the 20px display face */
+
+  /* ---- Elevation. Composed here so a surface never invents its own. ------- */
+  --sb-shadow-1: 0 1px 2px var(--sb-shadow-color);
+  --sb-shadow-2: 0 4px 16px var(--sb-shadow-color-strong);
+  --sb-shadow-3: 0 6px 24px var(--sb-shadow-color-strong);
+
+  /* ---- Measures. Prose is capped in ch, not px: the limit is a count of
+         characters per line, so it must follow the font, not the viewport. -- */
+  --sb-measure: 74ch;
+  --sb-measure-narrow: 62ch;
+  --sb-measure-wide: 78ch;
+  --sb-measure-hint: 42ch;
+
+  /* ---- Component widths and heights --------------------------------------- */
+  --sb-w-prose: 720px;
+  --sb-w-input: 320px;
+  --sb-w-self-main: 240px;
+  --sb-w-card-min: 300px;
+  --sb-w-arm-id: 190px;
+  --sb-w-arm-status: 140px;
+  --sb-w-hold: 190px;
+  --sb-h-audit: 340px;
+  --sb-h-foot-row: 22px;
+  --sb-h-popup-min: 210px;
+
+  /* The audit tail is a table drawn as a grid, so its columns are fixed. */
+  --sb-col-time: 78px;
+  --sb-col-profile: 150px;
+  --sb-col-op: 108px;
+  --sb-col-mark: 20px;
+  --sb-col-time-narrow: 66px;
+  --sb-col-mark-narrow: 18px;
+
+  /* ---- Skeleton geometry. The loading state has to have the silhouette of
+         the card it becomes, or it reads as a broken layout. ---------------- */
+  --sb-sk-title-w: 190px;
+  --sb-sk-title-h: 22px;
+  --sb-sk-sub-w: 260px;
+  --sb-sk-body-w: 320px;
+  --sb-sk-line-h: 14px;
+  --sb-sk-inline-w: 130px;
+  --sb-sk-inline-h: 15px;
+
+  /* ---- Effects ------------------------------------------------------------ */
+  --sb-blur: 14px;
+  --sb-fade-depth: 120px; /* where a card's tinted head hands off to its body */
+  --sb-nudge: 2px; /* the travel of a hover shift */
+  --sb-lift: 10px; /* the travel of a toast entering */
+
+  /* ---- Layout ------------------------------------------------------------ */
+  --sb-hairline: 1px;
+  --sb-maxw: 1160px;
+  --sb-popup-w: 360px;
+  --sb-lamp-size: 10px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --sb-bg: #0b0c0f;
+    --sb-bg-sunken: #07080a;
+    --sb-surface: #121419;
+    --sb-surface-raised: #171a20;
+    --sb-surface-hover: #1c2027;
+    --sb-surface-inset: #0e1014;
+    --sb-border: #23262e;
+    --sb-border-strong: #333844;
+
+    --sb-text: #e7e9ee;
+    --sb-text-muted: #99a0ac;
+    --sb-text-faint: #7d8492;
+    --sb-text-inverse: #0b0c0f;
+
+    --sb-accent: #e0a83c;
+    --sb-accent-strong: #f2c268;
+    --sb-accent-ink: #e8b45a;
+    --sb-on-accent: #17120a;
+
+    --sb-idle: #737b88;
+    --sb-warn: #d1813f;
+    --sb-warn-ink: #e0975a;
+    --sb-danger: #e5484d;
+    --sb-danger-strong: #f26a6e;
+    --sb-danger-ink: #f0787c;
+    --sb-on-danger: #180507;
+    --sb-ghost: #616c7e;
+
+    --sb-ring: #e0a83c;
+    --sb-shadow-color: rgba(0, 0, 0, 0.45);
+    --sb-shadow-color-strong: rgba(0, 0, 0, 0.62);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --sb-bg: #0b0c0f;
+  --sb-bg-sunken: #07080a;
+  --sb-surface: #121419;
+  --sb-surface-raised: #171a20;
+  --sb-surface-hover: #1c2027;
+  --sb-surface-inset: #0e1014;
+  --sb-border: #23262e;
+  --sb-border-strong: #333844;
+
+  --sb-text: #e7e9ee;
+  --sb-text-muted: #99a0ac;
+  --sb-text-faint: #7d8492;
+  --sb-text-inverse: #0b0c0f;
+
+  --sb-accent: #e0a83c;
+  --sb-accent-strong: #f2c268;
+  --sb-accent-ink: #e8b45a;
+  --sb-on-accent: #17120a;
+
+  --sb-idle: #737b88;
+  --sb-warn: #d1813f;
+  --sb-warn-ink: #e0975a;
+  --sb-danger: #e5484d;
+  --sb-danger-strong: #f26a6e;
+  --sb-danger-ink: #f0787c;
+  --sb-on-danger: #180507;
+  --sb-ghost: #616c7e;
+
+  --sb-ring: #e0a83c;
+  --sb-shadow-color: rgba(0, 0, 0, 0.45);
+  --sb-shadow-color-strong: rgba(0, 0, 0, 0.62);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Reset and primitives shared by both surfaces                               */
+/* -------------------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--sb-bg);
+  color: var(--sb-text);
+  font-family: var(--sb-font-sans);
+  font-size: var(--sb-fs-base);
+  line-height: var(--sb-lh);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+figure,
+dl,
+dd {
+  margin: 0;
+}
+
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+/*
+ * The hidden attribute must always win.
+ *
+ * Both surfaces toggle visibility with `node.hidden = true`, which relies on
+ * the user agent's `[hidden] { display: none }` rule. That rule loses to ANY
+ * author display declaration, so a component styled `display: flex` stays
+ * visible while its .hidden property reads true. Every conditional element in
+ * this product is a flex or grid container, so without this line the entire
+ * hidden state of the UI silently does nothing.
+ */
+[hidden] {
+  display: none !important;
+}
+
+svg {
+  display: block;
+  flex: none;
+}
+
+/* Every number in this product is tabular. Columns of digits that jitter as
+   they tick are the fastest way to make instrumentation feel cheap. */
+.sb-num,
+.sb-mono {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.sb-mono {
+  font-family: var(--sb-font-mono);
+}
+
+/* Focus is never removed, only replaced. :focus-visible so a pointer click
+   does not leave a ring behind, while keyboard travel always shows one. */
+:focus-visible {
+  outline: var(--sb-stroke) solid var(--sb-ring);
+  outline-offset: var(--sb-sp-2xs);
+  border-radius: var(--sb-r-xs);
+}
+
+::selection {
+  background: var(--sb-accent-wash-strong);
+}
+
+.sb-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* -------------------------------------------------------------------------- */
+/* The lamp. One component, five states, used on both surfaces.               */
+/* -------------------------------------------------------------------------- */
+
+.sb-lamp {
+  position: relative;
+  flex: none;
+  width: var(--sb-lamp-size);
+  height: var(--sb-lamp-size);
+  border-radius: var(--sb-r-full);
+  background: var(--sb-lamp-down);
+  transition: background var(--sb-dur) var(--sb-ease);
+}
+
+.sb-lamp::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  opacity: 0;
+}
+
+.sb-lamp[data-state="ready"] {
+  background: var(--sb-lamp-ready);
+  box-shadow: 0 0 0 var(--sb-halo) var(--sb-accent-wash);
+}
+
+/* The single ambient animation in the product: a live line breathes. */
+.sb-lamp[data-state="ready"]::after {
+  background: var(--sb-lamp-ready);
+  animation: sb-pulse var(--sb-pulse-dur) var(--sb-ease) infinite;
+}
+
+.sb-lamp[data-state="idle"] {
+  background: var(--sb-lamp-idle);
+  box-shadow: 0 0 0 var(--sb-halo) var(--sb-idle-wash);
+}
+
+.sb-lamp[data-state="connecting"] {
+  background: var(--sb-lamp-connecting);
+  box-shadow: 0 0 0 var(--sb-halo) var(--sb-idle-wash);
+}
+
+.sb-lamp[data-state="connecting"]::after {
+  background: var(--sb-lamp-connecting);
+  animation: sb-pulse calc(var(--sb-pulse-dur) / 2.6) var(--sb-ease) infinite;
+}
+
+.sb-lamp[data-state="stale"] {
+  background: var(--sb-lamp-stale);
+  box-shadow: 0 0 0 var(--sb-halo) var(--sb-warn-wash);
+}
+
+.sb-lamp[data-state="down"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 var(--sb-stroke) var(--sb-lamp-down);
+}
+
+.sb-lamp[data-state="unclaimed"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 var(--sb-stroke) var(--sb-lamp-unclaimed);
+}
+
+/* Filled and haloed rather than outlined, and it pulses. Every other state on
+   this board is a fact; this one is a demand. */
+.sb-lamp[data-state="alarm"] {
+  background: var(--sb-lamp-alarm);
+  box-shadow: 0 0 0 var(--sb-halo) var(--sb-danger-wash);
+}
+
+.sb-lamp[data-state="alarm"]::after {
+  background: var(--sb-lamp-alarm);
+  animation: sb-pulse var(--sb-pulse-dur) var(--sb-ease) infinite;
+}
+
+@keyframes sb-pulse {
+  0% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  70% {
+    opacity: 0;
+    transform: scale(2.6);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(2.6);
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Buttons, chips and fields. Shared vocabulary for the board and the popup.   */
+/* -------------------------------------------------------------------------- */
+
+.sb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sb-sp-2);
+  padding: var(--sb-ctl-pad-y) var(--sb-sp-3);
+  border: var(--sb-hairline) solid var(--sb-border-strong);
+  border-radius: var(--sb-r-sm);
+  background: var(--sb-surface-raised);
+  color: var(--sb-text);
+  font-size: var(--sb-fs-sm);
+  font-weight: var(--sb-fw-medium);
+  white-space: nowrap;
+  transition: background var(--sb-dur-fast) var(--sb-ease),
+    border-color var(--sb-dur-fast) var(--sb-ease),
+    color var(--sb-dur-fast) var(--sb-ease);
+}
+
+.sb-btn:hover:not(:disabled) {
+  background: var(--sb-surface-hover);
+  border-color: var(--sb-border-strong);
+}
+
+.sb-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.sb-btn--accent {
+  background: var(--sb-accent);
+  border-color: var(--sb-accent);
+  color: var(--sb-on-accent);
+  font-weight: var(--sb-fw-semibold);
+}
+
+.sb-btn--accent:hover:not(:disabled) {
+  background: var(--sb-accent-strong);
+  border-color: var(--sb-accent-strong);
+}
+
+/*
+ * A disabled accent button drops its fill rather than just fading.
+ *
+ * The generic .sb-btn:disabled rule only lowers opacity, and at 45 percent a
+ * filled amber button on a dark surface still reads as a solid, clickable
+ * control - it looks like a different shade of enabled, not like something
+ * inert. That is worst exactly where it matters most: the popup's arm button,
+ * which is disabled until a line is claimed, sitting directly under a sentence
+ * explaining that it cannot be used yet.
+ */
+.sb-btn--accent:disabled {
+  background: transparent;
+  border-color: var(--sb-border);
+  color: var(--sb-text-faint);
+  opacity: 1;
+}
+
+.sb-btn--quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--sb-text-muted);
+}
+
+.sb-btn--quiet:hover:not(:disabled) {
+  background: var(--sb-surface-hover);
+  color: var(--sb-text);
+}
+
+.sb-btn--sm {
+  padding: var(--sb-sp-1) var(--sb-sp-2);
+  font-size: var(--sb-fs-xs);
+}
+
+.sb-btn--icon {
+  padding: var(--sb-sp-m);
+}
+
+.sb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sb-sp-s);
+  padding: var(--sb-sp-2xs) var(--sb-sp-2);
+  border: var(--sb-hairline) solid var(--sb-border);
+  border-radius: var(--sb-r-full);
+  background: var(--sb-surface-inset);
+  color: var(--sb-text-muted);
+  font-size: var(--sb-fs-2xs);
+  font-weight: var(--sb-fw-semibold);
+  letter-spacing: var(--sb-track-wide);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.sb-chip--accent {
+  border-color: var(--sb-accent-line);
+  background: var(--sb-accent-wash);
+  color: var(--sb-accent-ink);
+}
+
+.sb-chip--warn {
+  border-color: var(--sb-warn-line);
+  background: var(--sb-warn-wash);
+  color: var(--sb-warn-ink);
+}
+
+.sb-chip--danger {
+  border-color: var(--sb-danger-line);
+  background: var(--sb-danger-wash);
+  color: var(--sb-danger-ink);
+}
+
+.sb-eyebrow {
+  font-size: var(--sb-fs-2xs);
+  font-weight: var(--sb-fw-semibold);
+  letter-spacing: var(--sb-track-wide);
+  text-transform: uppercase;
+  color: var(--sb-text-faint);
+}
+
+/* A separator that is drawn, not typed. Keeps punctuation out of the copy. */
+.sb-dot-sep {
+  display: inline-block;
+  width: var(--sb-dot);
+  height: var(--sb-dot);
+  border-radius: var(--sb-r-full);
+  background: var(--sb-text-faint);
+  vertical-align: middle;
+  opacity: 0.7;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Bounded-window progress bar. Shared: the board's arming rows and the popup  */
+/* both draw an arming countdown, so this lives in the token layer rather than */
+/* in one surface's stylesheet. --sb-progress is 0..1, driven from JS.         */
+/* -------------------------------------------------------------------------- */
+
+.sb-bar {
+  --sb-progress: 0;
+  position: relative;
+  height: var(--sb-bar-h);
+  border-radius: var(--sb-r-full);
+  background: var(--sb-border);
+  overflow: hidden;
+}
+
+.sb-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  transform: scaleX(var(--sb-progress));
+  background: var(--sb-accent);
+  border-radius: inherit;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Press-and-hold control. Used by panic on both surfaces.                    */
+/* The --sb-hold custom property is driven from rAF in JS, 0 to 1.            */
+/* -------------------------------------------------------------------------- */
+
+.sb-hold {
+  --sb-hold: 0;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  border-color: var(--sb-danger-line);
+  color: var(--sb-danger-ink);
+  background: var(--sb-danger-wash);
+}
+
+.sb-hold:hover:not(:disabled) {
+  background: var(--sb-danger-wash);
+  border-color: var(--sb-danger);
+}
+
+.sb-hold::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  transform-origin: left center;
+  transform: scaleX(var(--sb-hold));
+  background: var(--sb-danger);
+  opacity: 0.85;
+}
+
+.sb-hold[data-holding="true"] {
+  color: var(--sb-on-danger);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Skeletons                                                                   */
+/* -------------------------------------------------------------------------- */
+
+.sb-skeleton {
+  border-radius: var(--sb-r-sm);
+  background: linear-gradient(
+    90deg,
+    var(--sb-surface-inset) 0%,
+    var(--sb-surface-hover) 50%,
+    var(--sb-surface-inset) 100%
+  );
+  background-size: 200% 100%;
+  animation: sb-shimmer var(--sb-shimmer-dur) linear infinite;
+  color: transparent;
+  user-select: none;
+}
+
+@keyframes sb-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/*
+ * Skeleton sizes.
+ *
+ * These are classes rather than inline style attributes on purpose. A style
+ * attribute is a color, space and size decision made outside this file, which
+ * is exactly what the token discipline exists to prevent, and it puts a raw
+ * pixel value into the markup where no grep for it will ever look.
+ */
+.sb-skeleton--title {
+  width: var(--sb-sk-title-w);
+  height: var(--sb-sk-title-h);
+}
+
+.sb-skeleton--sub {
+  width: var(--sb-sk-sub-w);
+  height: var(--sb-sk-line-h);
+}
+
+.sb-skeleton--body {
+  width: var(--sb-sk-body-w);
+  height: var(--sb-sk-line-h);
+}
+
+/* Sits inside a line of text rather than replacing the block. */
+.sb-skeleton--inline {
+  display: inline-block;
+  width: var(--sb-sk-inline-w);
+  height: var(--sb-sk-inline-h);
+}
+
+/* A skeleton never claims a width it cannot have: at narrow widths the fixed
+   pixel widths above would overflow the card they are standing in for. */
+.sb-skeleton {
+  max-width: 100%;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Reduced motion. Everything ambient stops; nothing functional is lost.      */
+/* The press-and-hold fill is deliberately NOT covered here: it is a progress */
+/* readout, not decoration, and removing it would break the control.          */
+/* -------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .sb-lamp::after {
+    display: none;
+  }
+
+  .sb-skeleton {
+    background: var(--sb-surface-hover);
+  }
+
+}

@@ -1,0 +1,66 @@
+# A read-only chat bridge: the whitelist.
+#
+# This file is an EXAMPLE of a policy the bridge itself does not enforce. The
+# bridge exposes generic tools (list tabs, read a page, scroll, screenshot).
+# Which conversations an agent is allowed to open inside a chat web app such as
+# WhatsApp Web, Slack or Telegram Web is a decision the AGENT-SIDE skill or
+# prompt has to make, and the safest shape for that decision is an explicit
+# allowlist that is read BEFORE any tab is opened.
+#
+# The pattern, as used in production by the author:
+#
+#   1. The skill reads this file first. Nothing else grants access.
+#   2. A conversation that is not listed here is refused BY NAME, with no
+#      partial read. Matching is EXACT and case-sensitive after trimming; a
+#      near-match would open a different human's private conversation, which is
+#      the worst thing such a skill could do.
+#   3. The skill only ever uses read-tier tools on the chat (list tabs, read
+#      page, scroll, screenshot). It never clicks Send, never arms the profile,
+#      and never navigates the chat to another conversation by URL.
+#   4. Removing a chat from this file revokes access immediately. Records the
+#      skill already wrote are not deleted by a removal.
+#
+# See docs/recipes/read-only-chat-bridge.md for the full recipe.
+#
+# ---------------------------------------------------------------------------
+# FIELDS
+#
+#   slug            the name the agent passes to the skill. Unique. kebab-case.
+#   display_name    the chat title EXACTLY as it appears in the chat app.
+#   aliases         other exact titles that are the same chat (a contact saved
+#                   under a different name, a renamed group). Also exact.
+#   kind            one-on-one | group
+#   destination     where the skill files the record it writes, relative to the
+#                   agent's own workspace. Never a database, never anywhere the
+#                   bridge can reach.
+#   business_only   true  -> personal messages are dropped from the record
+#                   false -> everything is kept
+#   verified_title  false until a real read has confirmed display_name against
+#                   the live chat list. The skill sets it true after a
+#                   successful exact match, and says so.
+#   notes           why this chat is on the list, in one line.
+# ---------------------------------------------------------------------------
+
+version: 1
+updated: 2026-09-14
+
+# The browser profile label (from browser_list_profiles) the chat app is open in.
+profile: chrome-work
+
+# Where records go, relative to the agent's workspace.
+records_root: knowledge/chats
+
+# Deliberately empty. Add a chat only when you mean to grant read access to it.
+chats: []
+
+# Example of one entry, commented out:
+#
+# chats:
+#   - slug: example-partner
+#     display_name: "Example Partner"
+#     aliases: []
+#     kind: one-on-one
+#     destination: example-partner
+#     business_only: true
+#     verified_title: false
+#     notes: "Weekly sync notes; read-only."
