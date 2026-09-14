@@ -1,0 +1,12 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      all-dependencies:
+        patterns:
+          - "*"
+    # The gate pins the dependency list to two packages and zero native modules,
+    # so an update PR that adds a dependency fails the gate rather than merging.
