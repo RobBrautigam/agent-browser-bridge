@@ -49,11 +49,38 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import * as sharedProtocol from '../shared/protocol.mjs'
+import * as extensionProtocol from '../extension/lib/protocol.js'
 import { PRODUCT_NAME } from '../shared/protocol.mjs'
-import { CONFIG, renderExtensionConfig } from '../shared/config.mjs'
+import { CONFIG, renderProjections } from '../shared/config.mjs'
+import { readJson } from '../shared/paths.mjs'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const EXTENSION_CONFIG = path.join(REPO_ROOT, 'extension', 'lib', 'config.js')
+
+/**
+ * The constants the extension mirrors from the shared contract. A drift is a
+ * silent wire incompatibility, not a load error, so it is checked here on
+ * every commit as well as in test/protocol-mirror.test.mjs.
+ */
+const MIRRORED_CONSTANTS = [
+  'PROTOCOL_VERSION',
+  'PRODUCT_NAME',
+  'PRODUCT_TAGLINE',
+  'NATIVE_HOST_ID',
+  'MSG',
+  'CHUNK_SLICE_BYTES',
+  'OPS',
+  'TIER',
+  'OP_TIER',
+  'BROWSER_OPS',
+  'BROKER_OPS',
+  'HOST_REQ_ALLOWED_OPS',
+  'MAX_ARM_MINUTES',
+  'ERR',
+  'LINK',
+  'RESTRICTED_URL_PREFIXES',
+  'RAW_TAB_ID_FIELD',
+]
 const SELF = path.resolve(fileURLToPath(import.meta.url))
 
 const PACKAGE_JSON = path.join(REPO_ROOT, 'package.json')
@@ -286,23 +313,41 @@ const FILE_RULES = [
 const CHECKS = [
   {
     id: 'config-sync',
-    what: 'extension/lib/config.js and the manifest match bridge.config.json',
-    scope: 'bridge.config.json, extension/lib/config.js, extension/manifest.json',
+    what: 'the generated extension config, the manifest and package.json match bridge.config.json',
+    scope: 'bridge.config.json, extension/lib/config.js, extension/manifest.json, package.json',
     fix: 'npm run sync-config   (the extension cannot read the config file, so its copy is generated)',
     run: () => {
       const hits = []
-      let current = null
-      try {
-        current = fs.readFileSync(EXTENSION_CONFIG, 'utf8')
-      } catch {
-        current = null
+      for (const { file, text } of renderProjections(CONFIG)) {
+        let current = null
+        try {
+          current = fs.readFileSync(file, 'utf8')
+        } catch {
+          current = null
+        }
+        if (current !== text) {
+          hits.push({ where: path.relative(REPO_ROOT, file), detail: 'does not match what bridge.config.json projects' })
+        }
       }
-      if (current !== renderExtensionConfig(CONFIG)) {
-        hits.push({ where: path.relative(REPO_ROOT, EXTENSION_CONFIG), detail: 'does not match bridge.config.json' })
+      return hits
+    },
+  },
+  {
+    id: 'protocol-mirror',
+    what: 'extension/lib/protocol.js mirrors shared/protocol.mjs',
+    scope: 'shared/protocol.mjs, extension/lib/protocol.js',
+    fix: 'Copy the changed constant into the other file. The two are kept in sync by hand because the extension cannot import outside its folder.',
+    run: () => {
+      const hits = []
+      for (const name of MIRRORED_CONSTANTS) {
+        const a = JSON.stringify(sharedProtocol[name])
+        const b = JSON.stringify(extensionProtocol[name])
+        if (a !== b) hits.push({ where: name, detail: `shared: ${a}  extension: ${b}` })
       }
-      const manifest = readJsonOrNull(EXTENSION_MANIFEST)
-      if (manifest && manifest.name !== CONFIG.productName) {
-        hits.push({ where: 'extension/manifest.json name', detail: `is "${manifest.name}", config says "${CONFIG.productName}"` })
+      for (const [key, value] of Object.entries(extensionProtocol.TIMING || {})) {
+        if (sharedProtocol.TIMING[key] !== value) {
+          hits.push({ where: `TIMING.${key}`, detail: `shared: ${sharedProtocol.TIMING[key]}  extension: ${value}` })
+        }
       }
       return hits
     },
@@ -378,13 +423,7 @@ const CHECKS = [
 
 /* -------------------------------------------------------------------------- */
 
-function readJsonOrNull(file) {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'))
-  } catch {
-    return null
-  }
-}
+const readJsonOrNull = (file) => readJson(file, null)
 
 function* walk(dir, { includeSkipped = false } = {}) {
   let entries

@@ -4,51 +4,26 @@
  *
  *   extension/lib/config.js     the extension's copy of the product identity
  *   extension/manifest.json     name, description, action title
- *   package.json                name (as a slug) and description
+ *   package.json                name (the state-directory slug) and description
+ *
+ * The list of files and their exact expected text lives in
+ * shared/config.mjs (renderProjections), which scripts/gate.mjs and the tests
+ * also read, so "what sync-config writes" and "what the gate checks" cannot
+ * drift apart.
  *
  * Idempotent: writes only what changed and says so. `--check` writes nothing
- * and exits 1 when anything is out of date, which is what scripts/gate.mjs
- * runs.
+ * and exits 1 when anything is out of date.
  */
 
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { CONFIG, REPO_ROOT, renderExtensionConfig } from '../shared/config.mjs'
-
-const EXT_CONFIG = path.join(REPO_ROOT, 'extension', 'lib', 'config.js')
-const MANIFEST = path.join(REPO_ROOT, 'extension', 'manifest.json')
-const PACKAGE = path.join(REPO_ROOT, 'package.json')
+import { CONFIG, REPO_ROOT, renderProjections } from '../shared/config.mjs'
 
 const check = process.argv.includes('--check')
 
-function slug(s) {
-  return String(s)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
-
-/** Expected file contents, as text, so a diff is a plain string compare. */
-function expected() {
-  const manifest = JSON.parse(fs.readFileSync(MANIFEST, 'utf8'))
-  manifest.name = CONFIG.productName
-  manifest.description = `${CONFIG.tagline}. Lets an AI agent drive this real, logged-in browser profile over a local native-messaging link.`
-  manifest.action = { ...(manifest.action || {}), default_title: CONFIG.productName }
-
-  const pkg = JSON.parse(fs.readFileSync(PACKAGE, 'utf8'))
-  pkg.name = CONFIG.stateDirName
-  pkg.description = `${CONFIG.productName} - ${CONFIG.tagline}.`
-
-  return [
-    { file: EXT_CONFIG, text: renderExtensionConfig(CONFIG) },
-    { file: MANIFEST, text: JSON.stringify(manifest, null, 2) + '\n' },
-    { file: PACKAGE, text: JSON.stringify(pkg, null, 2) + '\n' },
-  ]
-}
-
 let stale = 0
-for (const { file, text } of expected()) {
+for (const { file, text } of renderProjections(CONFIG)) {
   const rel = path.relative(REPO_ROOT, file)
   let current = null
   try {
@@ -73,5 +48,5 @@ if (check && stale > 0) {
   console.error(`\n${stale} file(s) are out of sync with bridge.config.json. Run: npm run sync-config`)
   process.exitCode = 1
 } else if (!check) {
-  console.log(`\nsynced ${CONFIG.productName} (${slug(CONFIG.productName)}) into the extension, manifest and package.json`)
+  console.log(`\nsynced "${CONFIG.productName}" into the extension, the manifest and package.json`)
 }

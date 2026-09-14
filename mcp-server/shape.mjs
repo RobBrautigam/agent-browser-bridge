@@ -109,7 +109,7 @@ export function explainError(err, { labels = null, profile = null } = {}) {
         '',
         `Start it with:  ${START_BROKER_COMMAND}`,
         '',
-        'The broker is one always-on process that every browser profile and every Claude Code session connects through. Nothing works until it is up. If starting it does not help, the scheduled task may not be installed: run scripts/doctor.mjs in the agent-browser-bridge repo.'
+        'The broker is one always-on process that every browser profile and every agent session connects through. Nothing works until it is up. If starting it does not help, the broker service may not be installed: run scripts/doctor.mjs in the folder this bridge was cloned to.'
       )
       break
 
@@ -571,9 +571,14 @@ function renderSnapshot(result, { profile, tab }) {
 
   const start = numberOr(result?.start, 0)
   const total = numberOr(result?.total, elements.length)
-  const next = numberOr(result?.next, null)
   const shown = elements.slice(0, MAX_SNAPSHOT_ELEMENTS_RENDERED)
   const end = start + shown.length
+  // Cut locally means the cursor is OURS to set: the broker said its page was
+  // complete, but this layer withheld the tail, so the continuation is the
+  // first element it did not render. Trusting the broker's `next` here ended
+  // a truncated result with "nothing remains" and no way to reach the rest.
+  const cutLocally = elements.length > shown.length
+  const next = cutLocally ? end : numberOr(result?.next, null)
 
   const out = [`${profile} ${tab} - snapshot`]
   if (result?.url) out.push(String(result.url))
@@ -602,8 +607,8 @@ function renderSnapshot(result, { profile, tab }) {
     out.push(`  ${ref}  ${role}  ${subject}${snapshotStateBits(el)}`)
   }
 
-  if (elements.length > shown.length) {
-    out.push('', `  ... and ${count(elements.length - shown.length)} more elements in this result, not listed.`)
+  if (cutLocally) {
+    out.push('', `  ... and ${count(elements.length - shown.length)} more elements in this result, not listed. The cursor below continues from the first of them.`)
   }
 
   out.push('')
@@ -726,6 +731,9 @@ export function renderScreenshot(result, { profile, tab, mode }) {
   )
 }
 
+/** Screenshots kept on disk. Older ones are removed as new ones are written. */
+export const SHOTS_KEEP = 200
+
 function writeShot(b64, mime, profile, tab) {
   ensureBaseDir()
   const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : 'jpg'
@@ -733,7 +741,28 @@ function writeShot(b64, mime, profile, tab) {
   const name = `${safeName(profile)}_${safeName(tab)}_${stamp}.${ext}`
   const file = path.join(SHOTS_DIR, name)
   fs.writeFileSync(file, Buffer.from(b64, 'base64'))
+  pruneShots()
   return file
+}
+
+/**
+ * A long session that screenshots every few calls would otherwise grow the
+ * shots directory without bound. Keep the newest SHOTS_KEEP; the file names
+ * carry a sortable timestamp, so name order is age order. Best effort: a
+ * failed prune must never fail the screenshot that triggered it.
+ */
+function pruneShots() {
+  try {
+    const files = fs
+      .readdirSync(SHOTS_DIR)
+      .filter((f) => /\.(png|jpe?g|webp)$/i.test(f))
+      .sort()
+    for (const stale of files.slice(0, Math.max(0, files.length - SHOTS_KEEP))) {
+      fs.rmSync(path.join(SHOTS_DIR, stale), { force: true })
+    }
+  } catch {
+    /* the screenshot on disk is what matters; pruning is housekeeping */
+  }
 }
 
 function safeName(s) {

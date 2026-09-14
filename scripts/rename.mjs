@@ -23,9 +23,15 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-import { CONFIG_FILE, CONFIG_SHAPE, REPO_ROOT, loadConfig } from '../shared/config.mjs'
+import { CONFIG_FILE, REPO_ROOT, loadConfig, validateConfig } from '../shared/config.mjs'
+import { writeJsonAtomic } from '../shared/paths.mjs'
 
-export const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,63}$/
+/**
+ * 2 to 20 characters. The slug becomes the socket name and the state
+ * directory name, and on macOS those two sit inside a Unix socket path that
+ * is capped at about 104 bytes; see CONFIG_SHAPE in shared/config.mjs.
+ */
+export const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,19}$/
 
 /**
  * The config a rename produces, as a pure function so it can be tested.
@@ -34,7 +40,7 @@ export const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,63}$/
  */
 export function deriveConfig(current, { slug, displayName, tagline = null }) {
   if (!SLUG_RE.test(slug)) {
-    throw new Error(`"${slug}" is not a valid slug (lowercase letters, digits, hyphens; 2 to 64 characters).`)
+    throw new Error(`"${slug}" is not a valid slug (lowercase letters, digits, hyphens; 2 to 20 characters).`)
   }
   const name = String(displayName || '').trim()
   if (!name) throw new Error('a display name is required.')
@@ -49,9 +55,9 @@ export function deriveConfig(current, { slug, displayName, tagline = null }) {
     serviceName: `${name} broker`,
     mcpServerName: slug,
   }
-  for (const [key, rule] of Object.entries(CONFIG_SHAPE)) {
-    if (!rule.test(next[key])) throw new Error(`"${key}" would become ${JSON.stringify(next[key])}, which is not valid.`)
-  }
+  // The same validation every process runs at import, so a rename can never
+  // write a config the broker would then refuse to load.
+  validateConfig(next, { file: 'the renamed config' })
   return next
 }
 
@@ -60,8 +66,8 @@ function main(argv) {
     console.log(`
   node scripts/rename.mjs <slug> "<Display Name>" [--tagline "<one line>"]
 
-  <slug>            lowercase letters, digits and hyphens, e.g. tab-conductor
-  <Display Name>    what people see, e.g. "Tab Conductor"
+  <slug>            2 to 20 lowercase letters, digits and hyphens, e.g. tab-conductor
+  <Display Name>    what people see, up to 45 characters, e.g. "Tab Conductor"
   --tagline         optional one-line description; the existing one is kept otherwise
 `)
     return argv.length < 2 ? 1 : 0
@@ -80,7 +86,9 @@ function main(argv) {
     return 1
   }
 
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2) + '\n', 'utf8')
+  // Atomic, like every other config write in the repo: this file is read at
+  // import time by every process, and a truncated one would stop all of them.
+  writeJsonAtomic(CONFIG_FILE, next)
   loadConfig() // throws if anything above produced an invalid value
   console.log(`wrote ${path.relative(REPO_ROOT, CONFIG_FILE)}`)
 

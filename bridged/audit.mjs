@@ -144,11 +144,17 @@ export class AuditLog {
       // generation is removed first. Losing generation 2 is intentional.
       fs.rmSync(prev, { force: true })
       fs.renameSync(this.#file, prev)
+      this.#size = sizeOf(this.#file)
     } catch {
       // If the rotate fails the log simply keeps growing, which is strictly
-      // better than dropping entries.
+      // better than dropping entries. Reset the counter rather than re-reading
+      // the real size: renameSync fails on Windows whenever another process
+      // holds the file open (a tail, an editor), and re-reading the size would
+      // put the next write straight back over the threshold, retrying the
+      // rename on every single record. Backing off by one rotation window
+      // self-heals once the holder lets go.
+      this.#size = 0
     }
-    this.#size = sizeOf(this.#file)
   }
 }
 

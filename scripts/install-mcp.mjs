@@ -89,7 +89,7 @@ export function codexToml() {
 }
 
 const useColor = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR
-const paint = (code, s) => (useColor ? `[${code}m${s}[0m` : s)
+const paint = (code, s) => (useColor ? `\u001b[${code}m${s}\u001b[0m` : s)
 const bold = (s) => paint('1', s)
 const green = (s) => paint('32', s)
 const yellow = (s) => paint('33', s)

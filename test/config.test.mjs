@@ -15,7 +15,15 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { CONFIG, CONFIG_SHAPE, REPO_ROOT, loadConfig, renderExtensionConfig } from '../shared/config.mjs'
+import {
+  CONFIG,
+  CONFIG_SHAPE,
+  REPO_ROOT,
+  loadConfig,
+  renderExtensionConfig,
+  renderProjections,
+  validateConfig,
+} from '../shared/config.mjs'
 import { deriveConfig } from '../scripts/rename.mjs'
 
 const EXT_CONFIG = path.join(REPO_ROOT, 'extension', 'lib', 'config.js')
@@ -23,10 +31,49 @@ const MANIFEST = path.join(REPO_ROOT, 'extension', 'manifest.json')
 const PACKAGE = path.join(REPO_ROOT, 'package.json')
 
 test('every configured value satisfies its rule', () => {
-  for (const [key, rule] of Object.entries(CONFIG_SHAPE)) {
+  for (const [key, spec] of Object.entries(CONFIG_SHAPE)) {
     assert.equal(typeof CONFIG[key], 'string', `${key} is missing`)
-    assert.match(CONFIG[key], rule, `${key} = ${CONFIG[key]}`)
+    assert.match(CONFIG[key], spec.rule, `${key} = ${CONFIG[key]}`)
   }
+})
+
+test('every projected file holds exactly what the config renders', () => {
+  // The same comparison scripts/gate.mjs runs. Here so `npm test` alone
+  // catches a config edit that skipped `npm run sync-config`, and a hand edit
+  // to a generated field in the manifest or package.json.
+  for (const { file, text } of renderProjections(CONFIG)) {
+    assert.equal(fs.readFileSync(file, 'utf8'), text, `${path.relative(REPO_ROOT, file)} is out of sync`)
+  }
+})
+
+test('validateConfig refuses what Windows, Chrome or Task Scheduler would refuse', () => {
+  const ok = (patch) => validateConfig({ ...CONFIG, ...patch })
+  const bad = (patch, re) => assert.throws(() => validateConfig({ ...CONFIG, ...patch }), re)
+
+  // Windows reserved device names cannot be a directory or a socket name.
+  for (const reserved of ['con', 'nul', 'aux', 'prn', 'com1', 'lpt9', 'CON']) {
+    bad({ stateDirName: reserved.toLowerCase() }, /reserves/)
+    bad({ socketName: reserved.toLowerCase() }, /reserves/)
+  }
+  ok({ stateDirName: 'con-bridge' })
+
+  // Chrome's manifest limits: 45 for the name, 132 for the description.
+  ok({ productName: 'x'.repeat(45) })
+  bad({ productName: 'x'.repeat(46) }, /productName/)
+  ok({ tagline: 'y'.repeat(132) })
+  bad({ tagline: 'y'.repeat(133) }, /tagline/)
+
+  // Task Scheduler rejects these characters in a task name.
+  for (const ch of ['\\', '/', ':', '*', '?', '"', '<', '>', '|']) {
+    bad({ serviceName: `My ${ch} broker` }, /serviceName/)
+  }
+  ok({ serviceName: "Acme's bridge (dev) broker" })
+
+  // The socket path budget: 20 characters each, so the default macOS location
+  // stays under the Unix socket limit.
+  ok({ socketName: 'a'.repeat(20), stateDirName: 'b'.repeat(20) })
+  bad({ socketName: 'a'.repeat(21) }, /socketName/)
+  bad({ stateDirName: 'b'.repeat(21) }, /stateDirName/)
 })
 
 test('the native host id is a name Chromium accepts', () => {
@@ -89,11 +136,15 @@ test('rename derives every identifier from the slug and keeps them valid', () =>
   assert.equal(next.serviceName, 'Tab Conductor broker')
   assert.equal(next.mcpServerName, 'tab-conductor')
   assert.equal(next.tagline, CONFIG.tagline, 'the tagline is kept unless given')
-  for (const [key, rule] of Object.entries(CONFIG_SHAPE)) assert.match(next[key], rule, key)
+  for (const [key, spec] of Object.entries(CONFIG_SHAPE)) assert.match(next[key], spec.rule, key)
 })
 
-test('rename refuses a slug that would produce an invalid host id or socket name', () => {
+test('rename refuses a slug or name that would produce an invalid config', () => {
   assert.throws(() => deriveConfig(CONFIG, { slug: 'Tab Conductor', displayName: 'x' }), /not a valid slug/)
   assert.throws(() => deriveConfig(CONFIG, { slug: '-leading', displayName: 'x' }), /not a valid slug/)
+  assert.throws(() => deriveConfig(CONFIG, { slug: 'a'.repeat(21), displayName: 'x' }), /not a valid slug/)
   assert.throws(() => deriveConfig(CONFIG, { slug: 'ok-slug', displayName: '   ' }), /display name/)
+  assert.throws(() => deriveConfig(CONFIG, { slug: 'con', displayName: 'Con' }), /reserves/)
+  assert.throws(() => deriveConfig(CONFIG, { slug: 'my-bridge', displayName: 'My "Bridge"' }), /serviceName/)
+  assert.throws(() => deriveConfig(CONFIG, { slug: 'my-bridge', displayName: 'x'.repeat(46) }), /productName/)
 })

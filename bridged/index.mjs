@@ -832,9 +832,11 @@ function handleReq(conn, msg) {
     return
   }
 
-  // SET_LABEL is the one meta operation that is also in BROWSER_OPS: the
-  // broker owns the label, and the extension is told so its own surfaces can
-  // show the same name the model addresses.
+  // SET_LABEL is a broker-local operation with one extra step: the broker
+  // owns the label, and after deciding it the extension is told (as a
+  // fire-and-forget request) so its own surfaces show the same name the
+  // model addresses. It is NOT in BROWSER_OPS; the capability partition keeps
+  // host-originated ops and page-touching ops disjoint.
   if (op === OPS.SET_LABEL) {
     handleSetLabelOp(conn, msg, route)
     return
@@ -985,8 +987,13 @@ function handleGlobalOp(conn, msg) {
       // interaction where certainty matters most. Count first, answer the
       // caller with write-then-close, and let enterPanic skip the connection
       // that is already closing itself.
+      //
+      // The write-then-close path bypasses reply(), which is where auditable
+      // operations are normally recorded, so the audit line is written here
+      // by hand. Panic is the one event the log must never be missing.
       panic.trip()
       const dropped = routes.size
+      audit.record({ profile: null, op: OPS.PANIC, url: null, ok: true, ms: null, err: null })
       conn.sendAndClose(ok(id, { panic: true, dropped, clearBy: panic.file }), 'panic')
       enterPanic('bridge_panic', conn)
       return
@@ -1870,6 +1877,16 @@ function heartbeat() {
           label: route.label,
           missed: route.missed,
         })
+        // Fail what is in flight BEFORE detaching. releaseConnection() does
+        // this for a socket that closes on its own, but it looks the route up
+        // by connection, and a route detached here is no longer findable by
+        // the time the socket's close event arrives - so a pending request
+        // against an evicted route would otherwise sit out its full timeout.
+        failPendingsFor(
+          (p) => p.route === route,
+          ERR.PROFILE_STALE,
+          `Profile "${route.label}" stopped answering heartbeats and was evicted before this operation finished.`
+        )
         route.conn?.destroy('missed too many heartbeats')
         routes.detach(route)
         continue
@@ -1995,6 +2012,17 @@ function shutdown(reason, code = 0) {
 }
 
 ensureBaseDir()
+// A Unix socket path over the sockaddr_un limit fails at bind with an opaque
+// ENAMETOOLONG, and under a supervisor that is a silent restart loop. Say
+// what is wrong and how to fix it instead.
+if (!IS_WINDOWS && Buffer.byteLength(PIPE_NAME) > 100) {
+  log('error', 'The socket path is too long for this platform', {
+    socket: PIPE_NAME,
+    bytes: Buffer.byteLength(PIPE_NAME),
+    fix: 'set BRIDGE_HOME to a shorter directory, or shorten socketName / stateDirName in bridge.config.json',
+  })
+  process.exit(1)
+}
 await clearStaleSocket()
 
 const server = net.createServer(onConnection)

@@ -291,6 +291,15 @@ async function main() {
     // optional and pins the ID across a folder move), otherwise from the
     // folder path, exactly as install-host derives it.
     const resolved = resolveExtensionId({ manifest })
+    if (typeof manifest.key === 'string' && manifest.key.trim() === PLACEHOLDER) {
+      // A placeholder means keygen was started and never finished. The ID
+      // below is still derived from the path, so the install works, but the
+      // pinning the operator asked for is not in effect.
+      warn(
+        'extension/manifest.json carries the keygen placeholder instead of a key',
+        'node scripts/keygen.mjs   (or remove the "key" field to derive the ID from the folder path)'
+      )
+    }
     if (!resolved.id) {
       fail(`the extension ID could not be derived: ${resolved.error}`, 'node scripts/keygen.mjs   (pins a fresh key)')
     } else {
@@ -499,6 +508,12 @@ async function main() {
 
   /* 8 ------------------------------------------------------------------- */
   section('Broker is answering')
+  if (!IS_WINDOWS && Buffer.byteLength(PIPE_NAME) > 100) {
+    fail(
+      `the socket path is ${Buffer.byteLength(PIPE_NAME)} bytes, over the ~104-byte limit for a Unix socket`,
+      'set BRIDGE_HOME to a shorter directory, or shorten socketName / stateDirName in bridge.config.json'
+    )
+  }
   const pipe = await pipeAnswers()
   if (pipe.ok) {
     pass(`connected to ${PIPE_NAME}`)

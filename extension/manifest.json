@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Agent Browser Bridge",
   "version": "0.1.0",
-  "description": "Drive your real, logged-in browsers from any AI agent. Lets an AI agent drive this real, logged-in browser profile over a local native-messaging link.",
+  "description": "Drive your real, logged-in browsers from any AI agent",
   "minimum_chrome_version": "116",
   "background": {
     "service_worker": "sw.js",

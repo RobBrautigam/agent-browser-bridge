@@ -2,7 +2,7 @@
   "name": "agent-browser-bridge",
   "version": "0.1.0",
   "private": true,
-  "description": "Agent Browser Bridge - Drive your real, logged-in browsers from any AI agent.",
+  "description": "Agent Browser Bridge - Drive your real, logged-in browsers from any AI agent",
   "license": "MIT",
   "author": "Rob Brautigam",
   "repository": {

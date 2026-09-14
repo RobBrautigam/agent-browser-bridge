@@ -49,25 +49,51 @@ import { LINK } from '../shared/protocol.mjs'
  * Windows reports `Name` from WMI (chrome.exe); macOS and Linux report the
  * `comm` column from ps, which is the binary's basename: "Google Chrome",
  * "Brave Browser", "Microsoft Edge" inside the app bundle on macOS, and
- * chrome / google-chrome / brave / brave-browser / microsoft-edge on Linux.
- * Matching is by substring on the lowercased name, so a versioned or
- * channel-suffixed binary (brave-browser-beta, google-chrome-stable) still
- * resolves.
+ * chrome / google-chrome / brave-browser / microsoft-edge on Linux, with the
+ * channel suffixes those distributions use.
+ *
+ * Matching is EXACT on the lowercased name, never by substring. The ancestry
+ * walk passes helper and wrapper processes on the way up, and a substring
+ * test would stop at the first one whose name merely contains "chrome" or
+ * "msedge" (a WebView2 host, a corporate launcher, "Google Chrome Helper")
+ * and attribute the profile to the wrong process.
  */
-const BROWSER_NAME_HINTS = Object.freeze([
-  ['brave', 'brave'],
-  ['msedge', 'edge'],
+const BROWSER_PROCESS_NAMES = new Map([
+  // Windows
+  ['chrome.exe', 'chrome'],
+  ['brave.exe', 'brave'],
+  ['msedge.exe', 'edge'],
+  // macOS app bundles
+  ['google chrome', 'chrome'],
+  ['google chrome beta', 'chrome'],
+  ['google chrome dev', 'chrome'],
+  ['google chrome canary', 'chrome'],
+  ['chromium', 'chrome'],
+  ['brave browser', 'brave'],
+  ['brave browser beta', 'brave'],
+  ['brave browser nightly', 'brave'],
   ['microsoft edge', 'edge'],
-  ['microsoft-edge', 'edge'],
+  // Linux
   ['chrome', 'chrome'],
+  ['google-chrome', 'chrome'],
+  ['google-chrome-stable', 'chrome'],
+  ['google-chrome-beta', 'chrome'],
+  ['google-chrome-unstable', 'chrome'],
+  ['chromium-browser', 'chrome'],
+  ['brave', 'brave'],
+  ['brave-browser', 'brave'],
+  ['brave-browser-stable', 'brave'],
+  ['brave-browser-beta', 'brave'],
+  ['brave-browser-nightly', 'brave'],
+  ['msedge', 'edge'],
+  ['microsoft-edge', 'edge'],
+  ['microsoft-edge-stable', 'edge'],
+  ['microsoft-edge-beta', 'edge'],
+  ['microsoft-edge-dev', 'edge'],
 ])
 
 function vendorFromProcessName(name) {
-  const lower = String(name || '').toLowerCase()
-  for (const [hint, vendor] of BROWSER_NAME_HINTS) {
-    if (lower.includes(hint)) return vendor
-  }
-  return null
+  return BROWSER_PROCESS_NAMES.get(String(name || '').toLowerCase().trim()) || null
 }
 
 /**

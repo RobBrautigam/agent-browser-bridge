@@ -22,7 +22,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 import {
@@ -32,7 +32,7 @@ import {
   extensionOrigin,
   ID_LENGTH,
 } from '../shared/extid.mjs'
-import { BASE_DIR, ensureBaseDir, readJson, writeJsonAtomic } from '../shared/paths.mjs'
+import { BASE_DIR, ensureBaseDir, readJson, restrictToCurrentUser, writeJsonAtomic } from '../shared/paths.mjs'
 import { PRODUCT_NAME } from '../shared/protocol.mjs'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -259,7 +259,12 @@ function report(id, { manifestState, keySource }) {
 
 function persistKey({ manifestKey, extensionId, privateKeyPem }) {
   fs.writeFileSync(KEY_PEM_FILE, privateKeyPem, { encoding: 'utf8', mode: 0o600 })
-  restrictToCurrentUser(KEY_PEM_FILE)
+  // The shared helper qualifies the account with its domain, which a bare
+  // USERNAME fails to resolve for icacls on a domain-joined machine.
+  restrictToCurrentUser(KEY_PEM_FILE, {
+    execFile,
+    onWarn: ({ err }) => console.log(yellow(`NOTE: could not tighten the ACL on ${KEY_PEM_FILE} (${err}). It keeps inherited permissions.`)),
+  })
   writeJsonAtomic(KEY_META_FILE, {
     manifestKey,
     extensionId,
@@ -267,23 +272,6 @@ function persistKey({ manifestKey, extensionId, privateKeyPem }) {
     createdAt: new Date().toISOString(),
     note: 'Source of truth for the pinned extension ID. Do not copy into the repo.',
   })
-}
-
-/**
- * Windows ignores POSIX file modes, so tighten the ACL for real. Best effort:
- * a private key with default inherited permissions is still far better than no
- * key, and failing the whole install over an ACL would be worse.
- */
-function restrictToCurrentUser(file) {
-  const user = process.env.USERNAME
-  if (process.platform !== 'win32' || !user) return
-  try {
-    execFileSync('icacls', [file, '/inheritance:r', '/grant:r', `${user}:(R,W)`], {
-      stdio: 'ignore',
-    })
-  } catch {
-    console.log(yellow(`NOTE: could not tighten the ACL on ${file}. It keeps inherited permissions.`))
-  }
 }
 
 function backupIfPresent(file) {
