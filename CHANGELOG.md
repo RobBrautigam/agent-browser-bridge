@@ -4,6 +4,25 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `scripts/claim.mjs`: claim a Brave profile from the command line, without
+  the options-page click. Lists every line and the candidate directories of
+  the unclaimed ones; claims only on an exact, unique match of the profile
+  name or email; moves an already-claimed line only with `--reclaim`.
+- `scripts/label.mjs`: rename a connected line to a custom label from the
+  command line. A custom label survives a derived-label collision; a derived
+  one gets a directory suffix, so pinning the name a line already derived is
+  a real change.
+
+### Changed
+
+- README: the clone is a standalone install folder. Moving, renaming or
+  removing it after a profile has loaded the extension changes the extension
+  ID and drops every profile off the bridge.
+
 ## [0.1.0] - 2026-09-14
 
 First public release. A white-labeled release of a bridge that has been in
