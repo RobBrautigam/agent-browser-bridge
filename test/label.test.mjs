@@ -10,7 +10,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { OPS } from '../shared/protocol.mjs'
+import { ERR, OPS } from '../shared/protocol.mjs'
 import { parseArgs, rename, validLabel } from '../scripts/label.mjs'
 
 function line(overrides = {}) {
@@ -55,8 +55,10 @@ function fakeClient({ lines, renameResult } = {}) {
   }
 }
 
+const sentRenames = (client) => client.calls.filter((c) => c.op === OPS.SET_LABEL)
+
 /* -------------------------------------------------------------------------- */
-/* validLabel: the broker's rule, checked before anything is sent              */
+/* validLabel: the contract's rule, checked before anything is sent            */
 /* -------------------------------------------------------------------------- */
 
 test('a label is 1 to 32 lowercase letters, digits and hyphens, starting with a letter or digit', () => {
@@ -76,17 +78,25 @@ test('a label is 1 to 32 lowercase letters, digits and hyphens, starting with a 
 /* rename: what goes over the pipe, and what never does                        */
 /* -------------------------------------------------------------------------- */
 
-test('a good rename sends SET_LABEL for that line with the new label', async () => {
+test('a good rename sends SET_LABEL addressed by install id with the new label', async () => {
   const client = fakeClient({ lines: [line()] })
   const r = await rename({ client, label: 'chrome-acme-corp-profile-1', newLabel: 'chrome-acme-corp' })
   assert.equal(r.ok, true)
   assert.equal(r.line.label, 'chrome-acme-corp')
   assert.equal(r.line.labelIsCustom, true)
 
-  const sent = client.calls.find((c) => c.op === OPS.SET_LABEL)
+  const [sent] = sentRenames(client)
   assert.ok(sent, 'a SET_LABEL request was sent')
-  assert.equal(sent.profile, 'chrome-acme-corp-profile-1')
+  assert.equal(sent.profile, 'inst-1')
   assert.deepEqual(sent.args, { label: 'chrome-acme-corp' })
+  assert.ok(Number.isFinite(sent.timeoutMs) && sent.timeoutMs <= 10_000, 'a command-line deadline is set')
+})
+
+test('a pasted trailing space is trimmed the way the broker trims it', async () => {
+  const client = fakeClient({ lines: [line()] })
+  const r = await rename({ client, label: 'chrome-acme-corp-profile-1', newLabel: 'chrome-acme-corp ' })
+  assert.equal(r.ok, true)
+  assert.deepEqual(sentRenames(client)[0].args, { label: 'chrome-acme-corp' })
 })
 
 test('pinning the name a line already has still sends the rename, because custom is what pins it', async () => {
@@ -96,22 +106,24 @@ test('pinning the name a line already has still sends the rename, because custom
   const client = fakeClient({ lines: [line({ label: 'chrome-acme-corp', labelIsCustom: false })] })
   const r = await rename({ client, label: 'chrome-acme-corp', newLabel: 'chrome-acme-corp' })
   assert.equal(r.ok, true)
-  assert.equal(client.calls.filter((c) => c.op === OPS.SET_LABEL).length, 1)
+  assert.equal(sentRenames(client).length, 1)
 })
 
 test('a line that already holds that name as a custom label is left alone', async () => {
+  // Sending it again would bump the generation and kill every open tab
+  // handle for nothing.
   const client = fakeClient({ lines: [line({ label: 'chrome-acme-corp', labelIsCustom: true })] })
   const r = await rename({ client, label: 'chrome-acme-corp', newLabel: 'chrome-acme-corp' })
   assert.equal(r.ok, true)
   assert.equal(r.unchanged, true)
-  assert.equal(client.calls.filter((c) => c.op === OPS.SET_LABEL).length, 0)
+  assert.equal(sentRenames(client).length, 0)
 })
 
 test('nothing is sent when the current label does not exist', async () => {
   const client = fakeClient({ lines: [line()] })
   const r = await rename({ client, label: 'chrome-nope', newLabel: 'chrome-acme-corp' })
   assert.equal(r.ok, false)
-  assert.equal(client.calls.filter((c) => c.op === OPS.SET_LABEL).length, 0)
+  assert.equal(sentRenames(client).length, 0)
 })
 
 test('nothing is sent when the new label breaks the rule', async () => {
@@ -119,33 +131,43 @@ test('nothing is sent when the new label breaks the rule', async () => {
   const r = await rename({ client, label: 'chrome-acme-corp-profile-1', newLabel: 'Chrome Acme' })
   assert.equal(r.ok, false)
   assert.match(r.message, /lowercase/)
-  assert.equal(client.calls.filter((c) => c.op === OPS.SET_LABEL).length, 0)
+  assert.equal(sentRenames(client).length, 0)
 })
 
-test('nothing is sent when another connected line already holds the new label', async () => {
-  // The broker refuses this too, but refusing here names the holder before a
-  // request is even made.
-  const lines = [line(), line({ installId: 'inst-2', label: 'chrome-acme-corp', profileDir: 'Profile 3' })]
-  const client = fakeClient({ lines })
+test('a line that is known but not connected refuses with "open that browser"', async () => {
+  // The broker routes only to live lines; sending anyway would come back as
+  // "unknown profile", the wrong diagnosis for a closed browser.
+  const absent = line({ present: false, link: 'absent' })
+  const client = fakeClient({ lines: [absent] })
   const r = await rename({ client, label: 'chrome-acme-corp-profile-1', newLabel: 'chrome-acme-corp' })
   assert.equal(r.ok, false)
-  assert.match(r.message, /Profile 3/)
-  assert.equal(client.calls.filter((c) => c.op === OPS.SET_LABEL).length, 0)
+  assert.match(r.message, /not connected right now/)
+  assert.equal(sentRenames(client).length, 0)
 })
 
-test('a broker refusal comes back as a typed failure, not a throw', async () => {
-  const err = Object.assign(new Error('"chrome-acme-corp" belongs to a profile that is not connected right now.'), {
-    code: 'E_BAD_REQUEST',
+test('a name held by another line is the broker\'s refusal, rendered with its own words', async () => {
+  // The broker owns that rule (live and absent holders both); the script does
+  // not keep a second copy of it.
+  const err = Object.assign(new Error('"chrome-acme-corp" is already used by Chrome Profile 3. Pick another name or rename that one first.'), {
+    code: ERR.BAD_REQUEST,
   })
   const client = fakeClient({ lines: [line()], renameResult: err })
   const r = await rename({ client, label: 'chrome-acme-corp-profile-1', newLabel: 'chrome-acme-corp' })
   assert.equal(r.ok, false)
-  assert.match(r.message, /E_BAD_REQUEST/)
+  assert.match(r.message, /Profile 3/)
+  assert.equal(sentRenames(client).length, 1)
 })
 
 test('an answer that does not carry the new label is reported as a failure', async () => {
   const wrong = { line: line({ label: 'chrome-acme-corp-profile-1' }), handlesInvalidated: true }
   const client = fakeClient({ lines: [line()], renameResult: wrong })
+  const r = await rename({ client, label: 'chrome-acme-corp-profile-1', newLabel: 'chrome-acme-corp' })
+  assert.equal(r.ok, false)
+})
+
+test('an answer from a different line is reported as a failure', async () => {
+  const other = { line: line({ installId: 'inst-2', label: 'chrome-acme-corp', labelIsCustom: true }), handlesInvalidated: true }
+  const client = fakeClient({ lines: [line()], renameResult: other })
   const r = await rename({ client, label: 'chrome-acme-corp-profile-1', newLabel: 'chrome-acme-corp' })
   assert.equal(r.ok, false)
 })
@@ -164,4 +186,5 @@ test('exactly two positional arguments, no flags', () => {
   assert.equal(parseArgs(['one']).mode, 'usage')
   assert.equal(parseArgs(['a', 'b', 'c']).mode, 'usage')
   assert.equal(parseArgs(['--force', 'a', 'b']).mode, 'usage')
+  assert.equal(parseArgs(['--help']).mode, 'usage')
 })

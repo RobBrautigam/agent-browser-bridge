@@ -93,8 +93,11 @@ extension's ID from the folder path (step 3 below), so a moved folder is a
 different extension as far as every profile is concerned: the native host
 stops matching, every profile drops off the bridge, and you would have to
 load it again everywhere. Do your development in a second clone or a git
-worktree, and keep this one where it is. If you must move it, run
-`node scripts/keygen.mjs` first so the ID is pinned by a key instead.
+worktree, and keep this one where it is. `node scripts/keygen.mjs` pins the
+ID with a key only when it runs before any profile has loaded the extension;
+on an install that is already in use it changes the ID on the spot, which is
+the same reload-everywhere cost as moving. Decide on a fresh clone; on a live
+install, do not move it.
 
 ### 3. Register the native messaging host
 

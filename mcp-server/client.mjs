@@ -65,10 +65,19 @@ export class BrokerClient {
   #seq = 0
   #closed = false
   #onLog
+  #keepAlive
 
-  /** @param {{onLog?: (msg: string) => void}} [opts] stderr logger; stdout is protocol and must never be written to. */
-  constructor({ onLog = () => {} } = {}) {
+  /**
+   * @param {{onLog?: (msg: string) => void, keepAlive?: boolean}} [opts]
+   *        `onLog` is a stderr logger; stdout is protocol and must never be
+   *        written to. `keepAlive` keeps the socket ref'd so the process stays
+   *        up until close() is called: for a one-shot command-line caller,
+   *        which has nothing else holding the event loop open. The MCP server
+   *        leaves it false so the session can exit when stdin ends.
+   */
+  constructor({ onLog = () => {}, keepAlive = false } = {}) {
     this.#onLog = onLog
+    this.#keepAlive = keepAlive
   }
 
   /**
@@ -144,8 +153,9 @@ export class BrokerClient {
 
     // The pipe must not keep the process alive on its own: when Claude Code
     // ends the session it closes stdin, and a ref'd socket would leave this
-    // process running with nothing to serve.
-    socket.unref?.()
+    // process running with nothing to serve. A command-line caller is the
+    // opposite case (nothing else holds the loop open) and says so.
+    if (!this.#keepAlive) socket.unref?.()
 
     socket.on('data', (chunk) => this.#onData(chunk))
     socket.on('error', (err) => this.#teardown(new BridgeError(ERR.NO_BROKER, `Broker link error: ${err.message}`)))

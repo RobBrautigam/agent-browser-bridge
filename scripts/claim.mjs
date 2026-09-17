@@ -20,7 +20,16 @@
  * different mailboxes; a case-insensitive or fuzzy match would bind a line to
  * one of them silently, and a Brave line bound to the wrong mailbox is a
  * logged-in browser driven as the wrong person. So anything other than exactly
- * one exact match refuses, says how many matched, and sends nothing.
+ * one exact match refuses, says how many matched, names the nearest candidate
+ * when there is exactly one, and sends nothing.
+ *
+ * Two round trips, and the second one is addressed by install id. The label
+ * read from the board is what the operator typed, but a label is not a stable
+ * handle: any profile connecting or disconnecting can re-resolve every
+ * collision suffix on the board (bridged/routes.mjs). The install id is the
+ * route's own identity and the broker accepts it as an address, so the claim
+ * lands on the line the operator looked at, or fails, and never on a line that
+ * inherited its name in between.
  *
  * It speaks to the broker as an agent-role connection through the same client
  * the MCP server uses, so the token, the framing and the timeouts are the
@@ -32,7 +41,15 @@ import fs from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { BrokerClient } from '../mcp-server/client.mjs'
+import { explainError, renderBoard as renderLines } from '../mcp-server/shape.mjs'
 import { OPS, PRODUCT_NAME } from '../shared/protocol.mjs'
+
+/**
+ * How long one broker request may take from a one-shot command. A local pipe
+ * answers in milliseconds; the contract's 30 s default exists for page
+ * operations that wait on a browser, which none of these are.
+ */
+export const CLI_TIMEOUT_MS = 8_000
 
 /* -------------------------------------------------------------------------- */
 /* The pure halves                                                             */
@@ -60,7 +77,7 @@ export function findLine(lines, label) {
   if (!line) {
     return {
       ok: false,
-      message: `No line is labeled "${label}". Labels are matched exactly. Lines: ${all.map((l) => l.label).join(', ')}.`,
+      message: `No line is labeled "${label}". Labels are matched exactly. Lines: ${all.map((l) => l?.label).join(', ')}.`,
     }
   }
   return { ok: true, line }
@@ -84,15 +101,21 @@ export function pickCandidate(candidates, wanted) {
     }
   }
   const hits = candidates.filter((c) => c && (c.name === wanted || c.email === wanted))
-  if (hits.length !== 1) {
-    return {
-      ok: false,
-      message:
-        `${hits.length} candidate(s) match "${wanted}" exactly; a claim needs exactly one. ` +
-        `The match is on the full profile name or email, case-sensitive. Choices: ${describeCandidates(candidates)}.`,
-    }
+  if (hits.length === 1) return { ok: true, candidate: hits[0] }
+
+  // The rule stays exact. The hint exists because the usual miss is a
+  // capital letter or a stray space, and saying which candidate that would
+  // have been is cheaper than making the operator diff two strings by eye.
+  const loose = (s) => (typeof s === 'string' ? s.trim().toLowerCase() : '')
+  const near = candidates.filter((c) => c && (loose(c.name) === loose(wanted) || loose(c.email) === loose(wanted)))
+  const hint = hits.length === 0 && near.length === 1 ? ` Nearest: "${near[0].name || near[0].email}" (copy it exactly).` : ''
+
+  return {
+    ok: false,
+    message:
+      `${hits.length} candidate(s) match "${wanted}" exactly; a claim needs exactly one. ` +
+      `The match is on the full profile name or email, case-sensitive.${hint} Choices: ${describeCandidates(candidates)}.`,
   }
-  return { ok: true, candidate: hits[0] }
 }
 
 /**
@@ -102,66 +125,90 @@ export function pickCandidate(candidates, wanted) {
  * @returns {{mode: 'list'} | {mode: 'claim', label: string, wanted: string, reclaim: boolean} | {mode: 'usage', message: string}}
  */
 export function parseArgs(argv) {
-  const args = Array.isArray(argv) ? [...argv] : []
+  const args = Array.isArray(argv) ? argv : []
+  if (args.includes('--help') || args.includes('-h')) return { mode: 'usage', message: '' }
+  if (args.includes('--list')) {
+    return args.length === 1 ? { mode: 'list' } : { mode: 'usage', message: '--list takes no other arguments.' }
+  }
+
   let reclaim = false
   const positional = []
   for (const a of args) {
     if (a === '--reclaim') reclaim = true
-    else if (a === '--list') positional.length = 0
-    else if (a.startsWith('--')) return { mode: 'usage', message: `Unknown flag ${a}.` }
+    else if (typeof a === 'string' && a.startsWith('--')) return { mode: 'usage', message: `Unknown flag ${a}.` }
     else positional.push(a)
   }
   if (positional.length === 0 && !reclaim) return { mode: 'list' }
   if (positional.length !== 2) {
-    return {
-      mode: 'usage',
-      message: 'Expected a label and an exact profile name or email, or no arguments to list.',
-    }
+    return { mode: 'usage', message: 'Expected a label and an exact profile name or email, or no arguments to list.' }
   }
   return { mode: 'claim', label: positional[0], wanted: positional[1], reclaim }
 }
 
 /**
- * Render the board for a human: every line, and the candidate directories of
- * the lines that still need claiming. A claimed line's candidates are not
- * choices any more, so they are left out rather than inviting a re-claim.
+ * Render the board for a human: the same view browser_list_profiles gives,
+ * plus the candidate directories of every line that still needs claiming. A
+ * claimed line's candidates are not choices any more, so they are left out
+ * rather than inviting a re-claim.
  *
- * @param {Array<object>} lines
+ * @param {object} board the GET_BOARD result
  * @returns {string}
  */
-export function renderBoard(lines) {
-  const all = Array.isArray(lines) ? lines : []
-  if (all.length === 0) {
-    return 'The broker is running but no profile is connected. Load the unpacked extension in a browser profile first.'
-  }
-  const out = []
-  for (const l of all) {
-    const state = l.present === false ? 'absent' : l.link || 'unknown'
-    const who = l.email || l.profileName || ''
-    const mark = l.claimed ? '' : '  UNCLAIMED'
-    out.push(
-      `  ${String(l.label).padEnd(28)} ${String(l.vendorLabel || l.vendor || '').padEnd(7)} ${String(state).padEnd(8)} ` +
-        `${String(l.profileDir ?? '?').padEnd(10)} ${who}${mark}`
-    )
-    if (!l.claimed) {
-      const candidates = Array.isArray(l.candidates) ? l.candidates : []
-      if (candidates.length === 0) {
-        out.push('      (no candidate directories; reload the extension in that profile)')
-      }
-      for (const c of candidates) {
-        out.push(`      ${String(c.dir).padEnd(11)} ${c.name || ''}${c.email ? `  (${c.email})` : ''}`)
-      }
+export function renderBoard(board) {
+  const text = renderLines(board)
+  const lines = Array.isArray(board?.lines) ? board.lines : []
+  const unclaimed = lines.filter((l) => l && l.claimed === false && l.present !== false)
+  if (lines.length === 0) return text
+  if (unclaimed.length === 0) return `${text}\n\nEvery connected line is claimed.`
+
+  const out = [text, '', 'Unclaimed lines and the directories each one can be claimed as:']
+  for (const l of unclaimed) {
+    out.push(`  ${l.label}`)
+    const candidates = Array.isArray(l.candidates) ? l.candidates : []
+    if (candidates.length === 0) out.push('      (no candidate directories; reload the extension in that profile)')
+    for (const c of candidates) {
+      out.push(`      ${String(c.dir).padEnd(11)} ${c.name || ''}${c.email ? `  (${c.email})` : ''}`)
     }
   }
   out.push('')
-  out.push('Claim an UNCLAIMED line with:  node scripts/claim.mjs <label> "<exact profile name or email>"')
+  out.push('Claim one with:  node scripts/claim.mjs <label> "<exact profile name or email>"')
   return out.join('\n')
+}
+
+/* -------------------------------------------------------------------------- */
+/* Talking to the broker                                                       */
+/* -------------------------------------------------------------------------- */
+
+/** One board read, with the command-line deadline. Throws the client's typed error. */
+export function getBoard(client) {
+  return client.request({ op: OPS.GET_BOARD, timeoutMs: CLI_TIMEOUT_MS })
+}
+
+/**
+ * A typed failure as the operator should read it: the same actionable text
+ * the MCP tools give the model, so a stopped broker names the start command
+ * here too. An untyped error is printed as it is.
+ */
+export function describeError(err) {
+  if (err && typeof err.code === 'string') return explainError(err)
+  return err?.message || String(err)
+}
+
+/** Run `fn` with a broker client that holds the process open until it is done. */
+export async function withBroker(fn) {
+  const client = new BrokerClient({ onLog: () => {}, keepAlive: true })
+  try {
+    return await fn(client)
+  } finally {
+    client.close()
+  }
 }
 
 /**
  * The claim itself: read the board, refuse anything that is not exactly one
- * exact match, send CLAIM_PROFILE, and check the answer names the directory
- * that was asked for. The broker's reply is the only proof the claim landed.
+ * exact match, send CLAIM_PROFILE addressed by install id, and check the
+ * answer is the same line now claimed as the directory that was asked for.
+ * The broker's reply is the only proof the claim landed.
  *
  * @param {{client: {request: Function}, label: string, wanted: string, reclaim?: boolean}} spec
  * @returns {Promise<{ok: true, line: object, unchanged?: boolean} | {ok: false, message: string}>}
@@ -169,7 +216,7 @@ export function renderBoard(lines) {
 export async function claim({ client, label, wanted, reclaim = false }) {
   let board
   try {
-    board = await client.request({ op: OPS.GET_BOARD })
+    board = await getBoard(client)
   } catch (err) {
     return { ok: false, message: describeError(err) }
   }
@@ -178,14 +225,17 @@ export async function claim({ client, label, wanted, reclaim = false }) {
   if (!found.ok) return found
   const line = found.line
 
+  // A line the broker remembers but that is not connected has no candidates
+  // and no route to claim; the fix is to open that browser, not to reload an
+  // extension that is not running.
+  if (line.present === false) return { ok: false, message: notConnected(line) }
+
   const picked = pickCandidate(line.candidates, wanted)
   if (!picked.ok) return { ok: false, message: `Line "${label}": ${picked.message}` }
   const dir = picked.candidate.dir
 
   if (line.claimed) {
-    if (line.profileDir === dir) {
-      return { ok: true, line, unchanged: true }
-    }
+    if (line.profileDir === dir) return { ok: true, line, unchanged: true }
     if (!reclaim) {
       return {
         ok: false,
@@ -199,18 +249,24 @@ export async function claim({ client, label, wanted, reclaim = false }) {
 
   let result
   try {
-    result = await client.request({ op: OPS.CLAIM_PROFILE, profile: label, args: { dir } })
+    result = await client.request({
+      op: OPS.CLAIM_PROFILE,
+      profile: line.installId,
+      args: { dir },
+      timeoutMs: CLI_TIMEOUT_MS,
+    })
   } catch (err) {
     return { ok: false, message: describeError(err) }
   }
 
   const after = result?.line
-  if (!after || after.claimed !== true || after.profileDir !== dir) {
+  const landed = after && after.installId === line.installId && after.claimed === true && after.profileDir === dir
+  if (!landed) {
     return {
       ok: false,
       message:
         `The broker answered, but the line is now ${after ? `"${after.label}" on directory "${after.profileDir}"` : 'missing from the reply'}, ` +
-        `not directory "${dir}". Run the list to see what it is, and check the broker log before trying again.`,
+        `not the line that was addressed claimed as "${dir}". List again to see what it is, and check the broker log before trying again.`,
     }
   }
   return { ok: true, line: after }
@@ -220,15 +276,31 @@ export async function claim({ client, label, wanted, reclaim = false }) {
 /* Helpers                                                                     */
 /* -------------------------------------------------------------------------- */
 
+/** The refusal for a line the board lists but no browser is holding open. */
+export function notConnected(line) {
+  return (
+    `Line "${line.label}" is known to the bridge but not connected right now: the browser is closed, ` +
+    'or its extension was disabled. Open that browser profile, wait for the line to show as ready, and run this again.'
+  )
+}
+
 function describeCandidates(candidates) {
   return candidates
     .map((c) => `${c.dir} = ${c.name || '(unnamed)'}${c.email ? ` <${c.email}>` : ''}`)
     .join('; ')
 }
 
-function describeError(err) {
-  const code = err && typeof err.code === 'string' ? `${err.code}: ` : ''
-  return `${code}${err?.message || String(err)}`
+/** Is this module the process entry point? Shared with scripts/label.mjs. */
+export function isMain(metaUrl) {
+  try {
+    if (!process.argv[1]) return false
+    return (
+      fs.realpathSync(fileURLToPath(metaUrl)).toLowerCase() ===
+      fs.realpathSync(process.argv[1]).toLowerCase()
+    )
+  } catch {
+    return pathToFileURL(process.argv[1] || '').href === metaUrl
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -247,28 +319,21 @@ const USAGE =
 async function main(argv) {
   const parsed = parseArgs(argv)
   if (parsed.mode === 'usage') {
-    console.error(parsed.message)
-    console.error('')
+    if (parsed.message) console.error(parsed.message, '\n')
     console.error(USAGE)
     return 2
   }
 
-  // The client unrefs its socket so an MCP session can exit when stdin closes.
-  // Here nothing else keeps the loop alive, so without this the process would
-  // exit before the broker's answer arrived, printing nothing and exiting 0.
-  const keepAlive = setInterval(() => {}, 1_000)
-  const client = new BrokerClient({ onLog: () => {} })
-  try {
+  return withBroker(async (client) => {
     if (parsed.mode === 'list') {
       let board
       try {
-        board = await client.request({ op: OPS.GET_BOARD })
+        board = await getBoard(client)
       } catch (err) {
         console.error(describeError(err))
         return 1
       }
-      console.log(`${PRODUCT_NAME} lines`)
-      console.log(renderBoard(board?.lines))
+      console.log(renderBoard(board))
       return 0
     }
 
@@ -288,23 +353,7 @@ async function main(argv) {
     )
     console.log('Verify with browser_list_profiles, then browser_list_tabs on that label.')
     return 0
-  } finally {
-    clearInterval(keepAlive)
-    client.close()
-  }
-}
-
-/** Guard the entry point: the test imports the pure halves above. */
-function isMain(metaUrl) {
-  try {
-    if (!process.argv[1]) return false
-    return (
-      fs.realpathSync(fileURLToPath(metaUrl)).toLowerCase() ===
-      fs.realpathSync(process.argv[1]).toLowerCase()
-    )
-  } catch {
-    return pathToFileURL(process.argv[1] || '').href === metaUrl
-  }
+  })
 }
 
 if (isMain(import.meta.url)) {

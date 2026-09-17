@@ -22,6 +22,10 @@ All notable changes to this project are recorded here. The format follows
 - README: the clone is a standalone install folder. Moving, renaming or
   removing it after a profile has loaded the extension changes the extension
   ID and drops every profile off the bridge.
+- The custom-label rule is one shared constant, `LABEL_PATTERN` in
+  `shared/protocol.mjs`, used by the broker and the scripts. `BrokerClient`
+  takes a `keepAlive` option for command-line callers, so a one-shot script
+  waits for the broker's answer instead of exiting first.
 
 ## [0.1.0] - 2026-09-14
 

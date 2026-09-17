@@ -12,8 +12,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { OPS } from '../shared/protocol.mjs'
-import { claim, findLine, parseArgs, pickCandidate, renderBoard } from '../scripts/claim.mjs'
+import { ERR, OPS } from '../shared/protocol.mjs'
+import { claim, describeError, findLine, parseArgs, pickCandidate, renderBoard } from '../scripts/claim.mjs'
 
 /* -------------------------------------------------------------------------- */
 /* Fixtures                                                                    */
@@ -78,6 +78,8 @@ function fakeClient({ lines, claimResult } = {}) {
   }
 }
 
+const sentClaims = (client) => client.calls.filter((c) => c.op === OPS.CLAIM_PROFILE)
+
 /* -------------------------------------------------------------------------- */
 /* pickCandidate: exact and unique, or nothing                                 */
 /* -------------------------------------------------------------------------- */
@@ -103,16 +105,19 @@ test('a substring is not a match', () => {
   const r = pickCandidate(BRAVE_CANDIDATES, 'alice')
   assert.equal(r.ok, false)
   assert.match(r.message, /0 candidate/)
+  assert.doesNotMatch(r.message, /Nearest/)
 })
 
-test('a case-different name is not a match', () => {
+test('a case-different name is refused, and the nearest candidate is named', () => {
   const r = pickCandidate(BRAVE_CANDIDATES, 'Alice@Acme-Corp.com')
   assert.equal(r.ok, false)
+  assert.match(r.message, /Nearest: "alice@acme-corp\.com"/)
 })
 
-test('a name with surrounding whitespace is not a match', () => {
+test('a name with surrounding whitespace is refused, and the nearest candidate is named', () => {
   const r = pickCandidate(BRAVE_CANDIDATES, ' alice@acme-corp.com')
   assert.equal(r.ok, false)
+  assert.match(r.message, /Nearest: "alice@acme-corp\.com"/)
 })
 
 test('two candidates with the same name refuse, naming the count', () => {
@@ -156,6 +161,12 @@ test('an unknown label refuses and lists the labels that exist', () => {
   assert.match(r.message, /chrome-acme-corp/)
 })
 
+test('a null entry on the board does not crash the refusal message', () => {
+  const r = findLine([null, line({ label: 'chrome-acme-corp' })], 'nope')
+  assert.equal(r.ok, false)
+  assert.match(r.message, /chrome-acme-corp/)
+})
+
 test('an empty board refuses with a hint about loading the extension', () => {
   const r = findLine([], 'anything')
   assert.equal(r.ok, false)
@@ -166,31 +177,46 @@ test('an empty board refuses with a hint about loading the extension', () => {
 /* claim: what goes over the pipe, and what never does                         */
 /* -------------------------------------------------------------------------- */
 
-test('a good claim sends CLAIM_PROFILE for that label with the matched directory', async () => {
+test('a good claim sends CLAIM_PROFILE addressed by install id with the matched directory', async () => {
   const client = fakeClient({ lines: [line()] })
   const r = await claim({ client, label: 'brave-unclaimed-ab12', wanted: 'hello@ada.dev' })
   assert.equal(r.ok, true)
   assert.equal(r.line.claimed, true)
   assert.equal(r.line.profileDir, 'Profile 2')
 
-  const sent = client.calls.find((c) => c.op === OPS.CLAIM_PROFILE)
+  const [sent] = sentClaims(client)
   assert.ok(sent, 'a CLAIM_PROFILE request was sent')
-  assert.equal(sent.profile, 'brave-unclaimed-ab12')
+  // The install id, not the label: a label can be re-resolved by a collision
+  // between the two round trips; the install id cannot.
+  assert.equal(sent.profile, 'inst-1')
   assert.deepEqual(sent.args, { dir: 'Profile 2' })
+  assert.ok(Number.isFinite(sent.timeoutMs) && sent.timeoutMs <= 10_000, 'a command-line deadline is set')
 })
 
 test('nothing is sent when the label does not exist', async () => {
   const client = fakeClient({ lines: [line()] })
   const r = await claim({ client, label: 'brave-nope', wanted: 'hello@ada.dev' })
   assert.equal(r.ok, false)
-  assert.equal(client.calls.filter((c) => c.op === OPS.CLAIM_PROFILE).length, 0)
+  assert.equal(sentClaims(client).length, 0)
 })
 
 test('nothing is sent when the name matches no candidate exactly', async () => {
   const client = fakeClient({ lines: [line()] })
   const r = await claim({ client, label: 'brave-unclaimed-ab12', wanted: 'ada.dev' })
   assert.equal(r.ok, false)
-  assert.equal(client.calls.filter((c) => c.op === OPS.CLAIM_PROFILE).length, 0)
+  assert.equal(sentClaims(client).length, 0)
+})
+
+test('a line that is known but not connected refuses with "open that browser", not "reload the extension"', async () => {
+  // Absent lines carry no candidates; the generic empty-candidates advice
+  // would send the operator reloading an extension that is not running.
+  const absent = line({ label: 'brave-ada-dev', present: false, link: 'absent', candidates: [] })
+  const client = fakeClient({ lines: [absent] })
+  const r = await claim({ client, label: 'brave-ada-dev', wanted: 'hello@ada.dev' })
+  assert.equal(r.ok, false)
+  assert.match(r.message, /not connected right now/)
+  assert.doesNotMatch(r.message, /Reload the extension/)
+  assert.equal(sentClaims(client).length, 0)
 })
 
 test('a line already claimed to the same directory is left alone', async () => {
@@ -199,7 +225,7 @@ test('a line already claimed to the same directory is left alone', async () => {
   const r = await claim({ client, label: 'brave-ada-dev', wanted: 'hello@ada.dev' })
   assert.equal(r.ok, true)
   assert.equal(r.unchanged, true)
-  assert.equal(client.calls.filter((c) => c.op === OPS.CLAIM_PROFILE).length, 0)
+  assert.equal(sentClaims(client).length, 0)
 })
 
 test('a line already claimed to a DIFFERENT directory refuses without --reclaim', async () => {
@@ -210,26 +236,25 @@ test('a line already claimed to a DIFFERENT directory refuses without --reclaim'
   const r = await claim({ client, label: 'brave-ada-dev', wanted: 'alice@acme-corp.com' })
   assert.equal(r.ok, false)
   assert.match(r.message, /--reclaim/)
-  assert.equal(client.calls.filter((c) => c.op === OPS.CLAIM_PROFILE).length, 0)
+  assert.equal(sentClaims(client).length, 0)
 
   const forced = await claim({ client, label: 'brave-ada-dev', wanted: 'alice@acme-corp.com', reclaim: true })
   assert.equal(forced.ok, true)
-  const sent = client.calls.find((c) => c.op === OPS.CLAIM_PROFILE)
-  assert.deepEqual(sent.args, { dir: 'Profile 1' })
+  assert.deepEqual(sentClaims(client)[0].args, { dir: 'Profile 1' })
 })
 
-test('a broker refusal comes back as a typed failure, not a throw', async () => {
+test('a broker refusal comes back as a typed failure with the broker\'s own words, not a throw', async () => {
   const err = Object.assign(new Error('"Profile 9" is not one of the profile directories this browser offers.'), {
-    code: 'E_BAD_REQUEST',
+    code: ERR.BAD_REQUEST,
   })
   const client = fakeClient({ lines: [line()], claimResult: err })
   const r = await claim({ client, label: 'brave-unclaimed-ab12', wanted: 'hello@ada.dev' })
   assert.equal(r.ok, false)
-  assert.match(r.message, /E_BAD_REQUEST/)
+  assert.match(r.message, /Profile 9/)
 })
 
 test('a claim whose answer names a different directory is reported as a failure', async () => {
-  // The broker's reply is the only proof the claim landed where it was aimed.
+  // The broker's reply is the only proof the claim landed.
   const wrong = { line: line({ label: 'brave-acme-corp', claimed: true, profileDir: 'Profile 1' }) }
   const client = fakeClient({ lines: [line()], claimResult: wrong })
   const r = await claim({ client, label: 'brave-unclaimed-ab12', wanted: 'hello@ada.dev' })
@@ -237,13 +262,41 @@ test('a claim whose answer names a different directory is reported as a failure'
   assert.match(r.message, /Profile 1/)
 })
 
+test('a claim whose answer is a different line is reported as a failure', async () => {
+  const other = { line: line({ installId: 'inst-2', label: 'brave-ada-dev', claimed: true, profileDir: 'Profile 2' }) }
+  const client = fakeClient({ lines: [line()], claimResult: other })
+  const r = await claim({ client, label: 'brave-unclaimed-ab12', wanted: 'hello@ada.dev' })
+  assert.equal(r.ok, false)
+})
+
+/* -------------------------------------------------------------------------- */
+/* describeError: the operator gets the actionable text the model gets         */
+/* -------------------------------------------------------------------------- */
+
+test('a stopped broker is explained with the start command, not a bare code', () => {
+  const err = Object.assign(new Error('Cannot reach the broker (ENOENT).'), { code: ERR.NO_BROKER })
+  const text = describeError(err)
+  assert.match(text, /broker is not running/)
+  assert.match(text, /Start it with/)
+})
+
+test('an untyped error is printed as it is', () => {
+  assert.equal(describeError(new Error('boom')), 'boom')
+})
+
 /* -------------------------------------------------------------------------- */
 /* parseArgs and renderBoard                                                   */
 /* -------------------------------------------------------------------------- */
 
-test('no arguments means list', () => {
+test('no arguments means list, and so does --list on its own', () => {
   assert.deepEqual(parseArgs([]), { mode: 'list' })
   assert.deepEqual(parseArgs(['--list']), { mode: 'list' })
+})
+
+test('--list with anything else is a usage error, never a claim', () => {
+  assert.equal(parseArgs(['--list', 'brave-unclaimed-ab12', 'hello@ada.dev']).mode, 'usage')
+  assert.equal(parseArgs(['a', 'b', '--list']).mode, 'usage')
+  assert.equal(parseArgs(['--list', '--reclaim']).mode, 'usage')
 })
 
 test('a label and a name mean claim; --reclaim is the only flag', () => {
@@ -261,15 +314,17 @@ test('a label and a name mean claim; --reclaim is the only flag', () => {
   })
 })
 
-test('one argument, three arguments, or an unknown flag is a usage error', () => {
+test('one argument, three arguments, --reclaim alone, or an unknown flag is a usage error', () => {
   assert.equal(parseArgs(['brave-unclaimed-ab12']).mode, 'usage')
   assert.equal(parseArgs(['a', 'b', 'c']).mode, 'usage')
+  assert.equal(parseArgs(['--reclaim']).mode, 'usage')
   assert.equal(parseArgs(['--force', 'a', 'b']).mode, 'usage')
   assert.equal(parseArgs(['--help']).mode, 'usage')
 })
 
-test('renderBoard shows every line and the candidates of the unclaimed ones only', () => {
+test('renderBoard shows every line, warnings included, and the candidates of the unclaimed ones only', () => {
   const claimed = line({
+    installId: 'inst-2',
     label: 'chrome-acme-corp',
     vendor: 'chrome',
     vendorLabel: 'Chrome',
@@ -277,13 +332,22 @@ test('renderBoard shows every line and the candidates of the unclaimed ones only
     profileDir: 'Profile 1',
     email: 'alice@acme-corp.com',
     candidates: [{ dir: 'Profile 1', name: 'Work', email: 'alice@acme-corp.com' }],
+    warning: 'Label collision: another profile derives this name',
   })
-  const out = renderBoard([line(), claimed])
+  const out = renderBoard({ lines: [line(), claimed] })
   assert.match(out, /brave-unclaimed-ab12/)
-  assert.match(out, /UNCLAIMED/)
+  assert.match(out, /unclaimed/)
   assert.match(out, /Profile 2 +hello@ada\.dev/)
   assert.match(out, /chrome-acme-corp/)
+  assert.match(out, /Label collision/)
   // The claimed Chrome line's single candidate is not listed as a choice.
   assert.doesNotMatch(out, /Profile 1 +Work/)
-  assert.equal(renderBoard([]).includes('no profile is connected'), true)
+})
+
+test('renderBoard leaves absent lines out of the choices and says when nothing needs claiming', () => {
+  const absent = line({ label: 'brave-ada-dev', present: false, link: 'absent', candidates: [] })
+  const out = renderBoard({ lines: [absent, line({ installId: 'inst-3', label: 'brave-ok', claimed: true, profileDir: 'Default' })] })
+  assert.match(out, /Every connected line is claimed/)
+  assert.doesNotMatch(out, /Claim one with/)
+  assert.match(renderBoard({ lines: [] }), /No browser profiles are connected/)
 })
