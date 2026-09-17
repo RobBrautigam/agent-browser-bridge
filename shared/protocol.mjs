@@ -226,6 +226,15 @@ export const HOST_REQ_ALLOWED_OPS = Object.freeze([
 export const MAX_ARM_MINUTES = 60
 
 /** Typed error codes. Every failure the model can see is one of these. */
+/**
+ * The rule for a custom profile label: 1 to 32 characters of lowercase
+ * letters, digits and hyphens, starting with a letter or digit. Owned here so
+ * the broker's setLabel and the command-line rename check the same rule; a
+ * client-side copy that drifted would refuse names the broker accepts, or send
+ * names it refuses.
+ */
+export const LABEL_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/
+
 export const ERR = Object.freeze({
   NO_BROKER: 'E_NO_BROKER',
   UNAUTHORIZED: 'E_UNAUTHORIZED',

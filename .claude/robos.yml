@@ -1,0 +1,32 @@
+schema_version: 1
+# Pipeline binding for the maintainer's project tracker. It carries no
+# secrets and no personal data, and nothing in the bridge reads it. This
+# repository is public: keep it that way, and keep every progress-log entry
+# free of account names, machine names and paths under a home directory.
+repo_name: agent-browser-bridge
+world: rob-os
+target_repo: agent-browser-bridge
+supabase_profile: robos
+version:
+  source: package.json
+  bump_command: null
+progress_log:
+  path: docs/progress-log.md
+  format: reverse-chronological
+test:
+  unit: npm test
+  e2e: npm run e2e
+  lint: npm run gate
+scaffolder:
+  default_world: rob-os
+  default_initiative: null
+  default_category: project
+github:
+  owner: RobBrautigam
+  repo: agent-browser-bridge
+slack:
+  ship_digest_channel: null
+  ship_digest_enabled: false
+safety:
+  require_confirmation_for_production_writes: true
+  auto_start_processes_allowed: false

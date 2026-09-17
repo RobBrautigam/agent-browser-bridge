@@ -289,6 +289,22 @@ cannot be hit by accident.
 **The popup** is the one-second view: broker status, this line, tab count,
 arm, and a way onto the board.
 
+**A third surface, for the operator's terminal**, added in 0.2.0:
+`scripts/claim.mjs` (the claim card without the click) and `scripts/label.mjs`
+(the inline rename). Both speak to the broker as an agent-role connection,
+which is allowed to originate the two META operations (`BROKER_OPS` in
+`shared/protocol.mjs`). Two things about them are deliberate. They are not
+MCP tools, so the model never gets to claim or rename a line; the agent
+surface is read, write, armed and control, exactly as section 5 lists it. And
+unlike the extension, which may only ever claim or rename its own line, the
+terminal scripts can address any connected line: they run as the operator,
+with the owner-only runtime token, which is the same trust boundary as the
+broker process itself. A local process that can read that file can already
+do everything the broker does. The scripts make the operator's own actions
+explicit and refuse anything that is not an exact, unique match, and a rename
+invalidates the line's open tab handles for every session, as the board's
+rename does.
+
 MV3's content-security policy forbids inline script, so everything is wired
 with `addEventListener`, every icon is inline SVG, and the whole palette lives
 in one token file so the light and dark themes cannot drift apart. The icon
