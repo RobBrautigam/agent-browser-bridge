@@ -41,6 +41,7 @@ import {
   OPS,
   TIER,
   ERR,
+  LABEL_PATTERN,
   LINK,
   TIMING,
   helloAck,
@@ -1377,7 +1378,7 @@ function claimProfile(route, dir) {
 
 function setLabel(route, requested) {
   const label = typeof requested === 'string' ? requested.trim() : ''
-  if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(label)) {
+  if (!LABEL_PATTERN.test(label)) {
     return {
       ok: false,
       code: ERR.BAD_REQUEST,

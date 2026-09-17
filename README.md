@@ -87,6 +87,18 @@ npm ci
 Do this in every profile you want the agent to reach. Every profile loads the
 same folder.
 
+**Treat the clone as a standalone install folder: never move, rename or
+remove it once a profile has loaded it.** The browser derives an unpacked
+extension's ID from the folder path (step 3 below), so a moved folder is a
+different extension as far as every profile is concerned: the native host
+stops matching, every profile drops off the bridge, and you would have to
+load it again everywhere. Do your development in a second clone or a git
+worktree, and keep this one where it is. `node scripts/keygen.mjs` pins the
+ID with a key only when it runs before any profile has loaded the extension;
+on an install that is already in use it changes the ID on the spot, which is
+the same reload-everywhere cost as moving. Decide on a fresh clone; on a live
+install, do not move it.
+
 ### 3. Register the native messaging host
 
 ```bash
@@ -179,6 +191,18 @@ Chrome profiles resolve themselves from the signed-in account. Brave writes no
 account identity into its profile metadata, so a Brave profile needs one
 click: open the extension's options page in that profile (the toolbar icon,
 then "Open the board") and pick which profile you are in. Once, ever.
+
+The same claim without the click, for many profiles or a terminal-driven
+install:
+
+```bash
+node scripts/claim.mjs                                    # every line, with the choices of the unclaimed ones
+node scripts/claim.mjs brave-unclaimed-ab12 "work@example.com"   # claim that line as the one exact match
+```
+
+The name must match a profile's name or email exactly and uniquely, or the
+script refuses and sends nothing. A line that is already claimed is only
+moved with `--reclaim`.
 
 ### 7. Check it
 

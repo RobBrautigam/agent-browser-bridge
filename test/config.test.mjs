@@ -103,7 +103,7 @@ test('the extension manifest carries the product name and NO pinned key', () => 
 test('package.json follows the config', () => {
   const pkg = JSON.parse(fs.readFileSync(PACKAGE, 'utf8'))
   assert.equal(pkg.name, CONFIG.stateDirName)
-  assert.equal(pkg.version, '0.1.0')
+  assert.equal(pkg.version, '0.2.0')
 })
 
 test('loadConfig refuses a host id Chromium would reject', () => {
