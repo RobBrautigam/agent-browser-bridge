@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-09-16
 
 ### Added
 
@@ -63,4 +63,5 @@ daily use on a Windows machine with several Chrome and Brave profiles since
 - macOS and Linux support follows Chromium's documented native messaging
   locations and has not yet been exercised on a real machine. Reports welcome.
 
+[0.2.0]: https://github.com/RobBrautigam/agent-browser-bridge/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/RobBrautigam/agent-browser-bridge/releases/tag/v0.1.0
