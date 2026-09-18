@@ -572,7 +572,7 @@ export function warningFor(route, { collisionNote = undefined } = {}) {
  * UI that renders it, so the projection lives next to the route rather than in
  * whichever caller needed it first.
  */
-export function lineFor(route, { armedUntil = null, collisionNote = undefined } = {}) {
+export function lineFor(route, { armedUntil = null, collisionNote = undefined, installedVersion = null } = {}) {
   return {
     installId: route.installId,
     label: route.label,
@@ -590,6 +590,14 @@ export function lineFor(route, { armedUntil = null, collisionNote = undefined } 
     candidates: route.candidates,
     generation: route.generation,
     tabCount: route.tabCount,
+    // What this profile is RUNNING, and whether that is behind the folder.
+    // `needsReload` is computed rather than stored because the folder changes
+    // under a running broker: the answer has to be as fresh as the manifest.
+    // With no installed version to compare against (an unreadable manifest) the
+    // honest answer is false, because "reload it" would be advice with no
+    // evidence behind it.
+    extVersion: route.extVersion || null,
+    needsReload: Boolean(installedVersion && route.extVersion && route.extVersion !== installedVersion),
     latencyMs: route.latencyMs,
     lastSeenAt: route.lastSeenAt,
     armedUntil,

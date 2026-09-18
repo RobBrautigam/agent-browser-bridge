@@ -216,6 +216,44 @@ every profile you have configured is actually connected right now. Unpacked
 extensions can be disabled silently, and that check is the only way you find
 out.
 
+## Updating
+
+Pull, then reload the extension in each profile. The second half is the part
+that is easy to miss and it matters:
+
+```bash
+cd agent-browser-bridge
+git pull
+node scripts/reload-extension.mjs --all
+```
+
+**Why the reload is not optional.** A browser reads an unpacked extension's
+code once, when it loads it. Pulling new code into this folder changes nothing
+in a running browser: every profile keeps serving the version it loaded, which
+is why a fixed bug can still be there after an update. The broker is a separate
+process and does pick the new code up, at its next restart, so an install can
+sit with three different versions running at once.
+
+`node scripts/reload-extension.mjs --all` is the fix, and it does the whole job:
+it reloads every connected profile that is behind, skips the ones that are not
+and says why, and waits for each profile to come back on the new version before
+it reports success. `--dry-run` shows what it would do. `node
+scripts/doctor.mjs` and `browser_list_profiles` both name any profile that is
+behind, so you can check without guessing.
+
+**The one time you have to click.** A release older than 0.4.0 cannot reload
+itself, because the code that would do it is the code being replaced. So
+upgrading FROM 0.3.0 or earlier needs the Reload arrow on this extension's card
+on `chrome://extensions`, once per profile. Every release after that is the
+command above. Restarting the browser also works, and so does restarting the
+machine.
+
+The broker picks up new code when it restarts, which the supervisor does at
+login. To restart it now: `schtasks /end /tn "Agent Browser Bridge broker"` on
+Windows and let the watchdog start it again a minute later, `launchctl kickstart
+-k gui/$UID/com.agent_browser_bridge.host.broker` on macOS, `systemctl --user
+restart agent-browser-bridge-broker` on Linux.
+
 ## The two-minute smoke test
 
 1. Load the extension into a fresh browser profile (step 2 above).
@@ -241,7 +279,7 @@ landing on whatever tab now holds that number.
 | Tier | Tools | Policy |
 |---|---|---|
 | Read | `browser_list_profiles`, `browser_list_tabs`, `browser_read_page`, `browser_screenshot`, `browser_scroll`, `bridge_status` | always allowed |
-| Write | `browser_navigate`, `browser_open_tab`, `browser_open_or_focus`, `browser_close_tab`, `browser_activate_tab`, `browser_click`, `browser_fill`, `browser_press_keys`, `browser_wait_for` | allowed, always audited |
+| Write | `browser_navigate`, `browser_open_tab`, `browser_open_or_focus`, `browser_close_tab`, `browser_activate_tab`, `browser_click`, `browser_fill`, `browser_press_keys`, `browser_wait_for`, `browser_reload_extension` | allowed, always audited |
 | Armed | `browser_eval_js` | refused unless a human armed that profile |
 | Control | `bridge_arm`, `bridge_panic` | |
 
@@ -278,6 +316,16 @@ Three properties, and one thing to know:
   discards anything unsaved in that tab. Point it at pages you are showing
   someone, not at a form somebody is halfway through filling in.
 
+**Local files, and the exact line it draws.** It OPENS and RELOADS a `file:`
+address only when the path ends in `.html` or `.htm`. For any other local file,
+a PDF a report was exported to, an image, a CSV, it will FIND the tab already
+showing that address and move it to the far right, and it will refuse when no
+such tab exists, saying which rule refused it. So a launcher opens the PDF
+itself the first time and calls this afterwards, and the person still ends up
+with one tab per document. Finding and moving navigates nothing and reads
+nothing, which is why it is not a widening of the file rule; the reasoning is in
+[SECURITY.md](SECURITY.md).
+
 The same capability without an MCP client, for a launcher, a hook or a shell
 script:
 
@@ -287,6 +335,31 @@ node scripts/open-or-focus.mjs <profile label> <url or file path>
 
 It prints the same one line and exits non-zero if the page did not land, so a
 caller can fall back to its own opener and say so.
+
+### Which version each profile is running
+
+`browser_list_profiles` reports, for every profile, the extension version it is
+RUNNING, and flags any profile whose version is behind the one in the install
+folder. That is three numbers that drift apart on purpose: the broker's version
+is fixed when it starts, the folder's changes the moment you pull, and a
+profile's changes only when that extension is reloaded. `bridge_status` counts
+how many profiles are behind, and the extension's own board shows it per line.
+
+`browser_reload_extension` fixes it without anybody clicking: it asks that
+profile's extension to reload itself, which is exactly what the Reload arrow on
+the extensions page does. It is **refused unless the folder holds a different
+version from the one that profile is running**, because a reload is not free: it
+invalidates every open tab handle in every agent session driving that browser,
+and it clears the ledger `browser_open_or_focus` uses to know which tabs it
+opened. Once per release that is a fair trade; on demand it would be a way to
+disrupt other sessions.
+
+The profile drops off the bridge for a second or two and comes back on the new
+code. The result says the reload was ASKED for, which is all an answer can
+honestly claim: reloading tears down the port the answer travels on, so the
+acknowledgement leaves before the reload happens. `browser_list_profiles` is
+what confirms it landed. From a shell, `node scripts/reload-extension.mjs --all`
+does the asking and the confirming in one command.
 
 There is deliberately no file-upload tool. It would be an
 arbitrary-file-exfiltration primitive a poisoned page could aim at your
@@ -326,13 +399,22 @@ Stated plainly, because a security model nobody believes is worse than none.
   log is the origin, which for a local page is the scheme alone.
 - **One local-file exception, as narrow as its job.** `file:` URLs are refused
   everywhere, because navigating to one and reading it back would be a
-  local-file read primitive. `browser_open_or_focus` accepts a `file:` URL
-  whose path ends in `.html` or `.htm`, and nothing else, because showing a
+  local-file read primitive. `browser_open_or_focus` OPENS or RELOADS a `file:`
+  URL whose path ends in `.html` or `.htm`, and nothing else, because showing a
   generated page to a human is the job it exists for. Every other local file
-  keeps its refusal, so there is no arbitrary file to aim a tab at. Chromium
-  also refuses to inject into `file:` pages unless you turn on this
-  extension's "Allow access to file URLs" toggle, which nothing here requests
-  or sets, so reading such a tab back fails on a default install.
+  keeps that refusal, so there is no arbitrary file to aim a tab at. The same
+  tool may find a tab already showing any `file:` address and move it, which
+  navigates nothing and reads nothing and so cannot be half of the
+  navigate-then-read composition. Chromium also refuses to inject into `file:`
+  pages unless you turn on this extension's "Allow access to file URLs" toggle,
+  which nothing here requests or sets, so reading such a tab back fails on a
+  default install.
+- **A refused scheme is refused however it is spelled.** The refusals are
+  checked as schemes, not as text prefixes, because the number of slashes in a
+  URL is not load-bearing: `file:` is a special scheme, so `file:/C:/x` and
+  `file:\\server\share\x` both canonicalize to ordinary `file://` URLs. Until
+  0.4.0 the check was a prefix match and both forms slipped past it, which was
+  a real hole and is fixed with a test named after it.
 - **No telemetry.** Nothing phones home. There is no analytics, no update
   check, no crash reporter. The only outbound connections are the ones the
   agent asks the browser to make.
@@ -371,6 +453,7 @@ npm test                 # unit tests, node --test, no framework
 npm run gate             # the security rules, mechanically enforced
 npm run doctor           # diagnose an install
 npm run e2e              # the whole chain, against a real Brave and a throwaway profile
+npm run reload           # reload the extension in every profile that is behind
 npm run hooks:install    # run the gate before every commit
 ```
 

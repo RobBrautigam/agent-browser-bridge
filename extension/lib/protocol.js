@@ -139,6 +139,7 @@ export const OPS = Object.freeze({
   PRESS_KEYS: 'pressKeys',
   WAIT_FOR: 'waitFor',
   EVAL_JS: 'evalJs',
+  RELOAD_EXTENSION: 'reloadExtension',
   SET_LABEL: 'setLabel',
   CLAIM_PROFILE: 'claimProfile',
   GET_BOARD: 'getBoard',
@@ -172,6 +173,12 @@ export const OP_TIER = Object.freeze({
   [OPS.PRESS_KEYS]: TIER.WRITE,
   [OPS.WAIT_FOR]: TIER.WRITE,
 
+  // Touches no page, and WRITE anyway: it asks THIS extension to reload itself
+  // so a new release reaches the browser without a human clicking Reload. The
+  // broker is the only component that can tell whether there is new code to
+  // load, so the gate lives there, not here.
+  [OPS.RELOAD_EXTENSION]: TIER.WRITE,
+
   [OPS.EVAL_JS]: TIER.ARMED,
 
   [OPS.SET_LABEL]: TIER.META,
@@ -204,6 +211,7 @@ export const BROWSER_OPS = Object.freeze([
   OPS.PRESS_KEYS,
   OPS.WAIT_FOR,
   OPS.EVAL_JS,
+  OPS.RELOAD_EXTENSION,
 ])
 
 /** Operations the broker answers itself, without touching a browser. */
@@ -318,11 +326,41 @@ export const RESTRICTED_URL_PREFIXES = Object.freeze([
 ])
 
 /** An empty or non-string URL is restricted: callers must never treat it as navigable. */
+/**
+ * The same refusals as schemes, not as text prefixes, because the number of
+ * slashes in a URL is not load-bearing: `file:` is a special scheme, so
+ * `file:/C:/x` normalizes to `file:///C:/x` and does not start with `file://`.
+ * The reasoning, and the live check behind it, is on this function in
+ * shared/protocol.mjs.
+ */
+const RESTRICTED_SCHEMES = new Set(
+  RESTRICTED_URL_PREFIXES
+    // Only the entries that ARE a scheme. Two entries on that list name a host
+    // and a path (the Web Store), and those are prefix rules about a specific
+    // site rather than about a scheme, so they stay with the prefix check.
+    .map((prefix) => /^([a-z][a-z0-9+.-]*):(?:\/\/)?$/.exec(prefix.toLowerCase()))
+    .filter(Boolean)
+    .map((m) => `${m[1]}:`)
+)
+
+/**
+ * A C0 control or DEL anywhere in an address, refused outright: the URL parser
+ * deletes ASCII tab, LF and CR wherever they appear, including inside the
+ * scheme, so "fi<TAB>le:///C:/x" parses as file: while matching no rule written
+ * about the text "file:". The reasoning is on this constant in
+ * shared/protocol.mjs.
+ */
+const URL_CONTROL_CHARS = /[\u0000-\u001f\u007f]/
+
 export function isRestrictedUrl(url) {
   if (typeof url !== 'string') return true
+  if (URL_CONTROL_CHARS.test(url)) return true
+
   const u = url.trim().toLowerCase()
   if (u === '') return true
-  return RESTRICTED_URL_PREFIXES.some((p) => u.startsWith(p.toLowerCase()))
+  if (RESTRICTED_URL_PREFIXES.some((p) => u.startsWith(p.toLowerCase()))) return true
+  const scheme = /^([a-z][a-z0-9+.-]*):/.exec(u)
+  return scheme ? RESTRICTED_SCHEMES.has(`${scheme[1]}:`) : false
 }
 
 /* -------------------------------------------------------------------------- */
@@ -411,10 +449,45 @@ export function isLocalPageUrl(url) {
   return LOCAL_PAGE_EXTENSIONS.some((ext) => lower.endsWith(ext))
 }
 
-/** The URLs openOrFocus accepts: anything navigable, plus a local HTML page. */
+/**
+ * The URLs openOrFocus may OPEN or RELOAD: anything navigable, plus a local
+ * HTML page. The carve-out it draws is exactly .html and .htm.
+ */
 export function isOpenOrFocusUrl(url) {
   if (isLocalPageUrl(url)) return true
   return !isRestrictedUrl(url)
+}
+
+/** What openOrFocus is allowed to do with the address it was handed. */
+export const OPEN_OR_FOCUS_MODE = Object.freeze({
+  FULL: 'full',
+  FIND_ONLY: 'find-only',
+})
+
+/**
+ * Which of the two modes an address gets, or null when it is refused outright.
+ *
+ * FIND_ONLY covers the local files that are not .html or .htm: the operation may
+ * find a tab by its address and move it, and must never open or reload one.
+ * Finding and moving performs no navigation and no read, so it cannot be half of
+ * the navigate-then-read composition the `file:` refusal exists to prevent, and
+ * READ-tier listTabs already reports every tab's address. The full reasoning is
+ * on this function in shared/protocol.mjs.
+ */
+export function openOrFocusMode(url) {
+  if (typeof url !== 'string') return null
+  if (URL_CONTROL_CHARS.test(url)) return null
+  const trimmed = url.trim()
+  // An address the URL parser refuses is refused here rather than handed to
+  // chrome.tabs.create to throw at.
+  try {
+    new URL(trimmed)
+  } catch {
+    return null
+  }
+  if (isOpenOrFocusUrl(trimmed)) return OPEN_OR_FOCUS_MODE.FULL
+  if (/^file:/i.test(trimmed)) return OPEN_OR_FOCUS_MODE.FIND_ONLY
+  return null
 }
 
 /**
@@ -591,7 +664,11 @@ export function describeOpenOrFocus(result) {
   if (result.pinned) parts.push(`left at index ${result.toIndex}${where} because that tab is pinned`)
   else if (result.moved) parts.push(`moved from index ${result.fromIndex} to ${result.toIndex}${where}`)
   else parts.push(`already at index ${result.toIndex}${where}`)
-  parts.push(result.reloaded ? 'reloaded' : 'not reloaded')
+  if (result.mode === OPEN_OR_FOCUS_MODE.FIND_ONLY) {
+    parts.push('not reloaded, because only a local .html or .htm page may be opened or reloaded')
+  } else {
+    parts.push(result.reloaded ? 'reloaded' : 'not reloaded')
+  }
   if (result.closed > 0) {
     parts.push(`closed ${plural(result.closed, 'duplicate')} this capability had opened`)
   }
@@ -604,6 +681,34 @@ export function describeOpenOrFocus(result) {
 
 function plural(n, noun) {
   return `${n} ${noun}${n === 1 ? '' : 's'}`
+}
+
+/**
+ * The one line an extension reload answers with. Mirrored so the extension, the
+ * MCP tool and the command line say the same sentence. `verified` is false until
+ * the profile has come back on a different version, because the acknowledgement
+ * necessarily leaves before the reload happens.
+ */
+export function describeExtensionReload({
+  profile = null,
+  from = null,
+  to = null,
+  verified = false,
+  waitedMs = null,
+} = {}) {
+  const who = profile ? `${profile}: ` : ''
+  const was = from || 'an unreported version'
+  const now = to || 'the installed version'
+  if (verified) {
+    const took = Number.isFinite(waitedMs)
+      ? `, back on the bridge in ${(Math.round(waitedMs / 100) / 10).toFixed(1)}s`
+      : ''
+    return `${who}reloaded the extension, ${was} to ${now}${took}.`
+  }
+  return (
+    `${who}asked the extension to reload itself, ${was} to ${now}. It drops off the bridge for a ` +
+    'moment and comes back on the new code; the profile list is what confirms it.'
+  )
 }
 
 /**

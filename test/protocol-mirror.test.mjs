@@ -36,6 +36,7 @@ const IDENTICAL = [
   'RAW_TAB_ID_FIELD',
   'LOCAL_PAGE_EXTENSIONS',
   'OPEN_OR_FOCUS_MATCH',
+  'OPEN_OR_FOCUS_MODE',
 ]
 
 test('every mirrored constant is identical to the shared contract', () => {
@@ -104,6 +105,26 @@ test('the openOrFocus rules agree, address by address', () => {
   for (const url of urls) {
     assert.equal(mirror.isLocalPageUrl(url), shared.isLocalPageUrl(url), url)
     assert.equal(mirror.isOpenOrFocusUrl(url), shared.isOpenOrFocusUrl(url), url)
+    // The mode matters as much as the predicate now: a drift here would have
+    // one side finding and moving a tab the other side refused outright, or
+    // worse, one side willing to OPEN an address the other would only find.
+    assert.equal(mirror.openOrFocusMode(url), shared.openOrFocusMode(url), `mode for ${url}`)
+  }
+  for (const url of [
+    'file:///C:/dev/report.pdf',
+    'file:///C:/Users/someone/.env',
+    'file:/c:/x.png',
+    // The invisible-character forms, which is where a drift would be invisible
+    // in review AND invisible on screen: one side would open what the other
+    // refused, over a character neither a reader nor a diff shows.
+    'fi\tle:///C:/Users/me/.env',
+    'file\t:///C:/Users/me/.env',
+    'ch\trome://settings',
+    '\uFB01le:///C:/x.env',
+    'file :///C:/x.env',
+  ]) {
+    assert.equal(mirror.openOrFocusMode(url), shared.openOrFocusMode(url), `mode for ${JSON.stringify(url)}`)
+    assert.equal(mirror.isRestrictedUrl(url), shared.isRestrictedUrl(url), `restricted for ${JSON.stringify(url)}`)
   }
 
   const target = 'file:///C:/dev/repo/docs/report.html'
@@ -130,4 +151,16 @@ test('the openOrFocus rules agree, address by address', () => {
   assert.deepEqual(mirror.planOpenOrFocus(spec), shared.planOpenOrFocus(spec))
   const result = { action: 'reused', match: 'exact', fromIndex: 0, toIndex: 3, windowId: 2, moved: true, reloaded: true, closed: 1, kept: 0 }
   assert.equal(mirror.describeOpenOrFocus(result), shared.describeOpenOrFocus(result))
+  const findOnly = { ...result, mode: shared.OPEN_OR_FOCUS_MODE.FIND_ONLY, reloaded: false }
+  assert.equal(mirror.describeOpenOrFocus(findOnly), shared.describeOpenOrFocus(findOnly))
+})
+
+test('the extension reload sentence is the same on both sides', () => {
+  for (const spec of [
+    { profile: 'chrome-work', from: '0.3.0', to: '0.4.0', verified: true, waitedMs: 2100 },
+    { profile: 'chrome-work', from: '0.3.0', to: '0.4.0', verified: false },
+    {},
+  ]) {
+    assert.equal(mirror.describeExtensionReload(spec), shared.describeExtensionReload(spec), JSON.stringify(spec))
+  }
 })

@@ -281,6 +281,7 @@ export function renderBoard(board) {
     out.push('')
     out.push(`PANIC SWITCH ENGAGED - every route is dropped. Clear it by deleting ${PANIC_FILE}`)
   }
+  for (const note of versionNotes(board)) out.push(note)
   out.push('')
 
   if (lines.length === 0) {
@@ -298,6 +299,10 @@ export function renderBoard(board) {
     // The status column already says "unclaimed"; do not say it twice.
     const where = l?.profileDir ? String(l.profileDir) : '-'
     const bits = [`tabs ${numberOr(l?.tabCount, 0)}`]
+    // The version every line is RUNNING, on the line itself rather than in a
+    // note, because "which of my profiles are behind" is a question about the
+    // whole list and a column answers it at a glance.
+    bits.push(`ext ${l?.extVersion || 'unreported'}`)
     if (l?.lastSeenAt) bits.push(`seen ${fmtAge(now - l.lastSeenAt)} ago`)
     if (l?.latencyMs != null) bits.push(`${Math.round(l.latencyMs)}ms`)
     if (l?.armedUntil && l.armedUntil > now) bits.push(`ARMED ${fmtAge(l.armedUntil - now)} left`)
@@ -309,6 +314,12 @@ export function renderBoard(board) {
         'the account signed into this profile is no longer the one it was claimed as, so the bridge dropped the claim and its old label stops resolving. It has to be claimed again in the extension options page before it can be used'
       )
     else if (l?.claimed === false) notes.push('needs claiming: open the extension options page in that browser profile and pick which profile it is')
+    if (l?.needsReload)
+      notes.push(
+        `needs a reload: it is running extension ${l.extVersion} and the install folder holds ` +
+          `${board?.installedVersion}. Call browser_reload_extension with this profile, or click Reload on ` +
+          "this extension's card on the browser's extensions page"
+      )
     if (l?.present === false) notes.push('configured before but not connected now: the browser is closed, or its extension was disabled')
     if (l?.email) notes.push(`signed in as ${l.email}`)
     else if (l?.profileName) notes.push(`profile name "${l.profileName}"`)
@@ -332,6 +343,14 @@ export function renderStatus(board) {
   if (board?.startedAt) out.push(`Broker up ${fmtAge(now - board.startedAt)}`)
   out.push(`Panic: ${board?.panic ? 'ENGAGED' : 'off'}`)
   out.push(`Routes: ${lines.length} configured, ${lines.filter((l) => l?.link === LINK.READY).length} ready`)
+  const behind = lines.filter((l) => l?.needsReload).length
+  out.push(
+    `Extension: ${board?.installedVersion || 'unreadable'} installed, ` +
+      (behind === 0
+        ? 'every connected profile is running it'
+        : `${behind} of ${lines.length} ${behind === 1 ? 'profile needs' : 'profiles need'} a reload`)
+  )
+  for (const note of versionNotes(board)) out.push(note)
   out.push('')
 
   if (lines.length === 0) {
@@ -340,7 +359,7 @@ export function renderStatus(board) {
     for (const l of lines) {
       const armed = l?.armedUntil && l.armedUntil > now ? `armed ${fmtAge(l.armedUntil - now)} left` : 'not armed'
       const seen = l?.lastSeenAt ? `${fmtAge(now - l.lastSeenAt)} ago` : 'never'
-      out.push(`  ${l?.label || '?'}  ${statusWord(l)}  gen ${numberOr(l?.generation, 0)}  last pong ${seen}  ops ${numberOr(l?.opCount, 0)}${l?.lastOp ? ` (last: ${l.lastOp})` : ''}  ${armed}`)
+      out.push(`  ${l?.label || '?'}  ${statusWord(l)}  ext ${l?.extVersion || 'unreported'}${l?.needsReload ? ' NEEDS RELOAD' : ''}  gen ${numberOr(l?.generation, 0)}  last pong ${seen}  ops ${numberOr(l?.opCount, 0)}${l?.lastOp ? ` (last: ${l.lastOp})` : ''}  ${armed}`)
       // WHICH ACCOUNT this line is. renderBoard has always said it and this
       // view never did, which left the operator status view unable to answer
       // the one question a label collision or an identity change raises.
@@ -360,6 +379,36 @@ export function renderStatus(board) {
     }
   }
   return out.join('\n')
+}
+
+/**
+ * The notes that belong to the INSTALL rather than to any one line.
+ *
+ * Two of them, and they mean different things. A broker running an older
+ * version than the folder holds is a broker that has not been restarted since
+ * the last pull, which is harmless for the browser tools and worth saying once.
+ * An unreadable manifest is the state where the bridge cannot answer "is
+ * anything behind" at all, and silence there would read as "nothing is".
+ */
+function versionNotes(board) {
+  const out = []
+  if (!board?.installedVersion) {
+    out.push('')
+    out.push(
+      'The extension manifest in the install folder could not be read, so no profile can be checked ' +
+        'for being behind and no reload can be requested. The install folder may have been moved.'
+    )
+    return out
+  }
+  if (board?.version && board.version !== board.installedVersion) {
+    out.push('')
+    out.push(
+      `The broker is running ${board.version} and the install folder holds ${board.installedVersion}: ` +
+        'somebody pulled a new version and the broker has not been restarted since. The browser tools ' +
+        'are unaffected.'
+    )
+  }
+  return out
 }
 
 function statusWord(line) {

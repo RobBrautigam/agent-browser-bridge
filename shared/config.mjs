@@ -144,6 +144,89 @@ export const EXTENSION_CONFIG_FILE = path.join(REPO_ROOT, 'extension', 'lib', 'c
 export const MANIFEST_FILE = path.join(REPO_ROOT, 'extension', 'manifest.json')
 export const PACKAGE_FILE = path.join(REPO_ROOT, 'package.json')
 
+/** Cache keyed on the manifest's modification time and size. */
+let installedVersionCache = { key: null, version: null }
+
+/**
+ * Ceiling on the manifest read. An MV3 manifest is about a kilobyte; 256 KiB is
+ * two orders of magnitude of headroom and still small enough that reading it
+ * synchronously inside the broker cannot matter.
+ */
+const MAX_MANIFEST_BYTES = 256 * 1024
+
+/**
+ * The extension version the INSTALL FOLDER holds right now.
+ *
+ * Read from the manifest on disk rather than imported as a constant, and that
+ * is the whole point of the function. A browser reads an unpacked extension's
+ * code once, when it loads it, so the version a profile is RUNNING and the
+ * version the folder HOLDS are two different facts that drift apart the moment
+ * somebody pulls. The broker compares them to answer the only two questions an
+ * operator has - which profiles are behind, and is there anything new for a
+ * reload to load - and it has to re-read the file to do it, because the folder
+ * changes underneath a broker that has been running since login.
+ *
+ * Cached on the manifest's mtime and size so the board can ask on every poll
+ * without a syscall storm, and so a pull is picked up on the next poll rather
+ * than at the next broker restart.
+ *
+ * @returns {string|null} null when the manifest is missing or unreadable, which
+ *   is a real state on a half-finished install and must not read as "0.0.0"
+ */
+export function installedExtensionVersion() {
+  // Opened ONCE and then checked and read through that same descriptor. The
+  // first version of this stat'd the path and then read the path, which is two
+  // different files if anything swaps them in between, so the check said
+  // "a small regular file" about something the read then blocked on. This runs
+  // inside the always-on broker on every board build, so a read that blocks
+  // costs every profile its route, and one that is unexpectedly enormous costs
+  // the process.
+  //
+  // O_NONBLOCK where the platform has it, so opening a FIFO cannot wait for a
+  // writer that never comes. Windows does not define it and does not have the
+  // problem at an ordinary path.
+  let fd
+  try {
+    const nonBlock = fs.constants.O_NONBLOCK || 0
+    fd = fs.openSync(MANIFEST_FILE, fs.constants.O_RDONLY | nonBlock)
+    const stat = fs.fstatSync(fd)
+
+    // A manifest is about a kilobyte. Anything that is not an ordinary file, or
+    // is over the cap, is not a manifest, and the honest answer is "unreadable",
+    // which every caller already handles.
+    if (!stat.isFile() || stat.size > MAX_MANIFEST_BYTES) {
+      installedVersionCache = { key: null, version: null }
+      return null
+    }
+
+    const key = `${stat.mtimeMs}:${stat.size}`
+    if (key === installedVersionCache.key) return installedVersionCache.version
+
+    const buffer = Buffer.alloc(stat.size)
+    const read = fs.readSync(fd, buffer, 0, stat.size, 0)
+    let version = null
+    try {
+      const manifest = JSON.parse(buffer.subarray(0, read).toString('utf8'))
+      if (typeof manifest?.version === 'string' && manifest.version !== '') version = manifest.version
+    } catch {
+      version = null
+    }
+    installedVersionCache = { key, version }
+    return version
+  } catch {
+    installedVersionCache = { key: null, version: null }
+    return null
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd)
+      } catch {
+        /* a descriptor that cannot be closed is not a reason to lose the answer */
+      }
+    }
+  }
+}
+
 /**
  * Every file the config is projected into, with the exact text each must
  * hold. sync-config WRITES these; the gate and the tests COMPARE against them,

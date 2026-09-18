@@ -26,6 +26,7 @@ import {
   MAX_ARM_MINUTES,
   RAW_TAB_ID_FIELD,
   isRestrictedUrl,
+  openOrFocusMode,
   backoffDelay,
   hello,
   helloAck,
@@ -63,6 +64,83 @@ test('isRestrictedUrl refuses browser-internal and Web Store URLs', () => {
   ]
   for (const url of restricted) {
     assert.equal(isRestrictedUrl(url), true, `${url} should be restricted`)
+  }
+})
+
+test('a refused scheme stays refused however many slashes follow it', () => {
+  // Found and PROVED during 0.4.0, not theorized. The rule used to be a text
+  // prefix check, which made it a rule about slashes rather than about schemes.
+  // `file:` is a special scheme in the URL Standard, so every form below
+  // canonicalizes to an ordinary file:// URL that Chromium navigates to, and
+  // none of them starts with the seven characters "file://".
+  //
+  // The live check, against a real Brave profile through the bridge: a
+  // browser_navigate to file:/C:/.../page.html (one slash) was ACCEPTED, the
+  // browser canonicalized it to file:///C:/.../page.html, and the tab rendered
+  // the local file, with the page title coming back in the result. That is the
+  // unarmed local-file primitive the refusal exists to prevent, reachable by
+  // deleting two characters. Hence the scheme check beside the prefix check.
+  const sameSchemeFewerSlashes = [
+    'file:/C:/Users/alice/.secrets.env',
+    'file:C:/Users/alice/.secrets.env',
+    'FILE:/C:/Users/alice/.secrets.env',
+    'file:\\\\server\\share\\secrets.txt',
+    'chrome:/settings',
+    'chrome:settings',
+    'devtools:/devtools/bundled/inspector.html',
+    'chrome-extension:/abc/options.html',
+  ]
+  for (const url of sameSchemeFewerSlashes) {
+    assert.equal(isRestrictedUrl(url), true, `${url} must be refused on its scheme`)
+  }
+
+  // And the prefix rules that are about a SITE rather than a scheme still work,
+  // because https: itself is obviously not a refused scheme.
+  assert.equal(isRestrictedUrl('https://chromewebstore.google.com/detail/x'), true)
+  assert.equal(isRestrictedUrl('https://example.com/'), false)
+  assert.equal(isRestrictedUrl('https://filesystem.example.com/file:/x'), false, 'a scheme inside a path is not a scheme')
+})
+
+test('an invisible character cannot change what a scheme parses as', () => {
+  // The adversarial review of 0.4.0 found this and it is the worst of the three
+  // URL defects: the URL parser DELETES ASCII tab, LF and CR from its input
+  // wherever they appear, INCLUDING inside the scheme. So every form below
+  // parses as a refused scheme while matching no rule written about the text of
+  // one, and before the fix every one of them was accepted.
+  const invisible = [
+    'fi\tle:///C:/Users/me/.env',
+    'fi\nle:///C:/Users/me/.env',
+    'fi\rle:///C:/Users/me/.env',
+    'file\t:///C:/Users/me/.env',
+    'file:\t//C:/Users/me/.env',
+    'f\til\ne:///C:/Users/me/.env',
+    'ch\trome://settings',
+    'de\nvtools://devtools/bundled/inspector.html',
+  ]
+  for (const url of invisible) {
+    // Each one really does parse as the scheme it is hiding. If this assertion
+    // ever fails the parser changed, not the rule.
+    assert.equal(new URL(url).protocol, url.includes('rome') ? 'chrome:' : url.includes('vtools') ? 'devtools:' : 'file:', url)
+    assert.equal(isRestrictedUrl(url), true, `${JSON.stringify(url)} must be refused`)
+    assert.equal(openOrFocusMode(url), null, `${JSON.stringify(url)} must get no mode at all`)
+  }
+
+  // Refused on the CHARACTER, so a control character that does not change the
+  // scheme is refused too. Nothing legitimate carries one: a URL that wants a
+  // control character percent-encodes it, and a percent-encoded one is not
+  // removed by the parser and so cannot change anything.
+  assert.equal(isRestrictedUrl('https://example.com/a\tb'), true, 'a tab in the path')
+  assert.equal(isRestrictedUrl('https://example.com/a%09b'), false, 'percent-encoded is fine')
+})
+
+test('an address the URL parser refuses gets no openOrFocus mode', () => {
+  // Near-miss spellings of a refused scheme: a full-width colon, an fi ligature,
+  // a zero-width space, a space before the colon. None of them is a scheme, so
+  // none is a destination, and a typed refusal here beats whatever
+  // chrome.tabs.create throws at the caller.
+  for (const url of ['\uFB01le:///C:/x.env', 'file\uFF1A///C:/x.env', 'file :///C:/x.env', 'file%09:///C:/x.env', 'fi\u200ble:///C:/x.env', 'not a url at all']) {
+    assert.throws(() => new URL(url), `${url} was expected to be unparseable`)
+    assert.equal(openOrFocusMode(url), null, url)
   }
 })
 
@@ -419,6 +497,7 @@ test('emptyBoard has exactly the keys the Board typedef documents', () => {
   const board = emptyBoard()
   assert.deepEqual(Object.keys(board).sort(), [
     'audit',
+    'installedVersion',
     'lines',
     'now',
     'panic',
@@ -449,6 +528,12 @@ test('emptyBoard defaults version and clock, and startedAt tracks now', () => {
   assert.equal(pinned.version, '1.2.3')
   assert.equal(pinned.now, 1_700_000_000_000)
   assert.equal(pinned.startedAt, 1_700_000_000_000)
+
+  // The installed version defaults to the broker's own, which is what it is on
+  // a broker started after the last pull, and is settable because on a broker
+  // that has been up since login the folder can hold something newer.
+  assert.equal(pinned.installedVersion, '1.2.3', 'defaults to the broker version')
+  assert.equal(emptyBoard('1.2.3', 1, '1.3.0').installedVersion, '1.3.0')
 })
 
 test('LINK states are exactly the four the heartbeat clock can produce', () => {
