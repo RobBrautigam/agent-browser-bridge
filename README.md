@@ -241,7 +241,7 @@ landing on whatever tab now holds that number.
 | Tier | Tools | Policy |
 |---|---|---|
 | Read | `browser_list_profiles`, `browser_list_tabs`, `browser_read_page`, `browser_screenshot`, `browser_scroll`, `bridge_status` | always allowed |
-| Write | `browser_navigate`, `browser_open_tab`, `browser_close_tab`, `browser_activate_tab`, `browser_click`, `browser_fill`, `browser_press_keys`, `browser_wait_for` | allowed, always audited |
+| Write | `browser_navigate`, `browser_open_tab`, `browser_open_or_focus`, `browser_close_tab`, `browser_activate_tab`, `browser_click`, `browser_fill`, `browser_press_keys`, `browser_wait_for` | allowed, always audited |
 | Armed | `browser_eval_js` | refused unless a human armed that profile |
 | Control | `bridge_arm`, `bridge_panic` | |
 
@@ -250,6 +250,39 @@ elements with stable refs, which `browser_click` and `browser_fill` prefer
 over CSS selectors. `browser_fill` has a `set` mode that defeats React's value
 tracker and a `type` mode that sends real keystrokes for consoles that only
 enable Save on them.
+
+### Showing a page to the human at the machine
+
+`browser_open_or_focus` is the tool for a page a PERSON is meant to read, and
+the one to reach for when an agent regenerates a report and shows it again.
+Given a profile and an address it finds the tab already showing that page,
+reloads it and slides it to the far right of the window it is already in; with
+no such tab it opens one at the far right of that profile's most recently
+focused window. The result is one line saying what it did: reused, moved from
+which index to which, reloaded, or opened new.
+
+Three properties make it safe to call while somebody is typing:
+
+- **It does not take the keyboard.** Moving and reloading a background tab
+  changes nothing about where input goes. Raising a window does, so `activate`
+  is off by default and the caller has to ask.
+- **It never closes a tab it did not open.** Duplicates are closed only when
+  its own ledger says this tool opened them; a copy the human opened is left
+  alone and counted in the answer.
+- **It cannot land in the wrong profile.** The operation runs inside the
+  extension instance of the profile it names, and that instance can only see
+  its own windows, so "the most recently focused window" is that profile's
+  even when a different profile's window is the one on screen.
+
+The same capability without an MCP client, for a launcher, a hook or a shell
+script:
+
+```bash
+node scripts/open-or-focus.mjs <profile label> <url or file path>
+```
+
+It prints the same one line and exits non-zero if the page did not land, so a
+caller can fall back to its own opener and say so.
 
 There is deliberately no file-upload tool. It would be an
 arbitrary-file-exfiltration primitive a poisoned page could aim at your
@@ -284,7 +317,18 @@ Stated plainly, because a security model nobody believes is worse than none.
   name.
 - **The audit log records origin only.** Scheme, host and port of every write
   operation, never the path, query or fragment, because password-reset and
-  magic-link tokens live in paths.
+  magic-link tokens live in paths. `browser_open_or_focus` reads tab addresses
+  to find its match, and it is audited under the same rule: what lands in the
+  log is the origin, which for a local page is the scheme alone.
+- **One local-file exception, as narrow as its job.** `file:` URLs are refused
+  everywhere, because navigating to one and reading it back would be a
+  local-file read primitive. `browser_open_or_focus` accepts a `file:` URL
+  whose path ends in `.html` or `.htm`, and nothing else, because showing a
+  generated page to a human is the job it exists for. Every other local file
+  keeps its refusal, so there is no arbitrary file to aim a tab at. Chromium
+  also refuses to inject into `file:` pages unless you turn on this
+  extension's "Allow access to file URLs" toggle, which nothing here requests
+  or sets, so reading such a tab back fails on a default install.
 - **No telemetry.** Nothing phones home. There is no analytics, no update
   check, no crash reporter. The only outbound connections are the ones the
   agent asks the browser to make.

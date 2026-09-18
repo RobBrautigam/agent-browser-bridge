@@ -1,6 +1,6 @@
 {
   "name": "agent-browser-bridge",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Agent Browser Bridge - Drive your real, logged-in browsers from any AI agent",
   "license": "MIT",

@@ -100,10 +100,19 @@ test('the extension manifest carries the product name and NO pinned key', () => 
   assert.equal('key' in manifest, false, 'a pinned key would give every install the same extension ID')
 })
 
-test('package.json follows the config', () => {
+test('package.json follows the config, and the manifest carries the same version', () => {
   const pkg = JSON.parse(fs.readFileSync(PACKAGE, 'utf8'))
   assert.equal(pkg.name, CONFIG.stateDirName)
-  assert.equal(pkg.version, '0.2.0')
+  assert.match(pkg.version, /^\d+\.\d+\.\d+$/)
+
+  // The invariant, rather than a literal that has to be edited on every bump
+  // and fails the suite when it is not. These two versions are read by
+  // different things - the broker reports package.json and the browser shows
+  // the manifest - so a release that moves one and not the other has an
+  // extension claiming to be a version the bridge has never shipped, and the
+  // only symptom is a wrong number in a support conversation.
+  const manifest = JSON.parse(fs.readFileSync(MANIFEST, 'utf8'))
+  assert.equal(manifest.version, pkg.version)
 })
 
 test('loadConfig refuses a host id Chromium would reject', () => {

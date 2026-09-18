@@ -34,6 +34,8 @@ const IDENTICAL = [
   'LINK',
   'RESTRICTED_URL_PREFIXES',
   'RAW_TAB_ID_FIELD',
+  'LOCAL_PAGE_EXTENSIONS',
+  'OPEN_OR_FOCUS_MATCH',
 ]
 
 test('every mirrored constant is identical to the shared contract', () => {
@@ -73,4 +75,49 @@ test('tab handles and URL rules agree', () => {
     assert.equal(mirror.isRestrictedUrl(url), shared.isRestrictedUrl(url), url)
   }
   assert.equal(mirror.originOf('https://a.example/p?q#f'), shared.originOf('https://a.example/p?q#f'))
+})
+
+test('the openOrFocus rules agree, address by address', () => {
+  // The extension DECIDES with its copy of these and the broker ENFORCES with
+  // the contract's, so a drift here is a page opened in one place and refused
+  // in the other, or worse, a local file the broker lets through and the
+  // extension has a different opinion about.
+  const urls = [
+    'file:///C:/dev/report.html',
+    'file:///C:/dev/report.HTM',
+    'file:///C:/dev/notes.html.txt',
+    'file:///C:/Users/someone/.env',
+    'https://example.com/report',
+    'chrome://settings',
+    '',
+  ]
+  for (const url of urls) {
+    assert.equal(mirror.isLocalPageUrl(url), shared.isLocalPageUrl(url), url)
+    assert.equal(mirror.isOpenOrFocusUrl(url), shared.isOpenOrFocusUrl(url), url)
+  }
+
+  const target = 'file:///C:/dev/repo/docs/report.html'
+  const others = [target, 'file:///c:/dev/repo/docs/report.html#x', 'file:///C:/dev/other/docs/report.html']
+  for (const other of others) {
+    for (const allowFileName of [false, true]) {
+      assert.equal(
+        mirror.openOrFocusMatch(target, other, { allowFileName }),
+        shared.openOrFocusMatch(target, other, { allowFileName }),
+        `${other} (allowFileName ${allowFileName})`
+      )
+    }
+  }
+
+  const spec = {
+    url: target,
+    tabs: [
+      { tabId: 1, windowId: 1, index: 0, url: target, active: false, pinned: false },
+      { tabId: 2, windowId: 2, index: 0, url: target, active: true, pinned: false },
+    ],
+    lastFocusedWindowId: 2,
+    openedByUs: [1],
+  }
+  assert.deepEqual(mirror.planOpenOrFocus(spec), shared.planOpenOrFocus(spec))
+  const result = { action: 'reused', match: 'exact', fromIndex: 0, toIndex: 3, windowId: 2, moved: true, reloaded: true, closed: 1, kept: 0 }
+  assert.equal(mirror.describeOpenOrFocus(result), shared.describeOpenOrFocus(result))
 })

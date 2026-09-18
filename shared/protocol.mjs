@@ -109,6 +109,7 @@ export const OPS = Object.freeze({
   SCROLL: 'scroll',
   NAVIGATE: 'navigate',
   OPEN_TAB: 'openTab',
+  OPEN_OR_FOCUS: 'openOrFocus',
   CLOSE_TAB: 'closeTab',
   ACTIVATE_TAB: 'activateTab',
   CLICK: 'click',
@@ -141,6 +142,7 @@ export const OP_TIER = Object.freeze({
 
   [OPS.NAVIGATE]: TIER.WRITE,
   [OPS.OPEN_TAB]: TIER.WRITE,
+  [OPS.OPEN_OR_FOCUS]: TIER.WRITE,
   [OPS.CLOSE_TAB]: TIER.WRITE,
   [OPS.ACTIVATE_TAB]: TIER.WRITE,
   [OPS.CLICK]: TIER.WRITE,
@@ -175,6 +177,7 @@ export const BROWSER_OPS = Object.freeze([
   OPS.SCROLL,
   OPS.NAVIGATE,
   OPS.OPEN_TAB,
+  OPS.OPEN_OR_FOCUS,
   OPS.CLOSE_TAB,
   OPS.ACTIVATE_TAB,
   OPS.CLICK,
@@ -324,6 +327,257 @@ export function isRestrictedUrl(url) {
   const u = url.trim().toLowerCase()
   if (u === '') return true
   return RESTRICTED_URL_PREFIXES.some((p) => u.startsWith(p.toLowerCase()))
+}
+
+/* -------------------------------------------------------------------------- */
+/* openOrFocus: one page, one tab, at the far right                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The file extensions openOrFocus will accept behind a `file:` URL.
+ *
+ * THIS IS THE ONLY CARVE-OUT FROM RESTRICTED_URL_PREFIXES IN THE SYSTEM, so the
+ * reasoning belongs where the rule is.
+ *
+ * `file:` is refused everywhere else because navigate is WRITE tier and readPage
+ * is READ tier, so without the refusal the two compose into an unarmed
+ * local-file read primitive: point a tab at file:///.../secrets.env, then read
+ * it back. openOrFocus exists to put a GENERATED PAGE in front of the human who
+ * asked for it, and those pages are local HTML files, so a blanket refusal would
+ * make the capability useless for the one job it has.
+ *
+ * The carve-out is therefore exactly as wide as that job and no wider: a `file:`
+ * URL whose path ends in .html or .htm. Every other local file keeps its
+ * refusal, which is what stops the read primitive from coming back: there is no
+ * arbitrary local file to aim a tab at.
+ *
+ * Two further limits are worth stating next to the rule rather than only in
+ * SECURITY.md. Chromium refuses content-script injection into `file:` URLs
+ * unless the operator turns on this extension's "Allow access to file URLs"
+ * toggle, which nothing in this repository requests, sets or asks for, so
+ * readPage against such a tab fails on a default install. And the audit log
+ * records origin only, which for a `file:` URL is the scheme and an opaque
+ * marker: the path of a page opened this way never reaches the log.
+ */
+export const LOCAL_PAGE_EXTENSIONS = Object.freeze(['.html', '.htm'])
+
+/** True for a `file:` URL that points at a local HTML page, and nothing else. */
+export function isLocalPageUrl(url) {
+  if (typeof url !== 'string') return false
+  const trimmed = url.trim()
+  if (!/^file:\/\//i.test(trimmed)) return false
+  let pathname
+  try {
+    pathname = new URL(trimmed).pathname
+  } catch {
+    return false
+  }
+  // Judge the DECODED path: %2E%68%74%6D%6C is the same file as .html, and a
+  // rule that only reads the raw form would refuse a legitimate page while a
+  // percent-encoded one sailed past a check written the other way round.
+  let decoded = pathname
+  try {
+    decoded = decodeURIComponent(pathname)
+  } catch {
+    /* a malformed escape widens nothing: judge the raw path instead */
+  }
+  const lower = decoded.toLowerCase()
+  return LOCAL_PAGE_EXTENSIONS.some((ext) => lower.endsWith(ext))
+}
+
+/** The URLs openOrFocus accepts: anything navigable, plus a local HTML page. */
+export function isOpenOrFocusUrl(url) {
+  if (isLocalPageUrl(url)) return true
+  return !isRestrictedUrl(url)
+}
+
+/**
+ * How a tab's address matched the one openOrFocus was asked for, best first.
+ *
+ * SAME_FILE_NAME is off unless the caller asks for it, because two git
+ * worktrees hold the same file name under different folders and they are
+ * routinely DIFFERENT versions of the page. Reusing across them silently
+ * would show a human yesterday's document and call it today's.
+ */
+export const OPEN_OR_FOCUS_MATCH = Object.freeze({
+  EXACT: 'exact',
+  SAME_PAGE: 'same-page',
+  SAME_FILE_NAME: 'same-file-name',
+})
+
+/** Best first. The planner only ever acts on the best tier present. */
+const MATCH_RANK = Object.freeze([
+  OPEN_OR_FOCUS_MATCH.EXACT,
+  OPEN_OR_FOCUS_MATCH.SAME_PAGE,
+  OPEN_OR_FOCUS_MATCH.SAME_FILE_NAME,
+])
+
+/**
+ * The comparable parts of a URL, or null when it is not a URL at all.
+ *
+ * `file:` paths are lowercased and backslashes folded, because Windows paths
+ * are case-insensitive and reach this code in both spellings: the same page
+ * arrives as C:/dev/x.html from one caller and c:\dev\x.html from another, and
+ * a comparison that called those two different pages would open a second tab
+ * for a page already on screen, which is the whole defect this capability
+ * exists to fix. Nothing else is case-folded: an http path genuinely is
+ * case-sensitive.
+ */
+function comparableUrl(url) {
+  if (typeof url !== 'string' || url.trim() === '') return null
+  let u
+  try {
+    u = new URL(url.trim())
+  } catch {
+    return null
+  }
+  const isFile = u.protocol === 'file:'
+  let pathname = u.pathname
+  try {
+    pathname = decodeURIComponent(pathname)
+  } catch {
+    /* keep the raw form rather than failing the comparison */
+  }
+  if (isFile) pathname = pathname.replace(/\\/g, '/').toLowerCase()
+  return {
+    protocol: u.protocol.toLowerCase(),
+    host: u.host.toLowerCase(),
+    pathname,
+    search: u.search,
+    hash: u.hash,
+    isFile,
+    fileName: pathname.slice(pathname.lastIndexOf('/') + 1),
+  }
+}
+
+/**
+ * Does `tabUrl` show the page `targetUrl` names?
+ *
+ * @param {string} targetUrl
+ * @param {string} tabUrl
+ * @param {{allowFileName?: boolean}} [opts]
+ * @returns {string|null} one of OPEN_OR_FOCUS_MATCH, or null for no match
+ */
+export function openOrFocusMatch(targetUrl, tabUrl, { allowFileName = false } = {}) {
+  const a = comparableUrl(targetUrl)
+  const b = comparableUrl(tabUrl)
+  if (!a || !b) return null
+  if (a.protocol !== b.protocol || a.host !== b.host) return null
+  if (a.pathname === b.pathname) {
+    return a.search === b.search && a.hash === b.hash
+      ? OPEN_OR_FOCUS_MATCH.EXACT
+      : OPEN_OR_FOCUS_MATCH.SAME_PAGE
+  }
+  if (allowFileName && a.isFile && b.isFile && a.fileName !== '' && a.fileName === b.fileName) {
+    return OPEN_OR_FOCUS_MATCH.SAME_FILE_NAME
+  }
+  return null
+}
+
+/**
+ * Decide what openOrFocus should DO, with no browser anywhere near it.
+ *
+ * Kept pure and in the contract on purpose. The extension executes this plan
+ * and the tests prove it, so the rule that decides whether a human's tab gets
+ * closed is checked without driving a browser - which is the only way that rule
+ * gets checked often enough to stay true.
+ *
+ * @param {object} spec
+ * @param {string} spec.url                        the page being asked for
+ * @param {Array<{tabId:number,url:string,windowId:number,index:number,active:boolean,pinned:boolean}>} spec.tabs
+ * @param {number|null} [spec.lastFocusedWindowId] the profile's most recently focused window
+ * @param {boolean} [spec.allowFileName]           allow the SAME_FILE_NAME tier
+ * @param {number[]} [spec.openedByUs]             tab ids this capability opened
+ * @returns {{action:'open',windowId:number|null}
+ *          |{action:'reuse',match:string,keeper:object,close:object[],kept:object[]}}
+ */
+export function planOpenOrFocus({
+  url,
+  tabs = [],
+  lastFocusedWindowId = null,
+  allowFileName = false,
+  openedByUs = [],
+}) {
+  const ours = new Set(openedByUs)
+  const matches = []
+  for (const tab of Array.isArray(tabs) ? tabs : []) {
+    if (!tab || !Number.isInteger(tab.tabId)) continue
+    const match = openOrFocusMatch(url, tab.url, { allowFileName })
+    if (match) matches.push({ ...tab, match })
+  }
+  if (matches.length === 0) {
+    return { action: 'open', windowId: Number.isInteger(lastFocusedWindowId) ? lastFocusedWindowId : null }
+  }
+
+  const best = MATCH_RANK.find((rank) => matches.some((t) => t.match === rank))
+  const atBest = matches.filter((t) => t.match === best)
+  const keeper = pickKeeper(atBest, lastFocusedWindowId)
+  const rest = matches.filter((t) => t.tabId !== keeper.tabId)
+
+  // The ledger is the ONLY thing that may authorize a close. A tab the operator
+  // opened themselves is left exactly where it is, whatever it is showing: the
+  // cost of an extra tab is nothing and the cost of closing someone's work is
+  // unrecoverable.
+  return {
+    action: 'reuse',
+    match: best,
+    keeper,
+    close: rest.filter((t) => ours.has(t.tabId)),
+    kept: rest.filter((t) => !ours.has(t.tabId)),
+  }
+}
+
+/**
+ * Which matching tab survives: the one in the window the operator used last,
+ * preferring the one they are actually looking at, and falling back to the
+ * lowest tab id so that repeated calls converge on ONE tab instead of walking
+ * across the duplicates.
+ */
+function pickKeeper(candidates, lastFocusedWindowId) {
+  const inFocused = Number.isInteger(lastFocusedWindowId)
+    ? candidates.filter((t) => t.windowId === lastFocusedWindowId)
+    : []
+  const pool = inFocused.length > 0 ? inFocused : candidates
+  const active = pool.filter((t) => t.active === true)
+  const ranked = (active.length > 0 ? active : pool).slice().sort((x, y) => x.tabId - y.tabId)
+  return ranked[0]
+}
+
+/**
+ * The one line openOrFocus answers with, built from the result so the MCP tool,
+ * the command line and the extension all say the same sentence about the same
+ * action. A caller that wants the profile in front of it prefixes its own.
+ */
+export function describeOpenOrFocus(result) {
+  if (!result || typeof result !== 'object') return 'openOrFocus returned nothing.'
+  const where = Number.isInteger(result.windowId) ? ` of window ${result.windowId}` : ''
+
+  if (result.action === 'opened') {
+    return `Opened a new tab at index ${result.toIndex}${where}, the far right of that window.`
+  }
+
+  const parts = []
+  parts.push(
+    result.match === OPEN_OR_FOCUS_MATCH.EXACT
+      ? 'Reused the tab already showing it'
+      : `Reused a tab showing it (matched ${result.match})`
+  )
+  if (result.pinned) parts.push(`left at index ${result.toIndex}${where} because that tab is pinned`)
+  else if (result.moved) parts.push(`moved from index ${result.fromIndex} to ${result.toIndex}${where}`)
+  else parts.push(`already at index ${result.toIndex}${where}`)
+  parts.push(result.reloaded ? 'reloaded' : 'not reloaded')
+  if (result.closed > 0) {
+    parts.push(`closed ${plural(result.closed, 'duplicate')} this capability had opened`)
+  }
+  if (result.kept > 0) {
+    parts.push(`left ${plural(result.kept, 'other matching tab')} alone, not opened by this capability`)
+  }
+  if (result.activated) parts.push('brought to the front')
+  return `${parts.join(', ')}.`
+}
+
+function plural(n, noun) {
+  return `${n} ${noun}${n === 1 ? '' : 's'}`
 }
 
 /**
