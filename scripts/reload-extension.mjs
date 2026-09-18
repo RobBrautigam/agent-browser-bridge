@@ -37,7 +37,7 @@
  *   --socket <path>     dial a different broker endpoint
  */
 
-import { OPS, PRODUCT_NAME, describeExtensionReload } from '../shared/protocol.mjs'
+import { ERR, OPS, PRODUCT_NAME, describeExtensionReload } from '../shared/protocol.mjs'
 import { installedExtensionVersion } from '../shared/config.mjs'
 import { CLI_TIMEOUT_MS, describeError, getBoard, isMain, withBroker } from './claim.mjs'
 
@@ -161,6 +161,36 @@ export function selectTargets(lines, installed, { all, label }) {
 }
 
 /**
+ * Why a reload request failed, in words that name the next action.
+ *
+ * One case needs its own sentence and it is the likeliest failure this command
+ * has: an extension older than the release that added the operation does not
+ * know the operation, and the generic explanation for that error talks about
+ * chrome.debugger policy and its tier 1 alternatives, which have nothing to do
+ * with it. Anybody upgrading from 0.3.0 or earlier meets this exactly once per
+ * profile, and being sent to read about debugger policy is the worst possible
+ * answer, because the real one is the single click this command exists to
+ * replace.
+ *
+ * @param {{code?:string, message?:string}} err the client's typed failure
+ * @param {{extVersion?:string|null}} line the board line the request addressed
+ */
+export function describeReloadError(err, line = {}) {
+  const code = err && typeof err.code === 'string' ? err.code : null
+  const message = String(err?.message || '')
+  if (code === ERR.UNSUPPORTED && /^unknown operation/i.test(message.trim())) {
+    return (
+      `the extension running in this profile is version ${line.extVersion || 'unknown'}, which predates ` +
+      'this command and cannot reload itself. That is the one reload nothing can automate: the code ' +
+      'that would serve the request is the code being replaced. Open that browser profile, go to its ' +
+      'extensions page, find this extension and press the Reload arrow on its card, once. Every ' +
+      'release after that one click is this command.'
+    )
+  }
+  return describeError(err)
+}
+
+/**
  * Ask one line to reload, then wait for it to come back on the new version.
  *
  * Addressed by installId rather than label for the same reason claim and label
@@ -189,15 +219,17 @@ export async function reloadOne({
       timeoutMs: CLI_TIMEOUT_MS,
     })
   } catch (err) {
-    return { ok: false, line: `${line.label}: ${describeError(err)}` }
+    return { ok: false, line: `${line.label}: ${describeReloadError(err, line)}` }
   }
   if (!asked?.reloading) {
     return {
       ok: false,
       line:
         `${line.label}: the broker allowed the reload but the extension did not confirm it, which means ` +
-        'the extension in that profile is older than this command. Reload it once from the browser\'s ' +
-        'extensions page and every release after that is automatic.',
+        `the extension in that profile is older than this command. ${describeReloadError(
+          { code: ERR.UNSUPPORTED, message: 'Unknown operation' },
+          line
+        )}`,
     }
   }
 
