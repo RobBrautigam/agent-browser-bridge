@@ -280,6 +280,7 @@ test('every page-mutating op is in the WRITE tier', () => {
   const expectedWrite = [
     OPS.NAVIGATE,
     OPS.OPEN_TAB,
+    OPS.OPEN_OR_FOCUS,
     OPS.CLOSE_TAB,
     OPS.ACTIVATE_TAB,
     OPS.CLICK,
@@ -321,7 +322,7 @@ test('control and housekeeping ops are META and never reach a page', () => {
 /* 5. The routing partition: who EXECUTES an op                                */
 /* -------------------------------------------------------------------------- */
 
-test('BROWSER_OPS is exactly the thirteen ops that cross into the extension', () => {
+test('BROWSER_OPS is exactly the fourteen ops that cross into the extension', () => {
   // Pinned as a literal list rather than derived from OP_TIER. The first build
   // derived it as "not META, plus SET_LABEL", which quietly made the META tier
   // mean two different things. Tier answers "what policy applies"; this answers
@@ -335,6 +336,7 @@ test('BROWSER_OPS is exactly the thirteen ops that cross into the extension', ()
     OPS.FILL,
     OPS.LIST_TABS,
     OPS.NAVIGATE,
+    OPS.OPEN_OR_FOCUS,
     OPS.OPEN_TAB,
     OPS.PRESS_KEYS,
     OPS.READ_PAGE,
@@ -342,7 +344,7 @@ test('BROWSER_OPS is exactly the thirteen ops that cross into the extension', ()
     OPS.SCROLL,
     OPS.WAIT_FOR,
   ].sort())
-  assert.equal(BROWSER_OPS.length, 13)
+  assert.equal(BROWSER_OPS.length, 14)
   assert.ok(Object.isFrozen(BROWSER_OPS))
 })
 

@@ -80,6 +80,8 @@ const MIRRORED_CONSTANTS = [
   'LINK',
   'RESTRICTED_URL_PREFIXES',
   'RAW_TAB_ID_FIELD',
+  'LOCAL_PAGE_EXTENSIONS',
+  'OPEN_OR_FOCUS_MATCH',
 ]
 const SELF = path.resolve(fileURLToPath(import.meta.url))
 

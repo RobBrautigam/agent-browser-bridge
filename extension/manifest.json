@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Agent Browser Bridge",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Drive your real, logged-in browsers from any AI agent",
   "minimum_chrome_version": "116",
   "background": {

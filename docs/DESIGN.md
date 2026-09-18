@@ -142,7 +142,7 @@ tab now holds that number.
 | Tier | Tools | Notes |
 |---|---|---|
 | Read | `browser_list_profiles`, `browser_list_tabs`, `browser_read_page`, `browser_screenshot`, `browser_scroll`, `bridge_status` | Always allowed. `browser_list_profiles` also lists configured-but-absent profiles, which is how a silently disabled extension becomes visible. |
-| Write | `browser_navigate`, `browser_open_tab`, `browser_close_tab`, `browser_activate_tab`, `browser_click`, `browser_fill`, `browser_press_keys`, `browser_wait_for` | Allowed, always audited. `browser_click` and `browser_press_keys` accept `trusted: true` to escalate to real input events through the debugger. |
+| Write | `browser_navigate`, `browser_open_tab`, `browser_open_or_focus`, `browser_close_tab`, `browser_activate_tab`, `browser_click`, `browser_fill`, `browser_press_keys`, `browser_wait_for` | Allowed, always audited. `browser_click` and `browser_press_keys` accept `trusted: true` to escalate to real input events through the debugger. `browser_open_or_focus` is the one tool written for a page a HUMAN will read: it reuses the tab already showing the address rather than adding a sixth copy of it. |
 | Armed | `browser_eval_js` | Arbitrary JavaScript in an authenticated session: a full-compromise primitive, gated behind an explicit human arm. |
 | Control | `bridge_arm`, `bridge_panic` | Arm one profile for a bounded window; drop every route and refuse everything. |
 
@@ -155,6 +155,17 @@ used one.
 arbitrary-file-exfiltration primitive reachable by prompt injection with zero
 human interaction. If it is ever added it needs a path allowlist and its own
 arming gate.
+
+**`browser_open_or_focus` is the one operation that may name a local file**,
+and only one whose path ends in `.html` or `.htm`. The `file:` refusal exists
+because navigate (write) plus read (read) compose into an unarmed local-file
+read primitive; a capability whose job is showing a generated page to a person
+cannot do that job without local HTML, and restricting it to HTML leaves no
+arbitrary file to aim a tab at. The rule is enforced in the extension and
+again in the broker, because a rule that lives only in the extension is a rule
+the broker merely trusts someone else to apply. SECURITY.md carries the two
+further limits: Chromium's own file-URL injection opt-in, which nothing here
+requests, and the origin-only audit log.
 
 ## 4. Profile identity
 
