@@ -201,6 +201,13 @@ test('HOST_REQ_ALLOWED_OPS contains no browser operation, ever', () => {
     )
   }
   assert.ok(!HOST_REQ_ALLOWED_OPS.includes(OPS.EVAL_JS), 'evalJs must never be host-originable')
+  // An extension asking the broker to reload that same extension would be a
+  // request that answers itself, and it would put the reload outside the
+  // version gate the broker applies to an mcp-originated one.
+  assert.ok(
+    !HOST_REQ_ALLOWED_OPS.includes(OPS.RELOAD_EXTENSION),
+    'reloadExtension must never be host-originable'
+  )
   assert.ok(Object.isFrozen(HOST_REQ_ALLOWED_OPS))
 })
 
@@ -276,7 +283,7 @@ test('every read op is in the READ tier', () => {
   )
 })
 
-test('every page-mutating op is in the WRITE tier', () => {
+test('the WRITE tier is exactly the ops that change something and need no arm', () => {
   const expectedWrite = [
     OPS.NAVIGATE,
     OPS.OPEN_TAB,
@@ -287,6 +294,12 @@ test('every page-mutating op is in the WRITE tier', () => {
     OPS.FILL,
     OPS.PRESS_KEYS,
     OPS.WAIT_FOR,
+    // The one that changes the BRIDGE rather than a page: it asks a profile's
+    // extension to reload itself, which is how a release reaches a browser
+    // without a human clicking Reload. WRITE because it must be audited and
+    // must not need an arm; what bounds it is the broker's refusal to send it
+    // unless the folder on disk holds a different version.
+    OPS.RELOAD_EXTENSION,
   ]
   for (const op of expectedWrite) {
     assert.equal(OP_TIER[op], TIER.WRITE, `${op} must be a write op`)
@@ -322,7 +335,7 @@ test('control and housekeeping ops are META and never reach a page', () => {
 /* 5. The routing partition: who EXECUTES an op                                */
 /* -------------------------------------------------------------------------- */
 
-test('BROWSER_OPS is exactly the fourteen ops that cross into the extension', () => {
+test('BROWSER_OPS is exactly the fifteen ops that cross into the extension', () => {
   // Pinned as a literal list rather than derived from OP_TIER. The first build
   // derived it as "not META, plus SET_LABEL", which quietly made the META tier
   // mean two different things. Tier answers "what policy applies"; this answers
@@ -340,11 +353,12 @@ test('BROWSER_OPS is exactly the fourteen ops that cross into the extension', ()
     OPS.OPEN_TAB,
     OPS.PRESS_KEYS,
     OPS.READ_PAGE,
+    OPS.RELOAD_EXTENSION,
     OPS.SCREENSHOT,
     OPS.SCROLL,
     OPS.WAIT_FOR,
   ].sort())
-  assert.equal(BROWSER_OPS.length, 14)
+  assert.equal(BROWSER_OPS.length, 15)
   assert.ok(Object.isFrozen(BROWSER_OPS))
 })
 

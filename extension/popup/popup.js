@@ -321,7 +321,17 @@ function renderLine() {
         ? 'sb-chip sb-chip--accent'
         : 'sb-chip'
 
-  patchText(el.lineDetail, line ? stateDetail(line, derived) : 'Waiting for the broker.')
+  // The reload sentence is APPENDED rather than replacing the state sentence.
+  // Being behind is orthogonal to being live, stale or unclaimed, and the
+  // one-second view has to keep answering the question it was opened for.
+  const detail = line ? stateDetail(line, derived) : 'Waiting for the broker.'
+  const installed = state.board ? state.board.installedVersion : null
+  patchText(
+    el.lineDetail,
+    line && line.needsReload
+      ? `${detail} Running extension ${line.extVersion}, and ${installed || 'a newer version'} is installed: reload this extension to pick it up.`
+      : detail
+  )
 
   patchText(el.statTabs, line && line.present ? String(line.tabCount ?? 0) : '-')
 

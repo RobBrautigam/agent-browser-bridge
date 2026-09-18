@@ -53,6 +53,7 @@ import {
   event,
   emptyBoard,
   isOpenOrFocusUrl,
+  reloadRefusal,
   isRestrictedUrl,
   RAW_TAB_ID_FIELD,
 } from '../shared/protocol.mjs'
@@ -84,6 +85,7 @@ import {
   requiresProfile,
   tierFor,
 } from './policy.mjs'
+import { installedExtensionVersion } from '../shared/config.mjs'
 import {
   RouteTable,
   absentLabelHolder,
@@ -649,6 +651,10 @@ async function handleRegister(conn, msg) {
     })
   }
 
+  // A register is how a reloaded profile comes back, so it is the moment the
+  // reload guard above stops applying.
+  pendingReloads.delete(installId)
+
   // Every register is a new browser session as far as tab handles are
   // concerned, so the generation moves and every outstanding handle dies.
   const generation = store.nextGeneration(installId)
@@ -711,6 +717,7 @@ async function handleRegister(conn, msg) {
     label: route.label,
     desiredLabel: route.desiredLabel,
     labelIsCustom,
+    extVersion: incoming.extVersion,
     lastSeenAt: Date.now(),
   })
 
@@ -849,8 +856,80 @@ function handleReq(conn, msg) {
     return
   }
 
+  if (op === OPS.RELOAD_EXTENSION && !allowReload(conn, msg, route)) return
+
   forwardToBrowser(conn, msg, route, op)
 }
+
+/**
+ * Apply the contract's reload rule and answer the caller when it refuses.
+ *
+ * The rule itself is `reloadRefusal` in shared/protocol.mjs, where it is unit
+ * tested; this is the part that needs a live route and a socket. The broker is
+ * the enforcement point because it is the only component that can compare what
+ * is on disk with what is running.
+ *
+ * @returns {boolean} true when the request may proceed
+ */
+function allowReload(conn, msg, route) {
+  const installed = installedExtensionVersion()
+  const running = route.extVersion || null
+  const refusal = reloadRefusal({ label: route.label, installed, running })
+  if (refusal) {
+    reply(conn, msg, fail(msg.id, refusal.code, refusal.message), { route })
+    return false
+  }
+
+  // The version gate is not atomic on its own. Between the reload and the
+  // profile re-registering, the route still carries the OLD version, so a second
+  // caller in that window passes the same check and the extension schedules a
+  // second reload of something already tearing down. One reload per release
+  // becomes several, each one bumping the generation and killing the tab handles
+  // every other session holds. This flag closes the window; it is cleared when
+  // the profile re-registers, and it expires on its own so a reload that never
+  // lands cannot lock the operation out forever.
+  const pendingUntil = pendingReloads.get(route.installId)
+  // An expired entry is deleted when it is noticed rather than left to be
+  // overwritten, so the map holds only profiles with a reload genuinely in
+  // flight instead of one entry per profile the broker has ever reloaded.
+  if (pendingUntil && pendingUntil <= Date.now()) pendingReloads.delete(route.installId)
+  if (pendingUntil && pendingUntil > Date.now()) {
+    reply(
+      conn,
+      msg,
+      fail(
+        msg.id,
+        ERR.UNSUPPORTED,
+        `"${route.label}" was already asked to reload a moment ago and has not come back yet. ` +
+          'Nothing was sent. Wait for it to reconnect and check the profile list; it reports the ' +
+          'version it is running when it does.'
+      ),
+      { route }
+    )
+    return false
+  }
+  pendingReloads.set(route.installId, Date.now() + RELOAD_PENDING_MS)
+
+  log('info', 'Allowing an extension self-reload', { label: route.label, running, installed })
+  return true
+}
+
+/**
+ * Profiles that have been asked to reload and have not come back, by installId,
+ * with the moment the ask stops counting.
+ *
+ * Broker-local and deliberately not in the contract: it is a policy detail of
+ * this process, not a value any other component sends or reads.
+ */
+const pendingReloads = new Map()
+
+/**
+ * How long an unanswered reload blocks another. A reload and a re-register take
+ * about two seconds; 30 is generous enough that a slow machine is not fighting
+ * the guard, and short enough that a reload which never landed does not need a
+ * broker restart to clear.
+ */
+const RELOAD_PENDING_MS = 30_000
 
 /**
  * Which route a profile-addressed REQ acts on.
@@ -1067,7 +1146,7 @@ function handleProfileMetaOp(conn, msg, route) {
         reply(conn, msg, fail(id, result.code, result.message), { route })
         return
       }
-      reply(conn, msg, ok(id, { line: lineFor(route, { armedUntil: arming.armedUntil(route.installId) }) }), {
+      reply(conn, msg, ok(id, { line: lineFor(route, { armedUntil: arming.armedUntil(route.installId), installedVersion: installedExtensionVersion() }) }), {
         route,
       })
       return
@@ -1100,7 +1179,7 @@ function handleSetLabelOp(conn, msg, route) {
     conn,
     msg,
     ok(msg.id, {
-      line: lineFor(route, { armedUntil: arming.armedUntil(route.installId) }),
+      line: lineFor(route, { armedUntil: arming.armedUntil(route.installId), installedVersion: installedExtensionVersion() }),
       handlesInvalidated: true,
     }),
     { route }
@@ -1831,7 +1910,12 @@ function recheckIdentity(route) {
 
 function buildBoard() {
   const now = Date.now()
-  const board = emptyBoard(VERSION, now)
+  // Re-read from the manifest rather than reporting VERSION. They are the same
+  // number on a broker started after the last pull and different on one that
+  // has been up since login, and the difference is the whole point: it is what
+  // tells an operator a release is on disk and not yet in their browsers.
+  const installedVersion = installedExtensionVersion()
+  const board = emptyBoard(VERSION, now, installedVersion)
   board.startedAt = STARTED_AT
   board.panic = panic.active
 
@@ -1860,6 +1944,7 @@ function buildBoard() {
     lineFor(route, {
       armedUntil: arming.armedUntil(route.installId),
       collisionNote: notes.get(route.installId) ?? null,
+      installedVersion,
     })
   )
   for (const line of absentLines) {
@@ -1909,6 +1994,9 @@ function heartbeat() {
         )
         route.conn?.destroy('missed too many heartbeats')
         routes.detach(route)
+        // A route that is gone is not waiting for a reload any more, and when it
+        // comes back it will register, which clears this anyway.
+        pendingReloads.delete(route.installId)
         continue
       }
       if (route.missed >= TIMING.STALE_AFTER_MISSED && route.link !== LINK.STALE) {

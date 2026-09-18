@@ -34,6 +34,7 @@ import {
   PRODUCT_NAME,
   RESTRICTED_URL_PREFIXES,
   TIMING,
+  describeExtensionReload,
 } from '../shared/protocol.mjs'
 import { MCP_SERVER_NAME } from '../shared/config.mjs'
 import { BridgeError, BrokerClient } from './client.mjs'
@@ -432,7 +433,7 @@ function registerWriteTools(server) {
     {
       title: 'Open a page, or reuse the tab already showing it',
       description:
-        'Put a page in front of the human at this machine WITHOUT giving them a sixth copy of it. If a tab in that profile is already showing the address, that tab is reloaded and slid to the far right of the window it is already in; if none is, a new tab opens at the far right of that profile\'s most recently focused window. Use this instead of browser_open_tab for anything a person is meant to read, especially a page you regenerate and show again. Matching is by address: exactly, then ignoring the query and the fragment. It does not take the keyboard away from whoever is typing unless `activate` is set, and it never closes a tab it did not open itself. It DOES reload the tab it reuses, which discards anything unsaved in that tab, so point it at a page you are showing someone rather than at a form they are filling in. This is also the one tool that accepts a local file, and only a .html or .htm one, because showing a generated page is the job it exists for.',
+        'Put a page in front of the human at this machine WITHOUT giving them a sixth copy of it. If a tab in that profile is already showing the address, that tab is reloaded and slid to the far right of the window it is already in; if none is, a new tab opens at the far right of that profile\'s most recently focused window. Use this instead of browser_open_tab for anything a person is meant to read, especially a page you regenerate and show again. Matching is by address: exactly, then ignoring the query and the fragment. It does not take the keyboard away from whoever is typing unless `activate` is set, and it never closes a tab it did not open itself. It DOES reload the tab it reuses, which discards anything unsaved in that tab, so point it at a page you are showing someone rather than at a form they are filling in. This is also the one tool that accepts a local file. It OPENS and RELOADS only a .html or .htm one; for any other local file (a PDF, an image) it will find the tab already showing it and move that tab to the far right, and will refuse when no such tab exists, so open that file with your own opener first and call this afterwards.',
       inputSchema: z.object({
         profile: profileArg,
         url: z
@@ -629,6 +630,25 @@ function registerWriteTools(server) {
         timeoutMs: Math.min(TIMING.OP_TIMEOUT_MAX, timeoutMs + 5_000),
       })
       return shape.renderAction(`Waited in ${profile} ${tab} for ${selector ? `selector ${selector}` : `text "${text}"`}.`, result)
+    }
+  )
+
+  tool(
+    server,
+    'browser_reload_extension',
+    {
+      title: 'Reload the bridge extension in one profile',
+      description:
+        'Install a new release of the bridge extension into one browser profile, with nobody clicking anything. A browser reads an unpacked extension\'s code once, when it loads it, so pulling a new version into the install folder changes nothing in a running browser until the extension is reloaded; this asks the extension to reload itself. Call it after the install folder has been updated, for each profile that browser_list_profiles reports as needing a reload. It is REFUSED unless the folder holds a different version from the one that profile is running, so it cannot be used to kick an extension: a reload costs every agent session driving that profile its open tab handles, and makes the bridge forget which tabs it opened. The profile drops off the bridge for a second or two and comes back on the new code; the result says the reload was ASKED for, and browser_list_profiles is what confirms it landed.',
+      inputSchema: z.object({ profile: profileArg }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ profile }) => {
+      const result = await client.request({ op: OPS.RELOAD_EXTENSION, profile })
+      return shape.renderAction(
+        describeExtensionReload({ profile, from: result?.version ?? null, to: null, verified: false }),
+        result
+      )
     }
   )
 }

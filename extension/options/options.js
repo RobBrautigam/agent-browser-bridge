@@ -935,8 +935,16 @@ function LineCard(line) {
     return dd
   }
   const tabsDd = mkStat('Tabs')
+  const extDd = mkStat('Extension')
   const latencyDd = mkStat('Latency')
   const seenDd = mkStat('Last seen')
+
+  // A notice of its own rather than a second sentence inside `notice`. The two
+  // are different in kind: `notice` carries something wrong with the line that
+  // the operator may not be able to fix, and this one carries a single action
+  // that always works. Folding them together buried the action.
+  const reloadNotice = makeEl('p', 'line__notice line__notice--muted')
+  reloadNotice.hidden = true
 
   const notice = makeEl('p', 'line__notice')
   notice.hidden = true
@@ -947,7 +955,7 @@ function LineCard(line) {
   const opsSpan = makeEl('span', 'line__ops')
   foot.append(armedChip, opsSpan)
 
-  root.append(head, stateRow, stats, notice, foot)
+  root.append(head, stateRow, stats, reloadNotice, notice, foot)
 
   function update(next, ctx) {
     const derived = deriveState(next)
@@ -979,6 +987,22 @@ function LineCard(line) {
     patchText(stateDetailEl, stateDetail(next, derived))
 
     patchText(tabsDd, next.present ? formatCount(next.tabCount) : 'n/a')
+    patchText(extDd, next.extVersion || 'unreported')
+    // Chromium reads an unpacked extension's code once, when it loads it, so a
+    // profile keeps running the old version until it is reloaded. This is the
+    // only place the operator can see which of their profiles that applies to.
+    reloadNotice.hidden = !next.needsReload
+    if (next.needsReload) {
+      const text =
+        `Running ${next.extVersion}, and ${ctx.installedVersion || 'a different version'} is installed. ` +
+        'Reload this extension to pick it up: a browser only reads an unpacked extension once, when it loads it.'
+      if (reloadNotice.getAttribute('data-reload') !== text) {
+        reloadNotice.setAttribute('data-reload', text)
+        reloadNotice.replaceChildren(icon('alert', { size: 13 }), document.createTextNode(text))
+      }
+    } else {
+      reloadNotice.removeAttribute('data-reload')
+    }
     setLatency(latencyDd, next)
     patchText(seenDd, next.present ? agoText(next.lastSeenAt) : 'not connected')
 
@@ -1007,7 +1031,7 @@ function LineCard(line) {
     patchText(opsSpan, `${formatCount(next.opCount)} ops`)
   }
 
-  update(line, { isSelf: false })
+  update(line, { isSelf: false, installedVersion: null })
   return { root, update, refs: { seenDd, armedChip, stateDetailEl } }
 }
 
@@ -1045,7 +1069,10 @@ function renderBoard() {
       card = LineCard(line)
       cards.set(line.installId, card)
     }
-    card.update(line, { isSelf: line.installId === selfId })
+    card.update(line, {
+      isSelf: line.installId === selfId,
+      installedVersion: state.board ? state.board.installedVersion : null,
+    })
 
     // Keep DOM order in step with board order without reinserting nodes that
     // are already where they belong; a needless insertBefore restarts CSS
@@ -1409,7 +1436,13 @@ function renderFooter() {
     patchText(el.footerRefresh, '')
     return
   }
-  patchText(el.footerVersion, `${state.board.product} ${state.board.version}`)
+  const installed = state.board.installedVersion
+  patchText(
+    el.footerVersion,
+    installed && installed !== state.board.version
+      ? `${state.board.product} ${state.board.version}, ${installed} installed`
+      : `${state.board.product} ${state.board.version}`
+  )
   patchText(el.footerUptime, `Broker up ${durationText(brokerNow() - state.board.startedAt)}`)
   patchText(
     el.footerRefresh,

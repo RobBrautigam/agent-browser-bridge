@@ -117,6 +117,7 @@ export const OPS = Object.freeze({
   PRESS_KEYS: 'pressKeys',
   WAIT_FOR: 'waitFor',
   EVAL_JS: 'evalJs',
+  RELOAD_EXTENSION: 'reloadExtension',
   SET_LABEL: 'setLabel',
   CLAIM_PROFILE: 'claimProfile',
   GET_BOARD: 'getBoard',
@@ -149,6 +150,19 @@ export const OP_TIER = Object.freeze({
   [OPS.FILL]: TIER.WRITE,
   [OPS.PRESS_KEYS]: TIER.WRITE,
   [OPS.WAIT_FOR]: TIER.WRITE,
+
+  // The one WRITE op that touches no page. It changes the BRIDGE: it asks one
+  // profile's extension to reload itself, which is how a new release reaches a
+  // browser without a human clicking Reload on the extensions page.
+  //
+  // WRITE rather than ARMED because a release that needed arming would need
+  // the human it exists to save, and rather than META because META means
+  // "never leaves the broker" and this one does. What bounds it is not a tier:
+  // the broker refuses it unless the folder on disk holds a different version
+  // from the one that profile is running, so it cannot be used as a way to kick
+  // an extension, drop another session's tab handles, or make the bridge forget
+  // which tabs it opened.
+  [OPS.RELOAD_EXTENSION]: TIER.WRITE,
 
   [OPS.EVAL_JS]: TIER.ARMED,
 
@@ -185,6 +199,7 @@ export const BROWSER_OPS = Object.freeze([
   OPS.PRESS_KEYS,
   OPS.WAIT_FOR,
   OPS.EVAL_JS,
+  OPS.RELOAD_EXTENSION,
 ])
 
 /** Operations the broker answers itself, without touching a browser. */
@@ -322,11 +337,66 @@ export const RESTRICTED_URL_PREFIXES = Object.freeze([
 ])
 
 /** An empty or non-string URL is restricted: callers must never treat it as navigable. */
+/**
+ * The same refusals, judged as SCHEMES rather than as text prefixes.
+ *
+ * Derived from the list above rather than written out again, so the two can
+ * never disagree about which schemes are refused.
+ *
+ * This exists because a prefix rule is a rule about SLASHES, and the number of
+ * slashes in a URL is not load-bearing. `file:` is a special scheme in the URL
+ * Standard, so `file:/C:/Users/someone/.env` and `file:\\\\server\\share\\x` both
+ * normalize to ordinary `file://` URLs that Chromium navigates to happily, and
+ * neither one starts with the seven characters `file://`. Checked against a
+ * real browser before this was written: `browser_navigate` accepted the
+ * one-slash form, Chromium canonicalized it, and the tab rendered the local
+ * file. That is the unarmed local-file primitive this refusal exists to
+ * prevent, reachable by deleting two characters.
+ */
+const RESTRICTED_SCHEMES = new Set(
+  RESTRICTED_URL_PREFIXES
+    // Only the entries that ARE a scheme. Two entries on that list name a host
+    // and a path (the Web Store), and those are prefix rules about a specific
+    // site rather than about a scheme, so they stay with the prefix check.
+    .map((prefix) => /^([a-z][a-z0-9+.-]*):(?:\/\/)?$/.exec(prefix.toLowerCase()))
+    .filter(Boolean)
+    .map((m) => `${m[1]}:`)
+)
+
+/**
+ * A C0 control or DEL anywhere in an address, which is refused outright.
+ *
+ * This is the rule that makes every other URL rule in this file mean what it
+ * says. The URL parser DELETES ASCII tab, LF and CR from its input wherever they
+ * appear, INCLUDING INSIDE THE SCHEME: "fi<TAB>le:///C:/Users/me/.env" parses as
+ * an ordinary file: URL and matches no rule written about the text "file:", and
+ * so does "ch<TAB>rome://settings". Found by the adversarial review of 0.4.0 and
+ * reproduced in Node's own WHATWG parser, which implements the same
+ * specification Chromium does.
+ *
+ * Nothing legitimate needs a raw control character in an address. A URL that
+ * wants one percent-encodes it, and a percent-encoded one is not removed by the
+ * parser and so cannot change the scheme.
+ *
+ * Applied to the RAW string, before any trim, and by openOrFocusMode as well, so
+ * that no code path in this system is more permissive about the shape of an
+ * address than any other.
+ */
+const URL_CONTROL_CHARS = /[\u0000-\u001f\u007f]/
+
 export function isRestrictedUrl(url) {
   if (typeof url !== 'string') return true
+  if (URL_CONTROL_CHARS.test(url)) return true
+
   const u = url.trim().toLowerCase()
   if (u === '') return true
-  return RESTRICTED_URL_PREFIXES.some((p) => u.startsWith(p.toLowerCase()))
+  if (RESTRICTED_URL_PREFIXES.some((p) => u.startsWith(p.toLowerCase()))) return true
+  // A scheme this refuses, however many slashes follow it. An address with no
+  // scheme at all is not refused here: it is not a destination this system ever
+  // hands to a browser, and the operations that take a URL require an absolute
+  // one.
+  const scheme = /^([a-z][a-z0-9+.-]*):/.exec(u)
+  return scheme ? RESTRICTED_SCHEMES.has(`${scheme[1]}:`) : false
 }
 
 /* -------------------------------------------------------------------------- */
@@ -415,10 +485,79 @@ export function isLocalPageUrl(url) {
   return LOCAL_PAGE_EXTENSIONS.some((ext) => lower.endsWith(ext))
 }
 
-/** The URLs openOrFocus accepts: anything navigable, plus a local HTML page. */
+/**
+ * The URLs openOrFocus may OPEN or RELOAD: anything navigable, plus a local
+ * HTML page. Unchanged, and deliberately so - this is the predicate SECURITY.md
+ * documents, the broker enforces and the extension mirrors, and the carve-out it
+ * draws is exactly .html and .htm.
+ */
 export function isOpenOrFocusUrl(url) {
   if (isLocalPageUrl(url)) return true
   return !isRestrictedUrl(url)
+}
+
+/** What openOrFocus is allowed to do with the address it was handed. */
+export const OPEN_OR_FOCUS_MODE = Object.freeze({
+  FULL: 'full',
+  FIND_ONLY: 'find-only',
+})
+
+/**
+ * Which of the two modes an address gets, or null when it is refused outright.
+ *
+ * FULL is the behavior 0.3.0 shipped: find the tab or open one, move it to the
+ * far right of its window, reload it.
+ *
+ * FIND_ONLY exists for the local files that are NOT .html or .htm - a PDF a
+ * report was exported to, an image, a CSV a session just wrote. In this mode the
+ * operation may FIND a tab by its address and MOVE it, and may do nothing else:
+ * it never opens a tab and never reloads one.
+ *
+ * WHY THAT IS NOT A WIDENING OF THE FILE RULE, which is the only question that
+ * matters here. The `file:` refusal exists because navigate (WRITE) and readPage
+ * (READ) compose into an unarmed local-file read primitive. Finding a tab and
+ * moving it performs no navigation and no read, so it cannot be half of that
+ * composition: there is no step at which a local file is fetched, rendered or
+ * returned. The address is not new information either, because READ-tier
+ * browser_list_tabs already reports the URL of every open tab. What stays
+ * refused is the part that would matter - opening and reloading - so this system
+ * still points a tab at no arbitrary local file, ever.
+ *
+ * The practical effect, and the reason it is worth the paragraph: a launcher can
+ * call this for a PDF, be told "moved the tab you already have" when one exists,
+ * and be told plainly to open the file itself when none does. One page, one tab,
+ * without the carve-out growing by a single extension.
+ *
+ * @param {string} url
+ * @returns {string|null} an OPEN_OR_FOCUS_MODE value, or null when refused
+ */
+export function openOrFocusMode(url) {
+  if (typeof url !== 'string') return null
+  // The character rule first, on the raw string, for the reason written on
+  // URL_CONTROL_CHARS: a tab inside the scheme makes the text of an address lie
+  // about what it parses to, and find-only must not be the one path that accepts
+  // such a thing merely because the text begins with "file:".
+  if (URL_CONTROL_CHARS.test(url)) return null
+  const trimmed = url.trim()
+
+  // An address the URL parser refuses is refused here, with a typed error rather
+  // than whatever chrome.tabs.create throws at it. Several near-miss spellings of
+  // a refused scheme land here and nowhere else: a full-width colon, an fi
+  // ligature, a zero-width space, a space before the colon. None of them is a
+  // scheme, so none of them is a destination.
+  try {
+    new URL(trimmed)
+  } catch {
+    return null
+  }
+
+  if (isOpenOrFocusUrl(trimmed)) return OPEN_OR_FOCUS_MODE.FULL
+  // Every other `file:` form, including the four that end in .html while naming
+  // something that is not a local page. They stay unopenable and unreloadable; a
+  // tab already showing one may still be found and moved, because moving it does
+  // nothing a tab list has not already done.
+  if (/^file:/i.test(trimmed)) return OPEN_OR_FOCUS_MODE.FIND_ONLY
+  return null
 }
 
 /**
@@ -595,7 +734,14 @@ export function describeOpenOrFocus(result) {
   if (result.pinned) parts.push(`left at index ${result.toIndex}${where} because that tab is pinned`)
   else if (result.moved) parts.push(`moved from index ${result.fromIndex} to ${result.toIndex}${where}`)
   else parts.push(`already at index ${result.toIndex}${where}`)
-  parts.push(result.reloaded ? 'reloaded' : 'not reloaded')
+  if (result.mode === OPEN_OR_FOCUS_MODE.FIND_ONLY) {
+    // Say the RULE, not just the outcome. A caller that reads "not reloaded"
+    // alone cannot tell whether the reload failed or was never allowed, and the
+    // difference decides whether it should open the file itself.
+    parts.push('not reloaded, because only a local .html or .htm page may be opened or reloaded')
+  } else {
+    parts.push(result.reloaded ? 'reloaded' : 'not reloaded')
+  }
   if (result.closed > 0) {
     parts.push(`closed ${plural(result.closed, 'duplicate')} this capability had opened`)
   }
@@ -608,6 +754,97 @@ export function describeOpenOrFocus(result) {
 
 function plural(n, noun) {
   return `${n} ${noun}${n === 1 ? '' : 's'}`
+}
+
+/**
+ * May this profile's extension be told to reload itself?
+ *
+ * ONLY when the install folder holds a different version from the one the
+ * profile is running. That single condition is what keeps a WRITE-tier
+ * self-reload bounded, and it lives here, pure, for the same reason
+ * planOpenOrFocus does: it is a rule worth checking on every commit rather than
+ * a code path exercised by hand once.
+ *
+ * Only the BROKER can evaluate it, which is why the operation is gated there
+ * rather than in the extension. An extension cannot see the folder it was
+ * loaded from - getManifest() returns the manifest it is RUNNING, not the file
+ * on disk - so it has no way to know whether there is new code to load.
+ *
+ * What the gate protects, because "why not just let it reload" is the obvious
+ * question. A reload is not free. It clears chrome.storage.session, which holds
+ * openOrFocus's opened-by-us ledger, so afterwards the bridge no longer knows
+ * which tabs it opened and will never close them; and it re-registers the
+ * profile, which bumps the generation and kills every outstanding tab handle in
+ * every other agent session driving that browser. Once per release that is a
+ * fair price for not making a human click. On demand it is a way to disrupt
+ * other sessions and make the bridge forget its own tabs.
+ *
+ * @param {{label?:string, installed?:string|null, running?:string|null}} spec
+ * @returns {{code:string, message:string}|null} null means allowed
+ */
+export function reloadRefusal({ label = 'that profile', installed = null, running = null } = {}) {
+  if (!installed) {
+    return {
+      code: ERR.UNSUPPORTED,
+      message:
+        'Cannot read the extension manifest in the install folder, so there is no way to tell whether ' +
+        `"${label}" is behind. Nothing was reloaded. Check that the folder the extension was loaded ` +
+        'from still exists and that its manifest.json is readable.',
+    }
+  }
+  if (!running) {
+    return {
+      code: ERR.UNSUPPORTED,
+      message:
+        `"${label}" did not report an extension version when it connected, so there is no way to tell ` +
+        `whether it is behind version ${installed}. Nothing was reloaded. Reload that profile's ` +
+        "extension from the browser's extensions page once and it will report one.",
+    }
+  }
+  if (running === installed) {
+    return {
+      code: ERR.UNSUPPORTED,
+      message:
+        `"${label}" is already running version ${installed}, the same version the install folder holds, ` +
+        'so a reload would load nothing new and was refused. A reload is only allowed when there is a ' +
+        'new version on disk, because it costs every session driving this profile its open tab handles.',
+    }
+  }
+  return null
+}
+
+/**
+ * The one line an extension reload answers with, built here so the MCP tool and
+ * the command line say the same sentence about the same action.
+ *
+ * `verified` is the difference that matters to whoever reads it. The request
+ * itself only proves the extension was ASKED: a reload tears down the native
+ * port it would have answered on, so the acknowledgement necessarily arrives
+ * before the reload happens. Only the profile coming back on a different version
+ * proves it landed, and a caller that can wait for that says so.
+ *
+ * @param {{profile?:string|null, from?:string|null, to?:string|null, verified?:boolean, waitedMs?:number|null}} spec
+ */
+export function describeExtensionReload({
+  profile = null,
+  from = null,
+  to = null,
+  verified = false,
+  waitedMs = null,
+} = {}) {
+  const who = profile ? `${profile}: ` : ''
+  const was = from || 'an unreported version'
+  const now = to || 'the installed version'
+  if (verified) {
+    const took = Number.isFinite(waitedMs)
+      ? `, back on the bridge in ${(Math.round(waitedMs / 100) / 10).toFixed(1)}s`
+      : ''
+    return `${who}reloaded the extension, ${was} to ${now}${took}.`
+  }
+  return (
+    `${who}asked the extension to reload itself, ${was} to ${now}. It drops off the bridge for a ` +
+    'moment and comes back on the new code; the profile list is what confirms it.'
+  )
 }
 
 /**
@@ -788,6 +1025,15 @@ export function parseTabHandle(handle) {
  * @property {Array<{dir:string,name:string,email:string|null}>} candidates  claim options
  * @property {number}  generation    browser-session generation
  * @property {number}  tabCount
+ * @property {string|null} extVersion the extension version this profile is
+ *                                   RUNNING, as it reported on connect. An
+ *                                   unpacked extension only picks up new code
+ *                                   when it is reloaded, so this is routinely
+ *                                   behind the folder on disk.
+ * @property {boolean} needsReload   true when extVersion differs from the
+ *                                   board's installedVersion, which is the one
+ *                                   thing an operator can act on: reload that
+ *                                   profile's extension.
  * @property {number|null} latencyMs last round-trip
  * @property {number|null} lastSeenAt epoch ms of last pong
  * @property {number|null} armedUntil epoch ms, null when not armed
@@ -797,7 +1043,12 @@ export function parseTabHandle(handle) {
  *
  * @typedef {object} Board
  * @property {string}  product      PRODUCT_NAME
- * @property {string}  version
+ * @property {string}  version      the version the BROKER is running
+ * @property {string|null} installedVersion the extension version the install
+ *                                  folder holds right now, re-read from the
+ *                                  manifest rather than remembered, because the
+ *                                  folder changes under a running broker every
+ *                                  time someone pulls
  * @property {number}  startedAt    broker start, epoch ms
  * @property {number}  now          broker clock, epoch ms, so the UI never trusts its own
  * @property {boolean} panic
@@ -806,10 +1057,11 @@ export function parseTabHandle(handle) {
  */
 
 /** Build an empty board. Keeps the broker and the UI honest about required keys. */
-export function emptyBoard(version = '0.0.0', now = Date.now()) {
+export function emptyBoard(version = '0.0.0', now = Date.now(), installedVersion = version) {
   return {
     product: PRODUCT_NAME,
     version,
+    installedVersion,
     startedAt: now,
     now,
     panic: false,
