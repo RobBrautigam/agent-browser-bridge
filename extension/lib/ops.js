@@ -26,9 +26,13 @@ import {
   OPS,
   RAW_TAB_ID_FIELD,
   TIMING,
+  describeOpenOrFocus,
+  isOpenOrFocusUrl,
   isRestrictedUrl,
+  openOrFocusMatch,
   originOf,
   parseTabHandle,
+  planOpenOrFocus,
 } from './protocol.js'
 import { buildSnapshot, clearSnapshot, resolveRef, snapshotMeta } from './snapshot.js'
 import * as inject from './inject.js'
@@ -582,6 +586,307 @@ async function activateTab(args) {
   return { ok: true, [RAW_TAB_ID_FIELD]: tabId, windowId: tab.windowId, active: true }
 }
 
+/* -------------------------------------------------------------------------- */
+/* openOrFocus                                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One page, one tab, at the far right of the window the operator used last.
+ *
+ * The problem it solves: a session generates a page, opens it, edits the file,
+ * opens it again, and the operator ends the day with six tabs of the same
+ * document and no idea which one is current. This finds the tab that is already
+ * showing the page, reloads it in place and slides it to the end of its own
+ * window, so the newest thing is always the rightmost thing.
+ *
+ * Three rules make it safe to run against a browser a human is working in:
+ *
+ *   It never activates anything unless asked. Moving and reloading a background
+ *   tab does not take the keyboard away from whoever is typing; raising a
+ *   window does, so `activate` is off by default and the caller has to say so.
+ *
+ *   It never closes a tab it did not open. Duplicates are closed only when the
+ *   ledger below says this capability opened them. Everything else is left
+ *   exactly where it is.
+ *
+ *   It never moves a pinned tab. Pinning is a deliberate statement about where
+ *   a tab lives, and Chromium would clamp the move anyway; the result says the
+ *   tab stayed put rather than silently reporting a move that did not happen.
+ */
+async function openOrFocus(args) {
+  const url = args ? args.url : null
+  if (typeof url !== 'string' || !url.trim()) throw new OpError(ERR.BAD_REQUEST, '"url" is required.')
+  if (!isOpenOrFocusUrl(url)) {
+    throw new OpError(
+      ERR.RESTRICTED_URL,
+      `Refusing to open ${originOf(url)} - that scheme is not drivable. The only local files this ` +
+        'operation accepts are .html and .htm pages, because its job is showing a rendered page to a human.'
+    )
+  }
+  const allowFileName = args.matchFileName === true
+  const activate = args.activate === true
+
+  const tabs = (await chrome.tabs.query({})).map((t) => ({
+    tabId: t.id,
+    windowId: t.windowId,
+    index: t.index,
+    url: t.url || t.pendingUrl || '',
+    active: !!t.active,
+    pinned: !!t.pinned,
+  }))
+
+  // Every window this extension instance can see belongs to ITS profile, so
+  // "the most recently focused window" is structurally the right one: a call
+  // aimed at this profile cannot land in another profile's window even when
+  // that other window is the one on top of the operator's screen.
+  const lastFocusedWindowId = await lastFocusedNormalWindow()
+  const opened = await readOpenedLedger(tabs.map((t) => t.tabId))
+
+  const plan = planOpenOrFocus({
+    url,
+    tabs,
+    lastFocusedWindowId,
+    allowFileName,
+    openedByUs: Object.keys(opened).map(Number),
+  })
+
+  if (plan.action === 'open') {
+    // No `index`: Chromium appends a created tab to the end of its window, which
+    // is the far right. Passing an index would have to guess at pinned tabs and
+    // tab groups and would get it wrong the first time either appeared.
+    const create = { url, active: activate }
+    if (Number.isInteger(plan.windowId)) create.windowId = plan.windowId
+    const tab = await chrome.tabs.create(create)
+    await rememberOpened(tab.id, url)
+    return withSummary({
+      ok: true,
+      action: 'opened',
+      [RAW_TAB_ID_FIELD]: tab.id,
+      windowId: tab.windowId,
+      url: tab.pendingUrl || tab.url || url,
+      match: null,
+      fromIndex: null,
+      toIndex: tab.index,
+      moved: false,
+      pinned: false,
+      reloaded: false,
+      closed: 0,
+      kept: 0,
+      activated: activate,
+    })
+  }
+
+  // Confirm the keeper is still there BEFORE closing anything. Closing the
+  // duplicates first and only then discovering the survivor had gone would
+  // leave the operator with fewer tabs and no page, which is the one outcome
+  // worse than doing nothing.
+  if (!(await tryGetTab(plan.keeper.tabId))) {
+    throw new OpError(
+      ERR.TAB_GONE,
+      'The tab showing that page closed while this operation was running. Call it again and it will open a new one.'
+    )
+  }
+
+  const closed = []
+  for (const dup of plan.close) {
+    // Re-read each duplicate immediately before removing it. The ledger proves
+    // this operation OPENED that tab; it does not prove the tab still holds
+    // that page, and between the query above and this line the operator can
+    // have typed a new address into it. Closing it then would destroy their
+    // work under a permission granted for something else.
+    const live = await tryGetTab(dup.tabId)
+    if (!live || !openOrFocusMatch(url, live.url || live.pendingUrl || '', { allowFileName })) continue
+    try {
+      await chrome.tabs.remove(dup.tabId)
+      closed.push(dup.tabId)
+      await clearSnapshot(dup.tabId)
+    } catch (_err) {
+      /* a tab that closed itself first is the outcome we wanted anyway */
+    }
+  }
+  if (closed.length > 0) await forgetOpened(closed)
+
+  // Re-read the keeper AFTER the closes as well: removing a tab to its left
+  // shifts its index, and reporting the stale number would describe a move that
+  // never happened.
+  const keeper = await tryGetTab(plan.keeper.tabId)
+  if (!keeper) {
+    throw new OpError(
+      ERR.TAB_GONE,
+      'The tab showing that page closed while this operation was running. Call it again and it will open a new one.'
+    )
+  }
+
+  const fromIndex = keeper.index
+  let toIndex = fromIndex
+  let moved = false
+  if (!keeper.pinned) {
+    const result = await chrome.tabs.move(keeper.id, { index: -1 })
+    const row = Array.isArray(result) ? result[0] : result
+    if (row && Number.isInteger(row.index)) toIndex = row.index
+    moved = toIndex !== fromIndex
+  }
+
+  // A failed reload is reported, not thrown. By this point the tab is in place
+  // and the page is on screen; answering with an error would tell the caller
+  // nothing happened when most of it did, and the one-line answer says
+  // "not reloaded" rather than claiming a refresh that did not land.
+  let reloaded = false
+  try {
+    await chrome.tabs.reload(keeper.id, { bypassCache: false })
+    reloaded = true
+    // A reload builds a new document, so every snapshot ref for this tab is dead.
+    await clearSnapshot(keeper.id)
+  } catch (_err) {
+    reloaded = false
+  }
+
+  if (activate) {
+    await chrome.tabs.update(keeper.id, { active: true })
+    try {
+      await chrome.windows.update(keeper.windowId, { focused: true })
+    } catch (_err) {
+      /* a minimized window still leaves the tab active inside it */
+    }
+  }
+
+  return withSummary({
+    ok: true,
+    action: 'reused',
+    [RAW_TAB_ID_FIELD]: keeper.id,
+    windowId: keeper.windowId,
+    url: keeper.url || url,
+    match: plan.match,
+    fromIndex,
+    toIndex,
+    moved,
+    pinned: !!keeper.pinned,
+    reloaded,
+    closed: closed.length,
+    kept: plan.kept.length,
+    activated: activate,
+  })
+}
+
+/** Attach the one-line answer, built by the contract so every caller says the same sentence. */
+function withSummary(result) {
+  return { ...result, summary: describeOpenOrFocus(result) }
+}
+
+/**
+ * chrome.tabs.get without the throw.
+ *
+ * getTab() above turns a missing tab into a typed failure, which is right when
+ * the caller NAMED that tab. openOrFocus works from a list it read a moment
+ * ago, where a tab having closed since is ordinary and means "skip it", not
+ * "fail the operation".
+ */
+async function tryGetTab(tabId) {
+  try {
+    return await chrome.tabs.get(tabId)
+  } catch (_err) {
+    return null
+  }
+}
+
+/**
+ * The profile's most recently focused ordinary window, or null.
+ *
+ * getLastFocused can hand back a popup, a devtools window or an app window,
+ * none of which is somewhere a page belongs, so the type is checked and the
+ * fallback walks the window list itself. Null is a legitimate answer: with no
+ * window to aim at, chrome.tabs.create opens one.
+ */
+async function lastFocusedNormalWindow() {
+  try {
+    const win = await chrome.windows.getLastFocused({ populate: false })
+    if (win && win.type === 'normal' && Number.isInteger(win.id)) return win.id
+  } catch (_err) {
+    /* fall through to the scan */
+  }
+  try {
+    const all = await chrome.windows.getAll({ populate: false })
+    const normal = all.filter((w) => w && w.type === 'normal' && Number.isInteger(w.id))
+    const focused = normal.find((w) => w.focused === true)
+    if (focused) return focused.id
+    const visible = normal.filter((w) => w.state !== 'minimized')
+    const pool = visible.length > 0 ? visible : normal
+    return pool.length > 0 ? pool[pool.length - 1].id : null
+  } catch (_err) {
+    return null
+  }
+}
+
+/**
+ * The opened-by-us ledger: { [tabId]: url } for tabs openOrFocus created.
+ *
+ * chrome.storage.session is the right home and not a convenience. The keys are
+ * raw Chrome tab ids, which only mean anything inside ONE browser session, and
+ * session storage dies at exactly the moment they stop meaning anything.
+ * Surviving a browser restart would be a liability rather than a feature: tab
+ * 41 in the next session is somebody else's page, and a ledger that outlived
+ * its ids would hand this operation permission to close a tab the operator
+ * opened by hand.
+ *
+ * Every read prunes ids that no longer exist, so a long session cannot grow the
+ * ledger without bound and a recycled id cannot inherit an old entry.
+ */
+const OPENED_KEY = 'openOrFocus.opened'
+
+async function readOpenedLedger(liveTabIds) {
+  let ledger
+  try {
+    const stored = await chrome.storage.session.get(OPENED_KEY)
+    ledger = stored && stored[OPENED_KEY] ? stored[OPENED_KEY] : {}
+  } catch (_err) {
+    return {}
+  }
+  const live = new Set(liveTabIds)
+  const pruned = {}
+  let dropped = false
+  for (const [id, url] of Object.entries(ledger)) {
+    if (live.has(Number(id))) pruned[id] = url
+    else dropped = true
+  }
+  if (dropped) await writeOpenedLedger(pruned)
+  return pruned
+}
+
+async function writeOpenedLedger(ledger) {
+  try {
+    await chrome.storage.session.set({ [OPENED_KEY]: ledger })
+  } catch (_err) {
+    // A ledger that cannot be written means the next call treats this tab as
+    // the operator's own and refuses to close it. That is the safe direction to
+    // fail in, so it is not an error worth failing the operation for.
+  }
+}
+
+async function rememberOpened(tabId, url) {
+  if (!Number.isInteger(tabId)) return
+  let ledger = {}
+  try {
+    const stored = await chrome.storage.session.get(OPENED_KEY)
+    ledger = stored && stored[OPENED_KEY] ? stored[OPENED_KEY] : {}
+  } catch (_err) {
+    ledger = {}
+  }
+  ledger[String(tabId)] = url
+  await writeOpenedLedger(ledger)
+}
+
+async function forgetOpened(tabIds) {
+  let ledger = {}
+  try {
+    const stored = await chrome.storage.session.get(OPENED_KEY)
+    ledger = stored && stored[OPENED_KEY] ? stored[OPENED_KEY] : {}
+  } catch (_err) {
+    return
+  }
+  for (const id of tabIds) delete ledger[String(id)]
+  await writeOpenedLedger(ledger)
+}
+
 async function click(args) {
   const tabId = await requireTabId(args)
   const tab = await getTab(tabId)
@@ -1097,6 +1402,7 @@ const HANDLERS = Object.freeze({
   [OPS.SCROLL]: scroll,
   [OPS.NAVIGATE]: navigate,
   [OPS.OPEN_TAB]: openTab,
+  [OPS.OPEN_OR_FOCUS]: openOrFocus,
   [OPS.CLOSE_TAB]: closeTab,
   [OPS.ACTIVATE_TAB]: activateTab,
   [OPS.CLICK]: click,

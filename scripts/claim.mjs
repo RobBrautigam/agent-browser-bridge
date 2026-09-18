@@ -194,9 +194,15 @@ export function describeError(err) {
   return err?.message || String(err)
 }
 
-/** Run `fn` with a broker client that holds the process open until it is done. */
-export async function withBroker(fn) {
-  const client = new BrokerClient({ onLog: () => {}, keepAlive: true })
+/**
+ * Run `fn` with a broker client that holds the process open until it is done.
+ *
+ * `socketPath` is passed straight through to the client, so a caller can prove
+ * its own broker-unreachable path against a dead endpoint instead of stopping
+ * the broker other sessions are using.
+ */
+export async function withBroker(fn, { socketPath } = {}) {
+  const client = new BrokerClient({ onLog: () => {}, keepAlive: true, socketPath })
   try {
     return await fn(client)
   } finally {

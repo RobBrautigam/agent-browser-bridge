@@ -66,18 +66,31 @@ export class BrokerClient {
   #closed = false
   #onLog
   #keepAlive
+  #socketPath
 
   /**
-   * @param {{onLog?: (msg: string) => void, keepAlive?: boolean}} [opts]
+   * @param {{onLog?: (msg: string) => void, keepAlive?: boolean, socketPath?: string}} [opts]
    *        `onLog` is a stderr logger; stdout is protocol and must never be
    *        written to. `keepAlive` keeps the socket ref'd so the process stays
    *        up until close() is called: for a one-shot command-line caller,
    *        which has nothing else holding the event loop open. The MCP server
    *        leaves it false so the session can exit when stdin ends.
+   *
+   *        `socketPath` overrides the broker endpoint, and exists so a caller
+   *        can prove its own broker-unreachable behavior by dialing an endpoint
+   *        nothing listens on. That has to be possible WITHOUT stopping the real
+   *        broker: on a machine where other sessions are driving live browsers,
+   *        stopping the broker to test a fallback breaks their work instead.
    */
-  constructor({ onLog = () => {}, keepAlive = false } = {}) {
+  constructor({ onLog = () => {}, keepAlive = false, socketPath = PIPE_NAME } = {}) {
     this.#onLog = onLog
     this.#keepAlive = keepAlive
+    this.#socketPath = socketPath || PIPE_NAME
+  }
+
+  /** The endpoint this client dials. Callers put it in their own error text. */
+  get socketPath() {
+    return this.#socketPath
   }
 
   /**
@@ -170,7 +183,7 @@ export class BrokerClient {
     }
 
     this.#handshakeDone = true
-    this.#onLog(`connected to ${PIPE_NAME}`)
+    this.#onLog(`connected to ${this.#socketPath}`)
     return socket
   }
 
@@ -193,7 +206,7 @@ export class BrokerClient {
 
   #dial() {
     return new Promise((resolve, reject) => {
-      const socket = net.connect({ path: PIPE_NAME })
+      const socket = net.connect({ path: this.#socketPath })
       const onConnect = () => {
         cleanup()
         resolve(socket)
@@ -204,7 +217,7 @@ export class BrokerClient {
         reject(
           new BridgeError(
             ERR.NO_BROKER,
-            `Cannot reach the broker at ${PIPE_NAME} (${err.code || err.message}).`
+            `Cannot reach the broker at ${this.#socketPath} (${err.code || err.message}).`
           )
         )
       }
@@ -214,7 +227,7 @@ export class BrokerClient {
         reject(
           new BridgeError(
             ERR.NO_BROKER,
-            `Timed out after ${CONNECT_TIMEOUT_MS} ms connecting to ${PIPE_NAME}.`
+            `Timed out after ${CONNECT_TIMEOUT_MS} ms connecting to ${this.#socketPath}.`
           )
         )
       }, CONNECT_TIMEOUT_MS)

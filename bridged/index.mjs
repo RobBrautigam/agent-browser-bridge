@@ -52,6 +52,7 @@ import {
   ping,
   event,
   emptyBoard,
+  isOpenOrFocusUrl,
   isRestrictedUrl,
   RAW_TAB_ID_FIELD,
 } from '../shared/protocol.mjs'
@@ -1505,7 +1506,7 @@ function forwardToBrowser(conn, msg, route, op) {
     return
   }
 
-  if (typeof args.url === 'string' && isRestrictedUrl(args.url)) {
+  if (typeof args.url === 'string' && !urlAllowedFor(op, args.url)) {
     // An empty url reaches here too: isRestrictedUrl treats it as restricted
     // rather than as "no url", because a caller that passes an empty string is
     // a caller that thinks it has a destination.
@@ -1517,7 +1518,9 @@ function forwardToBrowser(conn, msg, route, op) {
         ERR.RESTRICTED_URL,
         args.url === ''
           ? 'An empty url is not a destination, so this is refused before it reaches the browser.'
-          : `Chromium refuses automation on "${args.url}", so this is refused early.`
+          : op === OPS.OPEN_OR_FOCUS
+            ? `"${op}" opens a page for a human to read, so it takes a web address or a local .html file and nothing else. "${args.url}" is neither.`
+            : `Chromium refuses automation on "${args.url}", so this is refused early.`
       ),
       { route, url: args.url }
     )
@@ -1567,6 +1570,22 @@ function forwardToBrowser(conn, msg, route, op) {
 
   routes.noteOp(route, op)
   route.conn.send(outbound)
+}
+
+/**
+ * The URL rule, per operation, enforced HERE as well as in the extension.
+ *
+ * Every page-touching operation refuses RESTRICTED_URL_PREFIXES. openOrFocus is
+ * the single exception, and only for a local .html page; the reasoning, and why
+ * it does not restore the navigate-then-read primitive that the file: refusal
+ * exists to prevent, is written on isOpenOrFocusUrl in shared/protocol.mjs.
+ *
+ * The duplicate check is deliberate. The broker is the enforcement point an
+ * extension cannot talk its way past, so a security rule that lived only in the
+ * extension would be a rule the broker merely trusts someone else to apply.
+ */
+function urlAllowedFor(op, url) {
+  return op === OPS.OPEN_OR_FOCUS ? isOpenOrFocusUrl(url) : !isRestrictedUrl(url)
 }
 
 function clampTimeout(value) {
