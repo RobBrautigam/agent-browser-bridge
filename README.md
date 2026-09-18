@@ -261,18 +261,22 @@ no such tab it opens one at the far right of that profile's most recently
 focused window. The result is one line saying what it did: reused, moved from
 which index to which, reloaded, or opened new.
 
-Three properties make it safe to call while somebody is typing:
+Three properties, and one thing to know:
 
-- **It does not take the keyboard.** Moving and reloading a background tab
-  changes nothing about where input goes. Raising a window does, so `activate`
-  is off by default and the caller has to ask.
+- **It does not take the keyboard.** Moving and reloading a tab changes nothing
+  about where input goes. Raising a window does, so `activate` is off by
+  default and the caller has to ask.
 - **It never closes a tab it did not open.** Duplicates are closed only when
-  its own ledger says this tool opened them; a copy the human opened is left
-  alone and counted in the answer.
+  its own ledger says this tool opened them AND the tab still shows that page
+  when the moment to close it arrives; a copy the human opened is left alone
+  and counted in the answer.
 - **It cannot land in the wrong profile.** The operation runs inside the
   extension instance of the profile it names, and that instance can only see
   its own windows, so "the most recently focused window" is that profile's
   even when a different profile's window is the one on screen.
+- **It does reload the tab it reuses**, which is the point, and a reload
+  discards anything unsaved in that tab. Point it at pages you are showing
+  someone, not at a form somebody is halfway through filling in.
 
 The same capability without an MCP client, for a launcher, a hook or a shell
 script:

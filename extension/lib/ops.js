@@ -29,6 +29,7 @@ import {
   describeOpenOrFocus,
   isOpenOrFocusUrl,
   isRestrictedUrl,
+  openOrFocusMatch,
   originOf,
   parseTabHandle,
   planOpenOrFocus,
@@ -675,8 +676,26 @@ async function openOrFocus(args) {
     })
   }
 
+  // Confirm the keeper is still there BEFORE closing anything. Closing the
+  // duplicates first and only then discovering the survivor had gone would
+  // leave the operator with fewer tabs and no page, which is the one outcome
+  // worse than doing nothing.
+  if (!(await tryGetTab(plan.keeper.tabId))) {
+    throw new OpError(
+      ERR.TAB_GONE,
+      'The tab showing that page closed while this operation was running. Call it again and it will open a new one.'
+    )
+  }
+
   const closed = []
   for (const dup of plan.close) {
+    // Re-read each duplicate immediately before removing it. The ledger proves
+    // this operation OPENED that tab; it does not prove the tab still holds
+    // that page, and between the query above and this line the operator can
+    // have typed a new address into it. Closing it then would destroy their
+    // work under a permission granted for something else.
+    const live = await tryGetTab(dup.tabId)
+    if (!live || !openOrFocusMatch(url, live.url || live.pendingUrl || '', { allowFileName })) continue
     try {
       await chrome.tabs.remove(dup.tabId)
       closed.push(dup.tabId)
@@ -687,14 +706,14 @@ async function openOrFocus(args) {
   }
   if (closed.length > 0) await forgetOpened(closed)
 
-  // Re-read the keeper AFTER the closes: removing a tab to its left shifts its
-  // index, and reporting the stale number would describe a move that never
-  // happened.
-  const keeper = await getTab(plan.keeper.tabId)
+  // Re-read the keeper AFTER the closes as well: removing a tab to its left
+  // shifts its index, and reporting the stale number would describe a move that
+  // never happened.
+  const keeper = await tryGetTab(plan.keeper.tabId)
   if (!keeper) {
     throw new OpError(
       ERR.TAB_GONE,
-      `The tab showing that page closed while this operation was running. Call it again and it will open a new one.`
+      'The tab showing that page closed while this operation was running. Call it again and it will open a new one.'
     )
   }
 
@@ -708,9 +727,19 @@ async function openOrFocus(args) {
     moved = toIndex !== fromIndex
   }
 
-  await chrome.tabs.reload(keeper.id, { bypassCache: false })
-  // A reload builds a new document, so every snapshot ref for this tab is dead.
-  await clearSnapshot(keeper.id)
+  // A failed reload is reported, not thrown. By this point the tab is in place
+  // and the page is on screen; answering with an error would tell the caller
+  // nothing happened when most of it did, and the one-line answer says
+  // "not reloaded" rather than claiming a refresh that did not land.
+  let reloaded = false
+  try {
+    await chrome.tabs.reload(keeper.id, { bypassCache: false })
+    reloaded = true
+    // A reload builds a new document, so every snapshot ref for this tab is dead.
+    await clearSnapshot(keeper.id)
+  } catch (_err) {
+    reloaded = false
+  }
 
   if (activate) {
     await chrome.tabs.update(keeper.id, { active: true })
@@ -732,7 +761,7 @@ async function openOrFocus(args) {
     toIndex,
     moved,
     pinned: !!keeper.pinned,
-    reloaded: true,
+    reloaded,
     closed: closed.length,
     kept: plan.kept.length,
     activated: activate,
@@ -742,6 +771,22 @@ async function openOrFocus(args) {
 /** Attach the one-line answer, built by the contract so every caller says the same sentence. */
 function withSummary(result) {
   return { ...result, summary: describeOpenOrFocus(result) }
+}
+
+/**
+ * chrome.tabs.get without the throw.
+ *
+ * getTab() above turns a missing tab into a typed failure, which is right when
+ * the caller NAMED that tab. openOrFocus works from a list it read a moment
+ * ago, where a tab having closed since is ordinary and means "skip it", not
+ * "fail the operation".
+ */
+async function tryGetTab(tabId) {
+  try {
+    return await chrome.tabs.get(tabId)
+  } catch (_err) {
+    return null
+  }
 }
 
 /**

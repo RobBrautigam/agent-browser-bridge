@@ -31,7 +31,11 @@ All notable changes to this project are recorded here. The format follows
   there only for a path ending in `.html` or `.htm`. The reasoning, and why it
   does not restore the navigate-then-read primitive the refusal exists to
   prevent, is in SECURITY.md and on `isOpenOrFocusUrl` in the contract. The rule
-  is enforced in the extension and again in the broker.
+  is enforced in the extension and again in the broker. It refuses the four ways a
+  string ends in .html without being a local page: a host or a leading double
+  slash (a UNC network path), a control character (a NUL truncates the name at
+  the filesystem), and a colon past the drive letter (an NTFS alternate data
+  stream).
 
 ## [0.2.0] - 2026-09-16
 

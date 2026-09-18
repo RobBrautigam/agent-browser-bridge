@@ -46,6 +46,39 @@ test('a local page is a file URL ending in .html or .htm, and nothing else', () 
   assert.equal(isLocalPageUrl(null), false)
 })
 
+test('the ways a string can end in .html without being a local page are all refused', () => {
+  // Every case below came out of the adversarial review of this feature. Each
+  // one ends in .html and names something that is not a local HTML file, which
+  // is exactly the shape that would widen the only carve-out in this system.
+
+  // A host turns a file URL into a network path: Windows opens an SMB
+  // connection to the named server, which is an outbound credential-carrying
+  // fetch dressed as a local page.
+  assert.equal(isLocalPageUrl('file://attacker.example/share/report.html'), false, 'UNC by host')
+  assert.equal(isLocalPageUrl('file:////attacker.example/share/report.html'), false, 'UNC by double slash')
+
+  // A NUL truncates the path at the filesystem: the rule reads .html, the OS
+  // opens the dotenv file.
+  assert.equal(isLocalPageUrl('file:///C:/Users/someone/.env%00.html'), false, 'NUL truncation')
+  assert.equal(isLocalPageUrl('file:///C:/dev/re%0Aport.html'), false, 'a control character')
+
+  // An NTFS alternate data stream names a different file entirely.
+  assert.equal(isLocalPageUrl('file:///C:/Users/someone/secrets.env:report.html'), false, 'alternate data stream')
+
+  // Windows drops a trailing dot or space when it opens a path, so a name that
+  // does not end in .html here must not be treated as though it does.
+  assert.equal(isLocalPageUrl('file:///C:/Users/someone/.env.html.'), false, 'trailing dot')
+  assert.equal(isLocalPageUrl('file:///C:/Users/someone/.env.html%20'), false, 'trailing space')
+
+  // The query and the fragment are not part of the file name, in either direction.
+  assert.equal(isLocalPageUrl('file:///C:/Users/someone/.env?x=.html'), false, 'a query cannot make it a page')
+  assert.equal(isLocalPageUrl('file:///C:/Users/someone/.env#.html'), false, 'a fragment cannot either')
+
+  // The drive letter's colon is the one colon a local path may carry.
+  assert.equal(isLocalPageUrl('file:///C:/dev/report.html'), true)
+  assert.equal(isLocalPageUrl('file:///home/someone/report.html'), true, 'a POSIX path has no drive letter')
+})
+
 test('openOrFocus accepts web addresses and local pages, and refuses the rest', () => {
   assert.equal(isOpenOrFocusUrl('https://example.com/report'), true)
   assert.equal(isOpenOrFocusUrl('file:///C:/dev/report.html'), true)
@@ -220,7 +253,7 @@ test('the summary says what happened in one line', () => {
  * actually shift when a tab is removed or moved, session storage, and a log of
  * every call so a test can assert that something did NOT happen.
  */
-function fakeChrome({ tabs = [], lastFocused = { id: 1, type: 'normal' }, session = {} } = {}) {
+function fakeChrome({ tabs = [], lastFocused = { id: 1, type: 'normal' }, session = {}, beforeGet = null, reloadThrows = false } = {}) {
   const state = {
     tabs: tabs.map((t) => ({ pinned: false, active: false, ...t })),
     session: { ...session },
@@ -243,6 +276,9 @@ function fakeChrome({ tabs = [], lastFocused = { id: 1, type: 'normal' }, sessio
         return state.tabs.map((t) => ({ ...t }))
       },
       async get(id) {
+        // The hook is how a test reproduces the browser changing underneath the
+        // operation: a human navigating a tab between the query and the remove.
+        if (beforeGet) beforeGet(id, state)
         const t = byId(id)
         if (!t) throw new Error(`No tab with id ${id}`)
         return { ...t }
@@ -286,6 +322,7 @@ function fakeChrome({ tabs = [], lastFocused = { id: 1, type: 'normal' }, sessio
       async reload(id) {
         if (!byId(id)) throw new Error(`No tab with id ${id}`)
         state.calls.push(['reload', id])
+        if (reloadThrows) throw new Error('the tab refused to reload')
       },
       async update(id, props) {
         const t = byId(id)
@@ -417,6 +454,50 @@ test('it closes the duplicate it opened itself and leaves the operator\'s copy a
       assert.ok(state.calls.some((c) => c[0] === 'remove' && c[1] === 2))
       assert.equal(state.calls.some((c) => c[0] === 'remove' && c[1] === 1), false)
       assert.deepEqual(state.session[LEDGER], {}, 'the closed tab leaves the ledger')
+    }
+  )
+})
+
+test('a duplicate that stopped showing the page is left alone, ledger or not', async () => {
+  // The ledger proves this operation OPENED that tab. It does not prove the tab
+  // still holds that page: between reading the tab list and closing the
+  // duplicate, the operator can have typed a new address into it. Closing it
+  // then would destroy their work under a permission granted for something else.
+  await withFakeChrome(
+    {
+      tabs: [
+        { id: 1, windowId: 1, index: 0, url: PAGE, active: true },
+        { id: 2, windowId: 1, index: 1, url: PAGE },
+      ],
+      session: { [LEDGER]: { 2: PAGE } },
+      beforeGet(id, state) {
+        const t = state.tabs.find((x) => x.id === 2)
+        if (t) t.url = 'https://example.com/the-operator-went-somewhere-else'
+      },
+    },
+    async (ops, state) => {
+      const result = await ops.runOp('openOrFocus', { url: PAGE })
+      assert.equal(result.closed, 0, 'it no longer shows the page, so it is not a duplicate')
+      assert.equal(state.calls.some((c) => c[0] === 'remove'), false)
+      assert.deepEqual(state.tabs.map((t) => t.id).sort(), [1, 2])
+    }
+  )
+})
+
+test('a reload that fails is reported, not thrown, because the tab is already in place', async () => {
+  await withFakeChrome(
+    {
+      tabs: [
+        { id: 1, windowId: 1, index: 0, url: PAGE },
+        { id: 2, windowId: 1, index: 1, url: 'https://example.com/b', active: true },
+      ],
+      reloadThrows: true,
+    },
+    async (ops) => {
+      const result = await ops.runOp('openOrFocus', { url: PAGE })
+      assert.equal(result.reloaded, false)
+      assert.equal(result.moved, true, 'the move still happened and is still reported')
+      assert.match(result.summary, /not reloaded/)
     }
   )
 })
