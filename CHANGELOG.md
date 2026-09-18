@@ -4,6 +4,19 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-09-18
+
+### Fixed
+
+- `scripts/reload-extension.mjs` now names the right next action for the one
+  failure it is most likely to meet. An extension older than 0.4.0 does not know
+  the reload operation, and the generic explanation for that error talks about
+  chrome.debugger policy and its tier 1 alternatives, which have nothing to do
+  with it. Anybody upgrading from 0.3.0 or earlier saw that paragraph once per
+  profile, when the answer was the single click this command exists to replace.
+  It now says which version the profile is running, why this one reload cannot
+  be automated, and where the button is.
+
 ## [0.4.0] - 2026-09-18
 
 ### Added
@@ -154,6 +167,7 @@ daily use on a Windows machine with several Chrome and Brave profiles since
 - macOS and Linux support follows Chromium's documented native messaging
   locations and has not yet been exercised on a real machine. Reports welcome.
 
+[0.4.1]: https://github.com/RobBrautigam/agent-browser-bridge/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/RobBrautigam/agent-browser-bridge/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/RobBrautigam/agent-browser-bridge/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/RobBrautigam/agent-browser-bridge/compare/v0.1.0...v0.2.0

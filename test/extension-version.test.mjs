@@ -24,7 +24,7 @@ import { ERR, LINK, describeExtensionReload, reloadRefusal } from '../shared/pro
 import { MANIFEST_FILE, PACKAGE_FILE, installedExtensionVersion } from '../shared/config.mjs'
 import { lineFor } from '../bridged/routes.mjs'
 import { absentLine } from '../bridged/profiles.mjs'
-import { parseArgs, reloadOne, selectTargets } from '../scripts/reload-extension.mjs'
+import { describeReloadError, parseArgs, reloadOne, selectTargets } from '../scripts/reload-extension.mjs'
 import { renderBoard, renderStatus } from '../mcp-server/shape.mjs'
 
 /* -------------------------------------------------------------------------- */
@@ -414,6 +414,51 @@ test('an extension too old to know the operation is named as exactly that', asyn
   assert.equal(r.ok, false)
   assert.match(r.line, /older than this command/)
   assert.match(r.line, /extensions page/)
+  assert.match(r.line, /Reload arrow/)
+})
+
+test('the same is true when the extension answers with the error rather than nothing', async () => {
+  // Which is what actually happens: the broker allows the request, forwards it,
+  // and the old extension answers "unknown operation". Proved live on this
+  // machine against a profile running 0.3.0.
+  const client = fakeBroker({ throwsOn: 'reloadExtension' })
+  client.request = async ({ op }) => {
+    if (op === 'reloadExtension') {
+      throw Object.assign(new Error('Unknown operation "reloadExtension". This extension serves: listTabs.'), {
+        code: ERR.UNSUPPORTED,
+      })
+    }
+    return { lines: [] }
+  }
+  const r = await reloadOne({
+    client,
+    line: { installId: 'a', label: 'behind', extVersion: '0.1.0' },
+    installed: '0.4.1',
+    sleep: async () => {},
+    now: () => 0,
+  })
+  assert.equal(r.ok, false)
+  assert.match(r.line, /^behind: the extension running in this profile is version 0\.1\.0/)
+  assert.match(r.line, /Reload arrow/)
+  assert.equal(/chrome\.debugger/.test(r.line), false)
+})
+
+test('an extension that does not know the operation is told where the button is', () => {
+  // The likeliest failure this command has, and the one whose generic
+  // explanation is actively misleading: the shared text for this error code
+  // talks about chrome.debugger policy and its tier 1 alternatives, which have
+  // nothing to do with an extension that predates the operation. The answer is
+  // the single click the command exists to replace, so the message says so.
+  const unknown = { code: ERR.UNSUPPORTED, message: 'Unknown operation "reloadExtension". This extension serves: listTabs, readPage.' }
+  const text = describeReloadError(unknown, { extVersion: '0.3.0' })
+  assert.match(text, /version 0\.3\.0/, 'it names the version that cannot do it')
+  assert.match(text, /extensions page/)
+  assert.match(text, /Reload arrow/)
+  assert.equal(/chrome\.debugger/.test(text), false, 'and never mentions the debugger')
+
+  // Every other failure keeps the shared wording, which is already actionable.
+  const stale = { code: ERR.PROFILE_STALE, message: 'Profile "x" is stale.' }
+  assert.equal(/Reload arrow/.test(describeReloadError(stale, {})), false)
 })
 
 test('a broker refusal comes back as the broker worded it', async () => {
