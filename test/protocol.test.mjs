@@ -26,6 +26,7 @@ import {
   MAX_ARM_MINUTES,
   RAW_TAB_ID_FIELD,
   isRestrictedUrl,
+  openOrFocusMode,
   backoffDelay,
   hello,
   helloAck,
@@ -98,6 +99,49 @@ test('a refused scheme stays refused however many slashes follow it', () => {
   assert.equal(isRestrictedUrl('https://chromewebstore.google.com/detail/x'), true)
   assert.equal(isRestrictedUrl('https://example.com/'), false)
   assert.equal(isRestrictedUrl('https://filesystem.example.com/file:/x'), false, 'a scheme inside a path is not a scheme')
+})
+
+test('an invisible character cannot change what a scheme parses as', () => {
+  // The adversarial review of 0.4.0 found this and it is the worst of the three
+  // URL defects: the URL parser DELETES ASCII tab, LF and CR from its input
+  // wherever they appear, INCLUDING inside the scheme. So every form below
+  // parses as a refused scheme while matching no rule written about the text of
+  // one, and before the fix every one of them was accepted.
+  const invisible = [
+    'fi\tle:///C:/Users/me/.env',
+    'fi\nle:///C:/Users/me/.env',
+    'fi\rle:///C:/Users/me/.env',
+    'file\t:///C:/Users/me/.env',
+    'file:\t//C:/Users/me/.env',
+    'f\til\ne:///C:/Users/me/.env',
+    'ch\trome://settings',
+    'de\nvtools://devtools/bundled/inspector.html',
+  ]
+  for (const url of invisible) {
+    // Each one really does parse as the scheme it is hiding. If this assertion
+    // ever fails the parser changed, not the rule.
+    assert.equal(new URL(url).protocol, url.includes('rome') ? 'chrome:' : url.includes('vtools') ? 'devtools:' : 'file:', url)
+    assert.equal(isRestrictedUrl(url), true, `${JSON.stringify(url)} must be refused`)
+    assert.equal(openOrFocusMode(url), null, `${JSON.stringify(url)} must get no mode at all`)
+  }
+
+  // Refused on the CHARACTER, so a control character that does not change the
+  // scheme is refused too. Nothing legitimate carries one: a URL that wants a
+  // control character percent-encodes it, and a percent-encoded one is not
+  // removed by the parser and so cannot change anything.
+  assert.equal(isRestrictedUrl('https://example.com/a\tb'), true, 'a tab in the path')
+  assert.equal(isRestrictedUrl('https://example.com/a%09b'), false, 'percent-encoded is fine')
+})
+
+test('an address the URL parser refuses gets no openOrFocus mode', () => {
+  // Near-miss spellings of a refused scheme: a full-width colon, an fi ligature,
+  // a zero-width space, a space before the colon. None of them is a scheme, so
+  // none is a destination, and a typed refusal here beats whatever
+  // chrome.tabs.create throws at the caller.
+  for (const url of ['\uFB01le:///C:/x.env', 'file\uFF1A///C:/x.env', 'file :///C:/x.env', 'file%09:///C:/x.env', 'fi\u200ble:///C:/x.env', 'not a url at all']) {
+    assert.throws(() => new URL(url), `${url} was expected to be unparseable`)
+    assert.equal(openOrFocusMode(url), null, url)
+  }
 })
 
 test('isRestrictedUrl refuses file:// - it is the local-file read primitive', () => {

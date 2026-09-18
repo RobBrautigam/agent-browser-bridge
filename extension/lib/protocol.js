@@ -343,8 +343,19 @@ const RESTRICTED_SCHEMES = new Set(
     .map((m) => `${m[1]}:`)
 )
 
+/**
+ * A C0 control or DEL anywhere in an address, refused outright: the URL parser
+ * deletes ASCII tab, LF and CR wherever they appear, including inside the
+ * scheme, so "fi<TAB>le:///C:/x" parses as file: while matching no rule written
+ * about the text "file:". The reasoning is on this constant in
+ * shared/protocol.mjs.
+ */
+const URL_CONTROL_CHARS = /[\u0000-\u001f\u007f]/
+
 export function isRestrictedUrl(url) {
   if (typeof url !== 'string') return true
+  if (URL_CONTROL_CHARS.test(url)) return true
+
   const u = url.trim().toLowerCase()
   if (u === '') return true
   if (RESTRICTED_URL_PREFIXES.some((p) => u.startsWith(p.toLowerCase()))) return true
@@ -464,8 +475,18 @@ export const OPEN_OR_FOCUS_MODE = Object.freeze({
  * on this function in shared/protocol.mjs.
  */
 export function openOrFocusMode(url) {
-  if (isOpenOrFocusUrl(url)) return OPEN_OR_FOCUS_MODE.FULL
-  if (typeof url === 'string' && /^file:/i.test(url.trim())) return OPEN_OR_FOCUS_MODE.FIND_ONLY
+  if (typeof url !== 'string') return null
+  if (URL_CONTROL_CHARS.test(url)) return null
+  const trimmed = url.trim()
+  // An address the URL parser refuses is refused here rather than handed to
+  // chrome.tabs.create to throw at.
+  try {
+    new URL(trimmed)
+  } catch {
+    return null
+  }
+  if (isOpenOrFocusUrl(trimmed)) return OPEN_OR_FOCUS_MODE.FULL
+  if (/^file:/i.test(trimmed)) return OPEN_OR_FOCUS_MODE.FIND_ONLY
   return null
 }
 

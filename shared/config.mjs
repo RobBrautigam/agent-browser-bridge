@@ -148,6 +148,13 @@ export const PACKAGE_FILE = path.join(REPO_ROOT, 'package.json')
 let installedVersionCache = { key: null, version: null }
 
 /**
+ * Ceiling on the manifest read. An MV3 manifest is about a kilobyte; 256 KiB is
+ * two orders of magnitude of headroom and still small enough that reading it
+ * synchronously inside the broker cannot matter.
+ */
+const MAX_MANIFEST_BYTES = 256 * 1024
+
+/**
  * The extension version the INSTALL FOLDER holds right now.
  *
  * Read from the manifest on disk rather than imported as a constant, and that
@@ -169,7 +176,17 @@ let installedVersionCache = { key: null, version: null }
 export function installedExtensionVersion() {
   let key
   try {
-    const stat = fs.statSync(MANIFEST_FILE)
+    // lstat, not stat, and a regular file only. This runs inside the always-on
+    // broker on every board build, and a synchronous read of something that is
+    // not an ordinary file - a symlink to a device, a named pipe, a directory -
+    // can block or exhaust it. A manifest is about a kilobyte; anything over the
+    // cap is not one, and the honest answer for all of these is "unreadable",
+    // which every caller already handles.
+    const stat = fs.lstatSync(MANIFEST_FILE)
+    if (!stat.isFile() || stat.size > MAX_MANIFEST_BYTES) {
+      installedVersionCache = { key: null, version: null }
+      return null
+    }
     key = `${stat.mtimeMs}:${stat.size}`
   } catch {
     installedVersionCache = { key: null, version: null }

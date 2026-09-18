@@ -636,7 +636,13 @@ async function openOrFocus(args) {
         'operation accepts are .html and .htm pages, because its job is showing a rendered page to a human.'
     )
   }
-  const allowFileName = args.matchFileName === true
+  // Same-file-name matching is FULL mode only. In find-only mode it would let a
+  // request for C:/reports/out.pdf move a tab showing D:/old/out.pdf and report
+  // that as the page being on screen, so the launcher would not open the file it
+  // was actually asked about. In full mode the caller opts in knowing the
+  // folders are copies of one page; in find-only the answer decides whether
+  // somebody else opens the real file, so a near-match is worse than no match.
+  const allowFileName = args.matchFileName === true && mode === OPEN_OR_FOCUS_MODE.FULL
   const activate = args.activate === true
 
   const tabs = (await chrome.tabs.query({})).map((t) => ({

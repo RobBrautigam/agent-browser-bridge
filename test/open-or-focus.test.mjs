@@ -635,6 +635,36 @@ test('an address that is not a file and not navigable is refused before any tab 
   })
 })
 
+test('find-only never matches by file name, however the caller asks', async () => {
+  // Found by the adversarial review of 0.4.0. matchFileName exists for two git
+  // worktrees holding the same page, and in find-only mode it would let a request
+  // for C:/reports/out.pdf move a tab showing D:/old/out.pdf and report that as
+  // the page being on screen - so the launcher would never open the file it was
+  // actually asked about. In full mode the caller opts in knowing the folders are
+  // copies; in find-only the answer decides whether somebody else opens the real
+  // file, and a near-match is worse than no match.
+  const asked = 'file:///C:/reports/out.pdf'
+  const elsewhere = 'file:///D:/old/out.pdf'
+  await withFakeChrome({ tabs: [{ id: 1, windowId: 1, index: 0, url: elsewhere, active: true }] }, async (ops, state) => {
+    await assert.rejects(
+      () => ops.runOp('openOrFocus', { url: asked, matchFileName: true }),
+      (err) => err.code === ERR.RESTRICTED_URL,
+      'a same-named file in another folder is not this file'
+    )
+    assert.equal(state.calls.some((c) => c[0] === 'move'), false, 'the wrong tab was not moved')
+  })
+
+  // The same flag still works for the pages it was written for.
+  await withFakeChrome(
+    { tabs: [{ id: 1, windowId: 1, index: 0, url: 'file:///C:/dev/repo-feature/docs/report.html', active: true }] },
+    async (ops) => {
+      const reused = await ops.runOp('openOrFocus', { url: PAGE, matchFileName: true })
+      assert.equal(reused.action, 'reused')
+      assert.equal(reused.match, OPEN_OR_FOCUS_MATCH.SAME_FILE_NAME)
+    }
+  )
+})
+
 test('the mode rule sorts addresses into open-and-reload, find-and-move, and refused', () => {
   assert.equal(openOrFocusMode('https://example.com/report'), OPEN_OR_FOCUS_MODE.FULL)
   assert.equal(openOrFocusMode('file:///C:/dev/report.html'), OPEN_OR_FOCUS_MODE.FULL)
@@ -659,9 +689,20 @@ test('the mode rule sorts addresses into open-and-reload, find-and-move, and ref
     assert.equal(isOpenOrFocusUrl(url), false, `${url} must stay unopenable`)
   }
 
-  // Not a file and not navigable: no mode at all.
-  for (const url of ['chrome://settings', 'brave://extensions', 'about:blank', 'devtools://x', '', null]) {
-    assert.equal(openOrFocusMode(url), null, String(url))
+  // Not a file and not navigable: no mode at all. Nor is an address carrying a
+  // control character, whatever it parses to, nor one that does not parse.
+  for (const url of [
+    'chrome://settings',
+    'brave://extensions',
+    'about:blank',
+    'devtools://x',
+    '',
+    null,
+    'fi\tle:///C:/dev/report.html',
+    'file\t:///C:/dev/report.pdf',
+    'file :///C:/dev/report.html',
+  ]) {
+    assert.equal(openOrFocusMode(url), null, JSON.stringify(url))
   }
 })
 

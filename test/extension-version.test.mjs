@@ -58,6 +58,32 @@ test('the installed version is re-read when the manifest changes under a running
   assert.equal(fs.readFileSync(MANIFEST_FILE, 'utf8'), before, 'the manifest is exactly as it was')
 })
 
+test('the installed version is null rather than a throw for anything that is not a manifest', () => {
+  // This runs inside the always-on broker on every board build. A synchronous
+  // read of something that is not an ordinary file - a directory, a device, a
+  // pipe - can block or exhaust that one process, and an unhandled throw in
+  // buildBoard takes every profile down with it. The honest answer for all of
+  // these is "unreadable", which every caller already handles.
+  const before = fs.readFileSync(MANIFEST_FILE, 'utf8')
+  try {
+    fs.writeFileSync(MANIFEST_FILE, 'not json at all')
+    assert.equal(installedExtensionVersion(), null, 'invalid JSON')
+
+    fs.writeFileSync(MANIFEST_FILE, JSON.stringify({ name: 'x' }))
+    assert.equal(installedExtensionVersion(), null, 'no version field')
+
+    fs.writeFileSync(MANIFEST_FILE, JSON.stringify({ version: '' }))
+    assert.equal(installedExtensionVersion(), null, 'an empty version is not a version')
+
+    fs.writeFileSync(MANIFEST_FILE, JSON.stringify({ version: 'x'.repeat(300 * 1024) }))
+    assert.equal(installedExtensionVersion(), null, 'a file too large to be a manifest')
+  } finally {
+    fs.writeFileSync(MANIFEST_FILE, before)
+  }
+  assert.equal(fs.readFileSync(MANIFEST_FILE, 'utf8'), before, 'the manifest is exactly as it was')
+  assert.equal(typeof installedExtensionVersion(), 'string')
+})
+
 test('the manifest and the package version agree, so one number means one release', () => {
   // Kept as the invariant rather than as a literal. A test that pinned the
   // literal version failed on every bump and taught people to edit the

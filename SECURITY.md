@@ -36,8 +36,13 @@ Three things back that up rather than resting on it:
   Nothing in this repository requests it, sets it, or asks you to, so on a
   default install `browser_read_page` against such a tab fails.
 - The audit log is unchanged: it records origin only, which for a `file:` URL
-  is the scheme and an opaque marker. The path of a page opened this way is not
-  written anywhere.
+  is the scheme and an opaque marker. The path of a page opened this way is
+  never written to the log, and never appears in an error message. It does come
+  back in the operation's own result, alongside the tab handle, because the
+  caller is the one that named it and a READ-tier `browser_list_tabs` already
+  reports the address of every open tab; what the log and the errors promise is
+  that the path is not written to disk or shown to anybody who did not already
+  have it.
 
 ## Finding and moving a tab is not opening one
 

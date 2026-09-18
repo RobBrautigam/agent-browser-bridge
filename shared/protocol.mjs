@@ -363,8 +363,31 @@ const RESTRICTED_SCHEMES = new Set(
     .map((m) => `${m[1]}:`)
 )
 
+/**
+ * A C0 control or DEL anywhere in an address, which is refused outright.
+ *
+ * This is the rule that makes every other URL rule in this file mean what it
+ * says. The URL parser DELETES ASCII tab, LF and CR from its input wherever they
+ * appear, INCLUDING INSIDE THE SCHEME: "fi<TAB>le:///C:/Users/me/.env" parses as
+ * an ordinary file: URL and matches no rule written about the text "file:", and
+ * so does "ch<TAB>rome://settings". Found by the adversarial review of 0.4.0 and
+ * reproduced in Node's own WHATWG parser, which implements the same
+ * specification Chromium does.
+ *
+ * Nothing legitimate needs a raw control character in an address. A URL that
+ * wants one percent-encodes it, and a percent-encoded one is not removed by the
+ * parser and so cannot change the scheme.
+ *
+ * Applied to the RAW string, before any trim, and by openOrFocusMode as well, so
+ * that no code path in this system is more permissive about the shape of an
+ * address than any other.
+ */
+const URL_CONTROL_CHARS = /[\u0000-\u001f\u007f]/
+
 export function isRestrictedUrl(url) {
   if (typeof url !== 'string') return true
+  if (URL_CONTROL_CHARS.test(url)) return true
+
   const u = url.trim().toLowerCase()
   if (u === '') return true
   if (RESTRICTED_URL_PREFIXES.some((p) => u.startsWith(p.toLowerCase()))) return true
@@ -509,12 +532,31 @@ export const OPEN_OR_FOCUS_MODE = Object.freeze({
  * @returns {string|null} an OPEN_OR_FOCUS_MODE value, or null when refused
  */
 export function openOrFocusMode(url) {
-  if (isOpenOrFocusUrl(url)) return OPEN_OR_FOCUS_MODE.FULL
+  if (typeof url !== 'string') return null
+  // The character rule first, on the raw string, for the reason written on
+  // URL_CONTROL_CHARS: a tab inside the scheme makes the text of an address lie
+  // about what it parses to, and find-only must not be the one path that accepts
+  // such a thing merely because the text begins with "file:".
+  if (URL_CONTROL_CHARS.test(url)) return null
+  const trimmed = url.trim()
+
+  // An address the URL parser refuses is refused here, with a typed error rather
+  // than whatever chrome.tabs.create throws at it. Several near-miss spellings of
+  // a refused scheme land here and nowhere else: a full-width colon, an fi
+  // ligature, a zero-width space, a space before the colon. None of them is a
+  // scheme, so none of them is a destination.
+  try {
+    new URL(trimmed)
+  } catch {
+    return null
+  }
+
+  if (isOpenOrFocusUrl(trimmed)) return OPEN_OR_FOCUS_MODE.FULL
   // Every other `file:` form, including the four that end in .html while naming
   // something that is not a local page. They stay unopenable and unreloadable; a
   // tab already showing one may still be found and moved, because moving it does
   // nothing a tab list has not already done.
-  if (typeof url === 'string' && /^file:/i.test(url.trim())) return OPEN_OR_FOCUS_MODE.FIND_ONLY
+  if (/^file:/i.test(trimmed)) return OPEN_OR_FOCUS_MODE.FIND_ONLY
   return null
 }
 

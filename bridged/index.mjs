@@ -651,6 +651,10 @@ async function handleRegister(conn, msg) {
     })
   }
 
+  // A register is how a reloaded profile comes back, so it is the moment the
+  // reload guard above stops applying.
+  pendingReloads.delete(installId)
+
   // Every register is a new browser session as far as tab handles are
   // concerned, so the generation moves and every outstanding handle dies.
   const generation = store.nextGeneration(installId)
@@ -876,9 +880,52 @@ function allowReload(conn, msg, route) {
     return false
   }
 
+  // The version gate is not atomic on its own. Between the reload and the
+  // profile re-registering, the route still carries the OLD version, so a second
+  // caller in that window passes the same check and the extension schedules a
+  // second reload of something already tearing down. One reload per release
+  // becomes several, each one bumping the generation and killing the tab handles
+  // every other session holds. This flag closes the window; it is cleared when
+  // the profile re-registers, and it expires on its own so a reload that never
+  // lands cannot lock the operation out forever.
+  const pendingUntil = pendingReloads.get(route.installId)
+  if (pendingUntil && pendingUntil > Date.now()) {
+    reply(
+      conn,
+      msg,
+      fail(
+        msg.id,
+        ERR.UNSUPPORTED,
+        `"${route.label}" was already asked to reload a moment ago and has not come back yet. ` +
+          'Nothing was sent. Wait for it to reconnect and check the profile list; it reports the ' +
+          'version it is running when it does.'
+      ),
+      { route }
+    )
+    return false
+  }
+  pendingReloads.set(route.installId, Date.now() + RELOAD_PENDING_MS)
+
   log('info', 'Allowing an extension self-reload', { label: route.label, running, installed })
   return true
 }
+
+/**
+ * Profiles that have been asked to reload and have not come back, by installId,
+ * with the moment the ask stops counting.
+ *
+ * Broker-local and deliberately not in the contract: it is a policy detail of
+ * this process, not a value any other component sends or reads.
+ */
+const pendingReloads = new Map()
+
+/**
+ * How long an unanswered reload blocks another. A reload and a re-register take
+ * about two seconds; 30 is generous enough that a slow machine is not fighting
+ * the guard, and short enough that a reload which never landed does not need a
+ * broker restart to clear.
+ */
+const RELOAD_PENDING_MS = 30_000
 
 /**
  * Which route a profile-addressed REQ acts on.

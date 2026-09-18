@@ -110,8 +110,21 @@ test('the openOrFocus rules agree, address by address', () => {
     // worse, one side willing to OPEN an address the other would only find.
     assert.equal(mirror.openOrFocusMode(url), shared.openOrFocusMode(url), `mode for ${url}`)
   }
-  for (const url of ['file:///C:/dev/report.pdf', 'file:///C:/Users/someone/.env', 'file:/c:/x.png']) {
-    assert.equal(mirror.openOrFocusMode(url), shared.openOrFocusMode(url), `mode for ${url}`)
+  for (const url of [
+    'file:///C:/dev/report.pdf',
+    'file:///C:/Users/someone/.env',
+    'file:/c:/x.png',
+    // The invisible-character forms, which is where a drift would be invisible
+    // in review AND invisible on screen: one side would open what the other
+    // refused, over a character neither a reader nor a diff shows.
+    'fi\tle:///C:/Users/me/.env',
+    'file\t:///C:/Users/me/.env',
+    'ch\trome://settings',
+    '\uFB01le:///C:/x.env',
+    'file :///C:/x.env',
+  ]) {
+    assert.equal(mirror.openOrFocusMode(url), shared.openOrFocusMode(url), `mode for ${JSON.stringify(url)}`)
+    assert.equal(mirror.isRestrictedUrl(url), shared.isRestrictedUrl(url), `restricted for ${JSON.stringify(url)}`)
   }
 
   const target = 'file:///C:/dev/repo/docs/report.html'
