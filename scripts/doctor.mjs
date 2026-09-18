@@ -664,9 +664,27 @@ async function main() {
           const claim = l.claimed === false ? ' UNCLAIMED' : ''
           console.log(
             `           ${mark}  ${String(l.label).padEnd(18)} ${String(l.vendorLabel || l.vendor || '').padEnd(6)} ` +
-              `${String(l.profileDir ?? '?').padEnd(10)} tabs ${String(l.tabCount ?? '?').padStart(3)}  seen ${seen}${claim}`
+              `${String(l.profileDir ?? '?').padEnd(10)} tabs ${String(l.tabCount ?? '?').padStart(3)}  ` +
+              `ext ${String(l.extVersion || '?').padEnd(7)} seen ${seen}${claim}`
           )
           if (l.warning) console.log(`                  ${yellow(l.warning)}`)
+        }
+
+        // THE OTHER silent failure, and the one this project shipped a release
+        // into. A browser reads an unpacked extension's code once, when it
+        // loads it, so a pulled release is absent from every profile until each
+        // one is reloaded, with nothing anywhere saying so.
+        const behind = lines.filter((l) => l.needsReload)
+        if (behind.length > 0) {
+          warn(
+            `${behind.length} profile(s) are running an older extension than the install folder ` +
+              `(${board.result?.installedVersion}): ${behind.map((l) => `${l.label} on ${l.extVersion}`).join(', ')}`,
+            'node scripts/reload-extension.mjs --all\n' +
+              'A browser reads an unpacked extension once, when it loads it, so a pulled release does\n' +
+              'not reach a running browser until its extension is reloaded.'
+          )
+        } else if (board.result?.installedVersion) {
+          pass(`every connected profile is running extension ${board.result.installedVersion}`)
         }
         if (board.result?.panic) {
           fail('the broker is in PANIC and is refusing every operation', 'delete the PANIC file in ' + BASE_DIR)

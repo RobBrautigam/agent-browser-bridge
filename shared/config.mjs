@@ -144,6 +144,50 @@ export const EXTENSION_CONFIG_FILE = path.join(REPO_ROOT, 'extension', 'lib', 'c
 export const MANIFEST_FILE = path.join(REPO_ROOT, 'extension', 'manifest.json')
 export const PACKAGE_FILE = path.join(REPO_ROOT, 'package.json')
 
+/** Cache keyed on the manifest's modification time and size. */
+let installedVersionCache = { key: null, version: null }
+
+/**
+ * The extension version the INSTALL FOLDER holds right now.
+ *
+ * Read from the manifest on disk rather than imported as a constant, and that
+ * is the whole point of the function. A browser reads an unpacked extension's
+ * code once, when it loads it, so the version a profile is RUNNING and the
+ * version the folder HOLDS are two different facts that drift apart the moment
+ * somebody pulls. The broker compares them to answer the only two questions an
+ * operator has - which profiles are behind, and is there anything new for a
+ * reload to load - and it has to re-read the file to do it, because the folder
+ * changes underneath a broker that has been running since login.
+ *
+ * Cached on the manifest's mtime and size so the board can ask on every poll
+ * without a syscall storm, and so a pull is picked up on the next poll rather
+ * than at the next broker restart.
+ *
+ * @returns {string|null} null when the manifest is missing or unreadable, which
+ *   is a real state on a half-finished install and must not read as "0.0.0"
+ */
+export function installedExtensionVersion() {
+  let key
+  try {
+    const stat = fs.statSync(MANIFEST_FILE)
+    key = `${stat.mtimeMs}:${stat.size}`
+  } catch {
+    installedVersionCache = { key: null, version: null }
+    return null
+  }
+  if (key === installedVersionCache.key) return installedVersionCache.version
+
+  let version = null
+  try {
+    const manifest = JSON.parse(fs.readFileSync(MANIFEST_FILE, 'utf8'))
+    if (typeof manifest?.version === 'string' && manifest.version !== '') version = manifest.version
+  } catch {
+    version = null
+  }
+  installedVersionCache = { key, version }
+  return version
+}
+
 /**
  * Every file the config is projected into, with the exact text each must
  * hold. sync-config WRITES these; the gate and the tests COMPARE against them,

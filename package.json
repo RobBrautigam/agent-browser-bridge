@@ -1,6 +1,6 @@
 {
   "name": "agent-browser-bridge",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Agent Browser Bridge - Drive your real, logged-in browsers from any AI agent",
   "license": "MIT",
@@ -19,6 +19,7 @@
     "doctor": "node scripts/doctor.mjs",
     "broker": "node bridged/index.mjs",
     "e2e": "node scripts/e2e.mjs",
+    "reload": "node scripts/reload-extension.mjs --all",
     "keygen": "node scripts/keygen.mjs",
     "icons": "node scripts/gen-icons.mjs",
     "sync-config": "node scripts/sync-config.mjs",

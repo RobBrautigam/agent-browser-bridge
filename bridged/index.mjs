@@ -53,6 +53,7 @@ import {
   event,
   emptyBoard,
   isOpenOrFocusUrl,
+  reloadRefusal,
   isRestrictedUrl,
   RAW_TAB_ID_FIELD,
 } from '../shared/protocol.mjs'
@@ -84,6 +85,7 @@ import {
   requiresProfile,
   tierFor,
 } from './policy.mjs'
+import { installedExtensionVersion } from '../shared/config.mjs'
 import {
   RouteTable,
   absentLabelHolder,
@@ -711,6 +713,7 @@ async function handleRegister(conn, msg) {
     label: route.label,
     desiredLabel: route.desiredLabel,
     labelIsCustom,
+    extVersion: incoming.extVersion,
     lastSeenAt: Date.now(),
   })
 
@@ -849,7 +852,32 @@ function handleReq(conn, msg) {
     return
   }
 
+  if (op === OPS.RELOAD_EXTENSION && !allowReload(conn, msg, route)) return
+
   forwardToBrowser(conn, msg, route, op)
+}
+
+/**
+ * Apply the contract's reload rule and answer the caller when it refuses.
+ *
+ * The rule itself is `reloadRefusal` in shared/protocol.mjs, where it is unit
+ * tested; this is the part that needs a live route and a socket. The broker is
+ * the enforcement point because it is the only component that can compare what
+ * is on disk with what is running.
+ *
+ * @returns {boolean} true when the request may proceed
+ */
+function allowReload(conn, msg, route) {
+  const installed = installedExtensionVersion()
+  const running = route.extVersion || null
+  const refusal = reloadRefusal({ label: route.label, installed, running })
+  if (refusal) {
+    reply(conn, msg, fail(msg.id, refusal.code, refusal.message), { route })
+    return false
+  }
+
+  log('info', 'Allowing an extension self-reload', { label: route.label, running, installed })
+  return true
 }
 
 /**
@@ -1067,7 +1095,7 @@ function handleProfileMetaOp(conn, msg, route) {
         reply(conn, msg, fail(id, result.code, result.message), { route })
         return
       }
-      reply(conn, msg, ok(id, { line: lineFor(route, { armedUntil: arming.armedUntil(route.installId) }) }), {
+      reply(conn, msg, ok(id, { line: lineFor(route, { armedUntil: arming.armedUntil(route.installId), installedVersion: installedExtensionVersion() }) }), {
         route,
       })
       return
@@ -1100,7 +1128,7 @@ function handleSetLabelOp(conn, msg, route) {
     conn,
     msg,
     ok(msg.id, {
-      line: lineFor(route, { armedUntil: arming.armedUntil(route.installId) }),
+      line: lineFor(route, { armedUntil: arming.armedUntil(route.installId), installedVersion: installedExtensionVersion() }),
       handlesInvalidated: true,
     }),
     { route }
@@ -1831,7 +1859,12 @@ function recheckIdentity(route) {
 
 function buildBoard() {
   const now = Date.now()
-  const board = emptyBoard(VERSION, now)
+  // Re-read from the manifest rather than reporting VERSION. They are the same
+  // number on a broker started after the last pull and different on one that
+  // has been up since login, and the difference is the whole point: it is what
+  // tells an operator a release is on disk and not yet in their browsers.
+  const installedVersion = installedExtensionVersion()
+  const board = emptyBoard(VERSION, now, installedVersion)
   board.startedAt = STARTED_AT
   board.panic = panic.active
 
@@ -1860,6 +1893,7 @@ function buildBoard() {
     lineFor(route, {
       armedUntil: arming.armedUntil(route.installId),
       collisionNote: notes.get(route.installId) ?? null,
+      installedVersion,
     })
   )
   for (const line of absentLines) {

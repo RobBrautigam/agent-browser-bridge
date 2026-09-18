@@ -1156,6 +1156,13 @@ export function absentLine(entry) {
     candidates: [],
     generation: Number(entry.generation) || 0,
     tabCount: 0,
+    // The version it was running the last time it connected. Kept on the absent
+    // line because "this profile is two releases behind" is exactly what an
+    // operator wants to know about a browser that is currently closed, and
+    // never flagged as needing a reload: a closed profile picks the new code up
+    // when it next starts, with nobody clicking anything.
+    extVersion: entry.extVersion || null,
+    needsReload: false,
     latencyMs: null,
     lastSeenAt: Number(entry.lastSeenAt) || null,
     armedUntil: null,

@@ -16,10 +16,12 @@ import assert from 'node:assert/strict'
 import {
   ERR,
   OPEN_OR_FOCUS_MATCH,
+  OPEN_OR_FOCUS_MODE,
   describeOpenOrFocus,
   isLocalPageUrl,
   isOpenOrFocusUrl,
   openOrFocusMatch,
+  openOrFocusMode,
   planOpenOrFocus,
 } from '../shared/protocol.mjs'
 import { parseArgs, toUrl } from '../scripts/open-or-focus.mjs'
@@ -253,7 +255,14 @@ test('the summary says what happened in one line', () => {
  * actually shift when a tab is removed or moved, session storage, and a log of
  * every call so a test can assert that something did NOT happen.
  */
-function fakeChrome({ tabs = [], lastFocused = { id: 1, type: 'normal' }, session = {}, beforeGet = null, reloadThrows = false } = {}) {
+function fakeChrome({
+  tabs = [],
+  lastFocused = { id: 1, type: 'normal' },
+  session = {},
+  beforeGet = null,
+  reloadThrows = false,
+  manifestVersion = '9.9.9',
+} = {}) {
   const state = {
     tabs: tabs.map((t) => ({ pinned: false, active: false, ...t })),
     session: { ...session },
@@ -358,7 +367,13 @@ function fakeChrome({ tabs = [], lastFocused = { id: 1, type: 'normal' }, sessio
         },
       },
     },
-    runtime: { lastError: null },
+    runtime: {
+      lastError: null,
+      getManifest: () => ({ version: manifestVersion }),
+      reload: () => {
+        state.calls.push(['runtimeReload'])
+      },
+    },
   }
   return { chrome, state }
 }
@@ -535,14 +550,119 @@ test('activate is the only thing that raises a window', async () => {
   )
 })
 
-test('a local file that is not a page is refused before any tab is touched', async () => {
+test('a local file that is not a page is never OPENED, and the refusal says why', async () => {
+  // The rule that has not moved: this operation opens exactly .html and .htm
+  // behind a file: URL, and nothing else, ever. With no tab already showing the
+  // address there is nothing to find, so the answer is a refusal - and it names
+  // the rule, because the caller is usually a launcher whose next move is to
+  // open the file with its own opener.
   await withFakeChrome({ tabs: [{ id: 1, windowId: 1, index: 0, url: 'https://example.com' }] }, async (ops, state) => {
     await assert.rejects(
       () => ops.runOp('openOrFocus', { url: 'file:///C:/Users/someone/.env' }),
-      (err) => err.code === ERR.RESTRICTED_URL
+      (err) => err.code === ERR.RESTRICTED_URL && /\.html or \.htm/.test(err.message)
     )
+    assert.equal(state.calls.some((c) => c[0] === 'create'), false, 'no tab was created')
+    assert.equal(state.calls.some((c) => c[0] === 'move'), false, 'nothing was moved')
+    assert.equal(state.calls.some((c) => c[0] === 'reload'), false, 'nothing was reloaded')
+    assert.equal(state.tabs.length, 1, 'the browser is exactly as it was')
+  })
+})
+
+test('a local file that is not a page is never RELOADED, even when its tab is found', async () => {
+  // A reload is a navigation, and a navigation to a local file that is not an
+  // .html or .htm page is the thing this operation must never perform. Finding
+  // and moving is allowed because it navigates nothing.
+  const pdf = 'file:///C:/dev/repo/docs/report.pdf'
+  await withFakeChrome(
+    {
+      tabs: [
+        { id: 1, windowId: 1, index: 0, url: pdf },
+        { id: 2, windowId: 1, index: 1, url: 'https://example.com/b', active: true },
+      ],
+    },
+    async (ops, state) => {
+      const result = await ops.runOp('openOrFocus', { url: pdf })
+      assert.equal(result.action, 'reused')
+      assert.equal(result.mode, OPEN_OR_FOCUS_MODE.FIND_ONLY)
+      assert.equal(result.fromIndex, 0)
+      assert.equal(result.toIndex, 1, 'moved to the far right of its window')
+      assert.equal(result.moved, true)
+      assert.equal(result.reloaded, false)
+      assert.equal(state.calls.some((c) => c[0] === 'reload'), false, 'reload was not even attempted')
+      assert.equal(state.calls.some((c) => c[0] === 'create'), false)
+      assert.equal(state.tabs.length, 2, 'no tab opened, none closed')
+      assert.match(result.summary, /moved from index 0 to 1 of window 1/)
+      assert.match(result.summary, /only a local \.html or \.htm page may be opened or reloaded/)
+    }
+  )
+})
+
+test('find-only never closes anything, because it can never have opened anything', async () => {
+  // The ledger is the only authority for a close, and find-only mode never
+  // creates a tab, so it can never hold an entry for one. Two copies of a PDF
+  // both belong to the operator and both survive.
+  const pdf = 'file:///C:/dev/report.pdf'
+  await withFakeChrome(
+    {
+      tabs: [
+        { id: 1, windowId: 1, index: 0, url: pdf, active: true },
+        { id: 2, windowId: 1, index: 1, url: pdf },
+      ],
+      session: { [LEDGER]: { 2: pdf } },
+    },
+    async (ops, state) => {
+      const result = await ops.runOp('openOrFocus', { url: pdf })
+      assert.equal(result.mode, OPEN_OR_FOCUS_MODE.FIND_ONLY)
+      assert.equal(result.reloaded, false)
+      assert.equal(state.calls.some((c) => c[0] === 'remove'), false, 'no tab was closed')
+      assert.deepEqual(state.tabs.map((t) => t.id).sort(), [1, 2])
+    }
+  )
+})
+
+test('an address that is not a file and not navigable is refused before any tab is touched', async () => {
+  // Unchanged from 0.3.0, and the one that must stay unchanged: a browser
+  // internal page gets no mode at all, so nothing is queried, found or moved.
+  await withFakeChrome({ tabs: [{ id: 1, windowId: 1, index: 0, url: 'https://example.com' }] }, async (ops, state) => {
+    for (const url of ['chrome://settings', 'about:blank', 'view-source:https://example.com']) {
+      await assert.rejects(
+        () => ops.runOp('openOrFocus', { url }),
+        (err) => err.code === ERR.RESTRICTED_URL,
+        url
+      )
+    }
     assert.equal(state.calls.length, 0, 'nothing was queried, created or moved')
   })
+})
+
+test('the mode rule sorts addresses into open-and-reload, find-and-move, and refused', () => {
+  assert.equal(openOrFocusMode('https://example.com/report'), OPEN_OR_FOCUS_MODE.FULL)
+  assert.equal(openOrFocusMode('file:///C:/dev/report.html'), OPEN_OR_FOCUS_MODE.FULL)
+  assert.equal(openOrFocusMode('file:///C:/dev/report.HTM'), OPEN_OR_FOCUS_MODE.FULL)
+
+  // Every other local file: findable and movable, never openable.
+  assert.equal(openOrFocusMode('file:///C:/dev/report.pdf'), OPEN_OR_FOCUS_MODE.FIND_ONLY)
+  assert.equal(openOrFocusMode('file:///C:/Users/someone/.env'), OPEN_OR_FOCUS_MODE.FIND_ONLY)
+  assert.equal(openOrFocusMode('file:///C:/dev/notes.html.txt'), OPEN_OR_FOCUS_MODE.FIND_ONLY)
+  assert.equal(openOrFocusMode('file:/c:/dev/report.pdf'), OPEN_OR_FOCUS_MODE.FIND_ONLY, 'the one-slash form')
+
+  // The four adversarial .html forms stay OUT of full mode, which is the only
+  // thing that matters about them: they cannot be opened or reloaded. Being
+  // findable costs nothing, because a tab list already reports every address.
+  for (const url of [
+    'file://attacker.example/share/report.html',
+    'file:////attacker.example/share/report.html',
+    'file:///C:/Users/someone/.env%00.html',
+    'file:///C:/Users/someone/secrets.env:report.html',
+  ]) {
+    assert.equal(openOrFocusMode(url), OPEN_OR_FOCUS_MODE.FIND_ONLY, url)
+    assert.equal(isOpenOrFocusUrl(url), false, `${url} must stay unopenable`)
+  }
+
+  // Not a file and not navigable: no mode at all.
+  for (const url of ['chrome://settings', 'brave://extensions', 'about:blank', 'devtools://x', '', null]) {
+    assert.equal(openOrFocusMode(url), null, String(url))
+  }
 })
 
 test('the ledger forgets tab ids that no longer exist', async () => {

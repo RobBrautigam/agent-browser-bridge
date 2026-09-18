@@ -26,10 +26,11 @@ import {
   OPS,
   RAW_TAB_ID_FIELD,
   TIMING,
+  OPEN_OR_FOCUS_MODE,
   describeOpenOrFocus,
-  isOpenOrFocusUrl,
   isRestrictedUrl,
   openOrFocusMatch,
+  openOrFocusMode,
   originOf,
   parseTabHandle,
   planOpenOrFocus,
@@ -612,11 +613,23 @@ async function activateTab(args) {
  *   It never moves a pinned tab. Pinning is a deliberate statement about where
  *   a tab lives, and Chromium would clamp the move anyway; the result says the
  *   tab stayed put rather than silently reporting a move that did not happen.
+ *
+ *   It never opens or reloads a local file that is not .html or .htm. Such an
+ *   address gets FIND_ONLY mode: an existing tab showing it is found and moved,
+ *   and with no such tab the operation refuses and says which rule refused it,
+ *   so a launcher knows to open the file with its own opener. See
+ *   openOrFocusMode in the contract for why moving is not a widening of the
+ *   file rule.
  */
 async function openOrFocus(args) {
   const url = args ? args.url : null
   if (typeof url !== 'string' || !url.trim()) throw new OpError(ERR.BAD_REQUEST, '"url" is required.')
-  if (!isOpenOrFocusUrl(url)) {
+  // The extension derives the mode from the address itself rather than trusting
+  // a flag in the request. The broker derives the same mode from the same rule
+  // and refuses anything that has neither, so the two enforcement points agree
+  // by construction instead of one delegating to the other.
+  const mode = openOrFocusMode(url)
+  if (mode === null) {
     throw new OpError(
       ERR.RESTRICTED_URL,
       `Refusing to open ${originOf(url)} - that scheme is not drivable. The only local files this ` +
@@ -647,8 +660,27 @@ async function openOrFocus(args) {
     tabs,
     lastFocusedWindowId,
     allowFileName,
-    openedByUs: Object.keys(opened).map(Number),
+    // In find-only mode the ledger is not evidence of anything. This mode never
+    // creates a tab, so it cannot have opened one, and a ledger entry matching
+    // one of these tab ids can only mean a tab id was recycled after the tab
+    // this operation opened had gone. Closing on that basis would close a tab
+    // belonging to the operator, which is the one thing this capability
+    // promises never to do, so find-only closes nothing, ever.
+    openedByUs: mode === OPEN_OR_FOCUS_MODE.FIND_ONLY ? [] : Object.keys(opened).map(Number),
   })
+
+  if (plan.action === 'open' && mode === OPEN_OR_FOCUS_MODE.FIND_ONLY) {
+    // The whole of the find-only restriction, in one place: no tab is showing
+    // the address, and this mode may not create one. The message names the rule
+    // and the remedy, because the caller is usually a launcher whose next move
+    // is to open the file itself.
+    throw new OpError(
+      ERR.RESTRICTED_URL,
+      `No tab is showing ${originOf(url)}, and this operation only opens a local file when it is ` +
+        'an .html or .htm page. It found nothing to move, so nothing happened. Open it with your ' +
+        'own opener; call this again afterwards and it will reuse that tab.'
+    )
+  }
 
   if (plan.action === 'open') {
     // No `index`: Chromium appends a created tab to the end of its window, which
@@ -661,6 +693,7 @@ async function openOrFocus(args) {
     return withSummary({
       ok: true,
       action: 'opened',
+      mode,
       [RAW_TAB_ID_FIELD]: tab.id,
       windowId: tab.windowId,
       url: tab.pendingUrl || tab.url || url,
@@ -731,14 +764,20 @@ async function openOrFocus(args) {
   // and the page is on screen; answering with an error would tell the caller
   // nothing happened when most of it did, and the one-line answer says
   // "not reloaded" rather than claiming a refresh that did not land.
+  //
+  // In find-only mode the reload is not attempted at all. A reload is a
+  // navigation, and a navigation to a local file that is not an .html or .htm
+  // page is the thing this operation must never perform.
   let reloaded = false
-  try {
-    await chrome.tabs.reload(keeper.id, { bypassCache: false })
-    reloaded = true
-    // A reload builds a new document, so every snapshot ref for this tab is dead.
-    await clearSnapshot(keeper.id)
-  } catch (_err) {
-    reloaded = false
+  if (mode !== OPEN_OR_FOCUS_MODE.FIND_ONLY) {
+    try {
+      await chrome.tabs.reload(keeper.id, { bypassCache: false })
+      reloaded = true
+      // A reload builds a new document, so every snapshot ref for this tab is dead.
+      await clearSnapshot(keeper.id)
+    } catch (_err) {
+      reloaded = false
+    }
   }
 
   if (activate) {
@@ -753,6 +792,7 @@ async function openOrFocus(args) {
   return withSummary({
     ok: true,
     action: 'reused',
+    mode,
     [RAW_TAB_ID_FIELD]: keeper.id,
     windowId: keeper.windowId,
     url: keeper.url || url,
@@ -772,6 +812,69 @@ async function openOrFocus(args) {
 function withSummary(result) {
   return { ...result, summary: describeOpenOrFocus(result) }
 }
+
+/* -------------------------------------------------------------------------- */
+/* reloadExtension                                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Reload this extension, so a new release reaches this profile with nobody
+ * clicking anything.
+ *
+ * Chromium reads an unpacked extension's code once, when it loads it. Pulling
+ * new code into the install folder changes nothing in a running browser, and
+ * the only thing that picks it up is the Reload button on the extensions page,
+ * per profile. chrome.runtime.reload() is that button, callable from inside the
+ * extension - but only by the code that is already loaded, which is why the
+ * release that ADDS this operation still needs the click once, and no release
+ * after it does.
+ *
+ * Two mechanics matter, and both are the reason this function is shaped like
+ * this rather than simply calling reload():
+ *
+ *   THE ANSWER HAS TO LEAVE FIRST. reload() tears down the service worker, and
+ *   with it the native-messaging port this result would travel on. Calling it
+ *   inline would drop the reply and the caller would see a dropped connection
+ *   instead of an acknowledgement. So the result is returned and the reload is
+ *   scheduled behind a short timer, which lets the dispatcher serialize and
+ *   post the frame first.
+ *
+ *   THE ACKNOWLEDGEMENT IS NOT PROOF. It says the extension was asked, and
+ *   nothing more. What proves a reload landed is the profile coming back on the
+ *   bridge reporting a different version, which the caller waits for; the
+ *   contract's describeExtensionReload draws exactly that distinction in the
+ *   sentence it builds.
+ *
+ * No version check here on purpose. An extension cannot see the folder it was
+ * loaded from - getManifest() returns the manifest it is RUNNING - so it cannot
+ * tell whether there is new code to load. The broker can, and does, and refuses
+ * the request when there is not.
+ */
+async function reloadExtension() {
+  const version = chrome.runtime.getManifest().version
+
+  // Long enough for the dispatcher to post the result frame, short enough that
+  // nobody waits on it. A worker evicted inside this window loses the reload,
+  // not the answer, and the caller's verification step reports it honestly as
+  // a profile that did not come back on a new version.
+  setTimeout(() => {
+    chrome.runtime.reload()
+  }, RELOAD_DELAY_MS)
+
+  return {
+    ok: true,
+    reloading: true,
+    version,
+    delayMs: RELOAD_DELAY_MS,
+  }
+}
+
+/**
+ * The gap between answering and reloading. 200 ms is two orders of magnitude
+ * more than the native-messaging post needs and small enough that a caller
+ * polling for the profile to come back never notices it.
+ */
+const RELOAD_DELAY_MS = 200
 
 /**
  * chrome.tabs.get without the throw.
@@ -1410,6 +1513,7 @@ const HANDLERS = Object.freeze({
   [OPS.PRESS_KEYS]: pressKeys,
   [OPS.WAIT_FOR]: waitFor,
   [OPS.EVAL_JS]: evalJs,
+  [OPS.RELOAD_EXTENSION]: reloadExtension,
   [OPS.SET_LABEL]: setLabel,
 })
 

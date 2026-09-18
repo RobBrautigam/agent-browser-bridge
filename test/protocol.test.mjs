@@ -66,6 +66,40 @@ test('isRestrictedUrl refuses browser-internal and Web Store URLs', () => {
   }
 })
 
+test('a refused scheme stays refused however many slashes follow it', () => {
+  // Found and PROVED during 0.4.0, not theorized. The rule used to be a text
+  // prefix check, which made it a rule about slashes rather than about schemes.
+  // `file:` is a special scheme in the URL Standard, so every form below
+  // canonicalizes to an ordinary file:// URL that Chromium navigates to, and
+  // none of them starts with the seven characters "file://".
+  //
+  // The live check, against a real Brave profile through the bridge: a
+  // browser_navigate to file:/C:/.../page.html (one slash) was ACCEPTED, the
+  // browser canonicalized it to file:///C:/.../page.html, and the tab rendered
+  // the local file, with the page title coming back in the result. That is the
+  // unarmed local-file primitive the refusal exists to prevent, reachable by
+  // deleting two characters. Hence the scheme check beside the prefix check.
+  const sameSchemeFewerSlashes = [
+    'file:/C:/Users/alice/.secrets.env',
+    'file:C:/Users/alice/.secrets.env',
+    'FILE:/C:/Users/alice/.secrets.env',
+    'file:\\\\server\\share\\secrets.txt',
+    'chrome:/settings',
+    'chrome:settings',
+    'devtools:/devtools/bundled/inspector.html',
+    'chrome-extension:/abc/options.html',
+  ]
+  for (const url of sameSchemeFewerSlashes) {
+    assert.equal(isRestrictedUrl(url), true, `${url} must be refused on its scheme`)
+  }
+
+  // And the prefix rules that are about a SITE rather than a scheme still work,
+  // because https: itself is obviously not a refused scheme.
+  assert.equal(isRestrictedUrl('https://chromewebstore.google.com/detail/x'), true)
+  assert.equal(isRestrictedUrl('https://example.com/'), false)
+  assert.equal(isRestrictedUrl('https://filesystem.example.com/file:/x'), false, 'a scheme inside a path is not a scheme')
+})
+
 test('isRestrictedUrl refuses file:// - it is the local-file read primitive', () => {
   // The single most important entry on the list, and the one a reader is most
   // likely to think is harmless. navigate is WRITE tier and readPage is READ
@@ -419,6 +453,7 @@ test('emptyBoard has exactly the keys the Board typedef documents', () => {
   const board = emptyBoard()
   assert.deepEqual(Object.keys(board).sort(), [
     'audit',
+    'installedVersion',
     'lines',
     'now',
     'panic',
@@ -449,6 +484,12 @@ test('emptyBoard defaults version and clock, and startedAt tracks now', () => {
   assert.equal(pinned.version, '1.2.3')
   assert.equal(pinned.now, 1_700_000_000_000)
   assert.equal(pinned.startedAt, 1_700_000_000_000)
+
+  // The installed version defaults to the broker's own, which is what it is on
+  // a broker started after the last pull, and is settable because on a broker
+  // that has been up since login the folder can hold something newer.
+  assert.equal(pinned.installedVersion, '1.2.3', 'defaults to the broker version')
+  assert.equal(emptyBoard('1.2.3', 1, '1.3.0').installedVersion, '1.3.0')
 })
 
 test('LINK states are exactly the four the heartbeat clock can produce', () => {
