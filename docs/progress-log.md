@@ -18,7 +18,16 @@ names, machine names or private paths.
   "never closes a tab the operator opened" is a claim about what the code DID.
 - One carve-out from the `file:` refusal, for a path ending in .html or .htm,
   enforced in the extension and again in the broker. SECURITY.md carries the
-  reasoning and the two limits that back it up.
+  reasoning and the two limits that back it up. The adversarial review of this
+  change found four ways a string ends in .html while naming something else - a
+  UNC host, a leading double slash, a NUL that truncates the name, and an NTFS
+  alternate data stream - and each is now refused with a test named after it.
+- The same review found two ordering defects, both fixed: the survivor is
+  confirmed alive BEFORE any duplicate is closed, so a race cannot leave fewer
+  tabs and no page, and each duplicate is re-read immediately before it is
+  removed, so a tab the operation opened but the operator has since navigated
+  elsewhere is left alone. A reload that fails is now reported in the one-line
+  answer rather than thrown, because by then the tab is already in place.
 - `BrokerClient` gained a `socketPath` option so the broker-unreachable path can
   be proved against a dead endpoint rather than by stopping a broker other
   sessions are using.

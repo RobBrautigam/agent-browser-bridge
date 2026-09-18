@@ -361,27 +361,57 @@ export function isRestrictedUrl(url) {
  */
 export const LOCAL_PAGE_EXTENSIONS = Object.freeze(['.html', '.htm'])
 
-/** True for a `file:` URL that points at a local HTML page, and nothing else. */
+/**
+ * True for a `file:` URL that points at a local HTML page, and nothing else.
+ *
+ * Four refusals below are not defensive padding. Each one is a way a string
+ * that ENDS IN .html names something that is not a local HTML page, and each
+ * would quietly widen the one carve-out this system has.
+ */
 export function isLocalPageUrl(url) {
   if (typeof url !== 'string') return false
   const trimmed = url.trim()
   if (!/^file:\/\//i.test(trimmed)) return false
-  let pathname
+  let parsed
   try {
-    pathname = new URL(trimmed).pathname
+    parsed = new URL(trimmed)
   } catch {
     return false
   }
+
+  // A `file:` URL with a HOST is a network path, not a local file:
+  // file://server/share/page.html makes Windows open an SMB connection to
+  // `server`, which is an outbound credential-carrying fetch wearing a local
+  // page's clothes. Nothing legitimate needs it here, because the whole point
+  // of this operation is showing a file that is already on the machine.
+  if (parsed.host !== '') return false
+
   // Judge the DECODED path: %2E%68%74%6D%6C is the same file as .html, and a
   // rule that only reads the raw form would refuse a legitimate page while a
   // percent-encoded one sailed past a check written the other way round.
-  let decoded = pathname
+  let decoded = parsed.pathname
   try {
-    decoded = decodeURIComponent(pathname)
+    decoded = decodeURIComponent(parsed.pathname)
   } catch {
     /* a malformed escape widens nothing: judge the raw path instead */
   }
-  const lower = decoded.toLowerCase()
+  const path = decoded.replace(/\\/g, '/')
+
+  // file:////server/share/page.html reaches the same network share with an
+  // empty host, so the leading double slash is refused as well.
+  if (path.startsWith('//')) return false
+
+  // A control character, and a NUL in particular, is a truncation attack: the
+  // rule reads ".../secrets.env\0.html" and the filesystem opens secrets.env.
+  if (/[ -]/.test(path)) return false
+
+  const lower = path.toLowerCase()
+
+  // An NTFS alternate data stream, "secrets.env:page.html", ends in .html while
+  // naming a completely different file. The only colon a local path may carry
+  // is the drive letter's.
+  if (lower.replace(/^\/[a-z]:/, '').includes(':')) return false
+
   return LOCAL_PAGE_EXTENSIONS.some((ext) => lower.endsWith(ext))
 }
 

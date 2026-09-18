@@ -90,6 +90,16 @@ test('the openOrFocus rules agree, address by address', () => {
     'https://example.com/report',
     'chrome://settings',
     '',
+    // The adversarial cases specifically. These are the inputs where a drift
+    // between the two copies would not merely disagree, it would let one side
+    // accept a network path, a truncated name or an alternate data stream.
+    'file://attacker.example/share/report.html',
+    'file:////attacker.example/share/report.html',
+    'file:///C:/Users/someone/.env%00.html',
+    'file:///C:/Users/someone/secrets.env:report.html',
+    'file:///C:/Users/someone/.env.html.',
+    'file:///C:/Users/someone/.env?x=.html',
+    'file:///home/someone/report.html',
   ]
   for (const url of urls) {
     assert.equal(mirror.isLocalPageUrl(url), shared.isLocalPageUrl(url), url)
