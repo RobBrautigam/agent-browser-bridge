@@ -889,6 +889,10 @@ function allowReload(conn, msg, route) {
   // the profile re-registers, and it expires on its own so a reload that never
   // lands cannot lock the operation out forever.
   const pendingUntil = pendingReloads.get(route.installId)
+  // An expired entry is deleted when it is noticed rather than left to be
+  // overwritten, so the map holds only profiles with a reload genuinely in
+  // flight instead of one entry per profile the broker has ever reloaded.
+  if (pendingUntil && pendingUntil <= Date.now()) pendingReloads.delete(route.installId)
   if (pendingUntil && pendingUntil > Date.now()) {
     reply(
       conn,
@@ -1990,6 +1994,9 @@ function heartbeat() {
         )
         route.conn?.destroy('missed too many heartbeats')
         routes.detach(route)
+        // A route that is gone is not waiting for a reload any more, and when it
+        // comes back it will register, which clears this anyway.
+        pendingReloads.delete(route.installId)
         continue
       }
       if (route.missed >= TIMING.STALE_AFTER_MISSED && route.link !== LINK.STALE) {

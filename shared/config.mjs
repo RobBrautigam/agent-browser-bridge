@@ -174,35 +174,57 @@ const MAX_MANIFEST_BYTES = 256 * 1024
  *   is a real state on a half-finished install and must not read as "0.0.0"
  */
 export function installedExtensionVersion() {
-  let key
+  // Opened ONCE and then checked and read through that same descriptor. The
+  // first version of this stat'd the path and then read the path, which is two
+  // different files if anything swaps them in between, so the check said
+  // "a small regular file" about something the read then blocked on. This runs
+  // inside the always-on broker on every board build, so a read that blocks
+  // costs every profile its route, and one that is unexpectedly enormous costs
+  // the process.
+  //
+  // O_NONBLOCK where the platform has it, so opening a FIFO cannot wait for a
+  // writer that never comes. Windows does not define it and does not have the
+  // problem at an ordinary path.
+  let fd
   try {
-    // lstat, not stat, and a regular file only. This runs inside the always-on
-    // broker on every board build, and a synchronous read of something that is
-    // not an ordinary file - a symlink to a device, a named pipe, a directory -
-    // can block or exhaust it. A manifest is about a kilobyte; anything over the
-    // cap is not one, and the honest answer for all of these is "unreadable",
+    const nonBlock = fs.constants.O_NONBLOCK || 0
+    fd = fs.openSync(MANIFEST_FILE, fs.constants.O_RDONLY | nonBlock)
+    const stat = fs.fstatSync(fd)
+
+    // A manifest is about a kilobyte. Anything that is not an ordinary file, or
+    // is over the cap, is not a manifest, and the honest answer is "unreadable",
     // which every caller already handles.
-    const stat = fs.lstatSync(MANIFEST_FILE)
     if (!stat.isFile() || stat.size > MAX_MANIFEST_BYTES) {
       installedVersionCache = { key: null, version: null }
       return null
     }
-    key = `${stat.mtimeMs}:${stat.size}`
+
+    const key = `${stat.mtimeMs}:${stat.size}`
+    if (key === installedVersionCache.key) return installedVersionCache.version
+
+    const buffer = Buffer.alloc(stat.size)
+    const read = fs.readSync(fd, buffer, 0, stat.size, 0)
+    let version = null
+    try {
+      const manifest = JSON.parse(buffer.subarray(0, read).toString('utf8'))
+      if (typeof manifest?.version === 'string' && manifest.version !== '') version = manifest.version
+    } catch {
+      version = null
+    }
+    installedVersionCache = { key, version }
+    return version
   } catch {
     installedVersionCache = { key: null, version: null }
     return null
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd)
+      } catch {
+        /* a descriptor that cannot be closed is not a reason to lose the answer */
+      }
+    }
   }
-  if (key === installedVersionCache.key) return installedVersionCache.version
-
-  let version = null
-  try {
-    const manifest = JSON.parse(fs.readFileSync(MANIFEST_FILE, 'utf8'))
-    if (typeof manifest?.version === 'string' && manifest.version !== '') version = manifest.version
-  } catch {
-    version = null
-  }
-  installedVersionCache = { key, version }
-  return version
 }
 
 /**
