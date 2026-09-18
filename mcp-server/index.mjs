@@ -428,6 +428,45 @@ function registerWriteTools(server) {
 
   tool(
     server,
+    'browser_open_or_focus',
+    {
+      title: 'Open a page, or reuse the tab already showing it',
+      description:
+        'Put a page in front of the human at this machine WITHOUT giving them a sixth copy of it. If a tab in that profile is already showing the address, that tab is reloaded and slid to the far right of the window it is already in; if none is, a new tab opens at the far right of that profile\'s most recently focused window. Use this instead of browser_open_tab for anything a person is meant to read, especially a page you regenerate and show again. Matching is by address: exactly, then ignoring the query and the fragment. It does not take the keyboard away from whoever is typing unless `activate` is set, and it never closes a tab it did not open itself. It DOES reload the tab it reuses, which discards anything unsaved in that tab, so point it at a page you are showing someone rather than at a form they are filling in. This is also the one tool that accepts a local file, and only a .html or .htm one, because showing a generated page is the job it exists for.',
+      inputSchema: z.object({
+        profile: profileArg,
+        url: z
+          .string()
+          .min(1)
+          .describe('Absolute URL including the scheme, or a file:// URL ending in .html or .htm.'),
+        matchFileName: z
+          .boolean()
+          .default(false)
+          .describe(
+            'Also treat a local file with the SAME NAME under a different folder as the same page. Off by default because two git worktrees hold the same file name and routinely hold different versions of it, so reusing across them would show yesterday\'s document. Turn it on only when you know the folders are copies of one page.'
+          ),
+        activate: z
+          .boolean()
+          .default(false)
+          .describe(
+            'Bring the tab and its window to the front. Off by default: this tool is built to be safe to call while a human is typing in another window.'
+          ),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ profile, url, matchFileName, activate }) => {
+      const result = await client.request({
+        op: OPS.OPEN_OR_FOCUS,
+        profile,
+        args: { url, matchFileName, activate },
+      })
+      const summary = typeof result?.summary === 'string' ? result.summary : 'The operation finished.'
+      return shape.renderAction(`${profile}: ${summary}`, result)
+    }
+  )
+
+  tool(
+    server,
     'browser_close_tab',
     {
       title: 'Close a tab',
