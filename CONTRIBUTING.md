@@ -32,6 +32,25 @@ written down, so the fastest way to a merged change is to read them first.
 Every one of those exists because the mistake it catches is invisible in
 review and expensive at runtime. Do not add an exception; fix the cause.
 
+## What a commit message may not carry
+
+`npm run hooks:install` also installs a `commit-msg` hook. It refuses a
+commit whose message carries either of these:
+
+- a `Co-Authored-By:` trailer, of any kind
+- a "Generated with ..." tool attribution line
+
+An AI agent is a tool the author used, not a contributor. The refusal on
+`Co-Authored-By:` is deliberately blanket rather than AI-only, because a rule
+that names the tools it knows about is a rule the next tool walks straight
+through.
+
+This is not a style preference. A trailer follows the code into every clone,
+every mirror and every blame view, and taking it back out later means
+rewriting published history, which this repository had to do on 2026-09-19.
+If the hook blocks you, take the line out of the message. Do not reach for
+`--no-verify`.
+
 ## Running things
 
 ```bash

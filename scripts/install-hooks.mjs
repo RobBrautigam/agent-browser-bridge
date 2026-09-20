@@ -37,6 +37,9 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const BEGIN = `# === ${PRODUCT_NAME} gate (managed by scripts/install-hooks.mjs) ===`
 const END = `# === end ${PRODUCT_NAME} gate ===`
 
+const MSG_BEGIN = '# === no AI attribution in commit messages (managed by scripts/install-hooks.mjs) ==='
+const MSG_END = '# === end no AI attribution in commit messages ==='
+
 /**
  * The block itself.
  *
@@ -65,6 +68,66 @@ else
   echo "WARNING: node is not on PATH, so the ${PRODUCT_NAME} gate did not run for this commit."
 fi
 ${END}`
+
+/**
+ * The commit-msg block: no AI attribution in a commit message, ever.
+ *
+ * Rob Brautigam, 2026-09-19. Claude, or any other agentic coding AI agent, is
+ * a tool the author used; it is not a contributor. A trailer saying otherwise
+ * follows the code into every clone, every mirror and every blame view, and
+ * taking it back out later means rewriting published history, which is what
+ * this repo had to do on 2026-09-19.
+ *
+ * The Co-Authored-By refusal is blanket rather than AI-only on purpose: a rule
+ * that names the tools it knows about is a rule the next tool walks straight
+ * through.
+ *
+ * It reads only what the author wrote. `git commit --verbose` puts the whole
+ * staged diff below a scissors line, and that diff can legitimately quote the
+ * very trailer this refuses - this file does. Cutting at the scissors before
+ * looking is what stops the hook blocking a commit over a word in the change.
+ */
+const MSG_BLOCK = `${MSG_BEGIN}
+written=$(
+  sed -e '/^#.*-\\{6,\\} *>8 *-\\{6,\\}/,$d' "$1" | git stripspace --strip-comments
+)
+msg_found=0
+if printf '%s\\n' "$written" | grep -qiE '^[[:space:]]*co-authored-by:[[:space:]]*[^[:space:]]'; then
+  echo ""
+  echo "COMMIT BLOCKED: the message carries a Co-Authored-By trailer."
+  printf '%s\\n' "$written" | grep -iE '^[[:space:]]*co-authored-by:' | sed 's/^/    /'
+  echo ""
+  echo "  This repo carries no co-author trailer. An AI agent is a tool the author"
+  echo "  used, not a contributor, and the trailer would follow the code into every"
+  echo "  clone and every contributor graph from here on."
+  echo "  Take the line out of the commit message and commit again."
+  echo ""
+  msg_found=1
+fi
+if printf '%s\\n' "$written" | grep -qiE 'generated with[[:space:]]+(\\[|.*(claude|anthropic|copilot|codex|cursor|gemini|chatgpt|gpt-[0-9]))'; then
+  echo ""
+  echo "COMMIT BLOCKED: the message carries a tool attribution line."
+  printf '%s\\n' "$written" | grep -iE 'generated with' | sed 's/^/    /'
+  echo ""
+  echo "  Say what the change does, not what wrote it."
+  echo "  Take the line out of the commit message and commit again."
+  echo ""
+  msg_found=1
+fi
+if [ "$msg_found" != "0" ]; then
+  exit 1
+fi
+${MSG_END}`
+
+/**
+ * Every hook this script manages. Each one is a name, the markers that make
+ * re-running replace its block rather than stack another copy, and the block
+ * itself.
+ */
+const HOOKS = [
+  { name: 'pre-commit', begin: BEGIN, end: END, block: BLOCK, what: `the ${PRODUCT_NAME} gate` },
+  { name: 'commit-msg', begin: MSG_BEGIN, end: MSG_END, block: MSG_BLOCK, what: 'the no-AI-attribution guard' },
+]
 
 const useColor = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR
 const paint = (code, s) => (useColor ? `\u001b[${code}m${s}\u001b[0m` : s)
@@ -98,58 +161,54 @@ function usage() {
   console.log(`
 ${bold(`${PRODUCT_NAME} install-hooks`)}
 
-  node scripts/install-hooks.mjs             install or refresh the pre-commit gate block
+  node scripts/install-hooks.mjs             install or refresh every managed hook block
   node scripts/install-hooks.mjs --dry-run   show what would change, write nothing
-  node scripts/install-hooks.mjs --remove    take the gate block out again
+  node scripts/install-hooks.mjs --remove    take the managed blocks out again
   node scripts/install-hooks.mjs --help
 
-Appends to .git/hooks/pre-commit without touching anything already in it.
+Manages two hooks, appending to each without touching anything already in it:
+
+  pre-commit   the ${PRODUCT_NAME} gate
+  commit-msg   the no-AI-attribution guard
 `)
 }
 
-function main(argv) {
-  if (argv.includes('--help') || argv.includes('-h')) {
-    usage()
-    return 0
-  }
-  const dryRun = argv.includes('--dry-run')
-  const remove = argv.includes('--remove')
-
-  const dir = hooksDir()
-  const hookFile = path.join(dir, 'pre-commit')
-
-  console.log(bold(`${PRODUCT_NAME} install-hooks`))
-  console.log(dim(`  hook   ${hookFile}`))
-  console.log(dim(`  mode   ${remove ? 'REMOVE' : 'INSTALL'}${dryRun ? ' (--dry-run, nothing is written)' : ''}`))
-  console.log('')
+/**
+ * Install, refresh or remove one hook's block.
+ *
+ * Returns 0 on success and 1 on a failure worth stopping for. Each hook is
+ * reported on its own, because "install-hooks said it worked" should mean
+ * every hook and not just the first one.
+ */
+function installOne(hook, dir, { dryRun, remove }) {
+  const hookFile = path.join(dir, hook.name)
+  console.log(bold(`  ${hook.name}`) + dim(`  ${hook.what}`))
+  console.log(dim(`    file   ${hookFile}`))
 
   const existing = readOrNull(hookFile)
-  const next = remove ? withoutBlock(existing) : withBlock(existing)
+  const next = remove ? withoutBlock(existing, hook) : withBlock(existing, hook)
 
   if (next === null) {
-    console.log(green(remove ? 'The gate block is not in the hook. Nothing to remove.' : 'Nothing to do.'))
+    console.log(green(remove ? '    the block is not in the hook, nothing to remove' : '    nothing to do'))
     return 0
   }
   if (existing !== null && next === existing) {
-    console.log(green('The hook already carries the current gate block. Nothing to change.'))
+    console.log(green('    already carries the current block, nothing to change'))
     return 0
   }
 
   console.log(
     existing === null
-      ? yellow('The hook does not exist yet, so it will be created.')
-      : hasBlock(existing)
-        ? 'The hook carries an older gate block, which will be replaced in place.'
-        : `The hook exists and will be left intact; the gate block is inserted ${insertionDescription(existing)}.`
+      ? yellow('    the hook does not exist yet, so it will be created')
+      : hasBlock(existing, hook)
+        ? '    the hook carries an older block, which will be replaced in place'
+        : `    the hook exists and will be left intact; the block is inserted ${insertionDescription(existing)}`
   )
 
   if (dryRun) {
-    console.log('')
-    console.log(dim('--- pre-commit would become ---'))
+    console.log(dim(`    --- ${hook.name} would become ---`))
     console.log(next)
-    console.log(dim('--- end ---'))
-    console.log('')
-    console.log(yellow('--dry-run: nothing was written.'))
+    console.log(dim('    --- end ---'))
     return 0
   }
 
@@ -161,30 +220,60 @@ function main(argv) {
     try {
       fs.chmodSync(hookFile, 0o755)
     } catch {
-      console.log(yellow(`NOTE: could not set the executable bit on ${hookFile}.`))
+      console.log(yellow(`    NOTE: could not set the executable bit on ${hookFile}.`))
     }
   } catch (err) {
-    console.error(red(`FATAL: could not write ${hookFile}: ${String(err?.message || err)}`))
+    console.error(red(`    FATAL: could not write ${hookFile}: ${String(err?.message || err)}`))
     return 1
   }
 
   /* Verify by reading back rather than trusting the write. */
   const after = readOrNull(hookFile)
   if (after !== next) {
-    console.error(red(`FAIL: ${hookFile} did not read back as written.`))
+    console.error(red(`    FAIL: ${hookFile} did not read back as written.`))
     return 1
   }
   if (remove) {
-    console.log(green(`removed the gate block from ${hookFile}`))
+    console.log(green('    removed the block'))
     return 0
   }
-  if (!hasBlock(after)) {
-    console.error(red('FAIL: the gate block is not present after writing it.'))
+  if (!hasBlock(after, hook)) {
+    console.error(red('    FAIL: the block is not present after writing it.'))
     return 1
   }
+  console.log(green('    installed'))
+  return 0
+}
 
-  console.log(green(`installed the gate block into ${hookFile}`))
+function main(argv) {
+  if (argv.includes('--help') || argv.includes('-h')) {
+    usage()
+    return 0
+  }
+  const dryRun = argv.includes('--dry-run')
+  const remove = argv.includes('--remove')
+
+  const dir = hooksDir()
+
+  console.log(bold(`${PRODUCT_NAME} install-hooks`))
+  console.log(dim(`  hooks  ${dir}`))
+  console.log(dim(`  mode   ${remove ? 'REMOVE' : 'INSTALL'}${dryRun ? ' (--dry-run, nothing is written)' : ''}`))
   console.log('')
+
+  let failed = 0
+  for (const hook of HOOKS) {
+    failed += installOne(hook, dir, { dryRun, remove })
+    console.log('')
+  }
+
+  if (failed) {
+    console.error(red(`${failed} hook(s) failed.`))
+    return 1
+  }
+  if (dryRun) {
+    console.log(yellow('--dry-run: nothing was written.'))
+    return 0
+  }
   console.log(dim('  Verify it end to end: break a rule on purpose, try to commit, and watch it refuse.'))
   return 0
 }
@@ -199,16 +288,16 @@ function readOrNull(file) {
   }
 }
 
-function hasBlock(text) {
-  return typeof text === 'string' && text.includes(BEGIN)
+function hasBlock(text, hook) {
+  return typeof text === 'string' && text.includes(hook.begin)
 }
 
 /** The hook text with our block present exactly once, and nothing else disturbed. */
-function withBlock(existing) {
+function withBlock(existing, hook) {
   if (existing === null) {
-    return `#!/bin/sh\n# ${PRODUCT_NAME} hooks. Installed by scripts/install-hooks.mjs.\n\n${BLOCK}\n\nexit 0\n`
+    return `#!/bin/sh\n# ${PRODUCT_NAME} hooks. Installed by scripts/install-hooks.mjs.\n\n${hook.block}\n\nexit 0\n`
   }
-  if (hasBlock(existing)) return replaceBlock(existing, BLOCK)
+  if (hasBlock(existing, hook)) return replaceBlock(existing, hook, hook.block)
 
   const lines = existing.split('\n')
   // Find the LAST bare `exit 0`. Anything appended after it would never run,
@@ -224,13 +313,13 @@ function withBlock(existing) {
     const tail = existing.endsWith('\n') ? '' : '\n'
     return `${existing}${tail}\n${BLOCK}\n`
   }
-  lines.splice(insertAt, 0, '', ...BLOCK.split('\n'), '')
+  lines.splice(insertAt, 0, '', ...hook.block.split('\n'), '')
   return lines.join('\n')
 }
 
-function withoutBlock(existing) {
-  if (!hasBlock(existing)) return null
-  return replaceBlock(existing, null)
+function withoutBlock(existing, hook) {
+  if (!hasBlock(existing, hook)) return null
+  return replaceBlock(existing, hook, null)
 }
 
 /**
@@ -238,10 +327,10 @@ function withoutBlock(existing) {
  * appending is what makes re-running safe: an updated block lands once instead
  * of stacking a second copy that runs the gate twice.
  */
-function replaceBlock(text, replacement) {
+function replaceBlock(text, hook, replacement) {
   const lines = text.split('\n')
-  const start = lines.findIndex((l) => l.includes(BEGIN))
-  let end = lines.findIndex((l, i) => i >= start && l.includes(END))
+  const start = lines.findIndex((l) => l.includes(hook.begin))
+  let end = lines.findIndex((l, i) => i >= start && l.includes(hook.end))
   if (end === -1) end = lines.length - 1
   const head = lines.slice(0, start)
   const tail = lines.slice(end + 1)

@@ -454,7 +454,7 @@ npm run gate             # the security rules, mechanically enforced
 npm run doctor           # diagnose an install
 npm run e2e              # the whole chain, against a real Brave and a throwaway profile
 npm run reload           # reload the extension in every profile that is behind
-npm run hooks:install    # run the gate before every commit
+npm run hooks:install    # the gate before every commit, and the commit-message guard
 ```
 
 Pure ESM, Node 22, no build step, no bundler. Every file runs as written.
