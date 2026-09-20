@@ -365,7 +365,11 @@ queue. There is no session 2 unless Rob answers GIT1 with a rewrite.
    text is in this repo at `scripts/install-hooks.mjs`.
 
 5. **`c:/dev/agent-browser-bridge-open-or-focus` sits on orphaned history** (`cf1f629`, a merged
-   branch). Harmless, but it is a worktree on commits the server no longer has. Safe to tear down.
+   branch). Measured after the push, its branch `fix/reload-bootstrap-message` is the **only ref on
+   this machine that still reaches the pre-rewrite trailers**; every other local ref, and the whole
+   server, is clean. Tearing the worktree down and deleting that branch removes the last local copy.
+   It is a merged branch, so nothing is lost. This session did not do it, because worktree folders
+   belong to the orchestrator.
 
 6. **A human co-author trailer is now refused too**, in all 25 repos. That is deliberate and matches
    the standing rule. If Rob ever wants to credit a real person in a commit, the hook has to be
