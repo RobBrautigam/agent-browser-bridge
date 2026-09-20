@@ -33,7 +33,7 @@ worth reading before the numbers:
    and a line in `git log` for anyone who cloned. Those are gone. This is stated plainly because
    "the contributor list is now clean" would be a true sentence that implies a false thing.
 
-3. **Eleven trailer lines survive, and cannot be removed by any push.** GitHub keeps an immutable
+3. **Eight trailer lines, in six commits, survive, and cannot be removed by any push.** GitHub keeps an immutable
    snapshot of every pull request's head at `refs/pull/N/head`. Those refs still point at the
    pre-rewrite commits for pull requests 2, 3, 4 and 5. Details and the options in section 4.
 
@@ -260,7 +260,8 @@ overnight run, not as part of a batch.
 
 ## 4. Misses and lessons
 
-**1. Eleven trailer lines are still reachable on GitHub, and no push can remove them.** GitHub keeps
+**1. Eight trailer lines, in six commits, are still reachable on GitHub, and no push can
+remove them.** GitHub keeps
 an immutable snapshot of each pull request's head at `refs/pull/N/head`, and those refs are read-only.
 Confirmed by fetching them from the server after the push:
 
@@ -271,6 +272,12 @@ Confirmed by fetching them from the server after the push:
 | `refs/pull/3/head` | `0926bba` | 2 |
 | `refs/pull/4/head` | `b248d68` | 3 |
 | `refs/pull/5/head` | `cf1f629` | 3 |
+
+The per-ref counts above do not add up to eight, and should not: these refs share ancestry, so
+summing them counts the same commit several times. Measured across the union of all four refs it is
+**8 lines in 6 commits**. Three of those six (`7b1dc43`, `89ce8fa`, `6f99301`) never appeared on
+`main` in any form: they are pre-squash commits from pull request 2, which is why the total is
+larger than the 5 lines in 3 commits that the branches and tags carried.
 
 They are **not** in `main`, not in any tag, not in any branch, and **not in a fresh clone**. They are
 visible only to someone who opens a merged pull request's Commits tab on purpose, or who fetches
@@ -340,8 +347,8 @@ queue. There is no session 2 unless Rob answers GIT1 with a rewrite.
    clone; treat `rob-os` as its own overnight run.
    Direct link: `https://rob.brauto.dev/open?detail=c323bcf8-fcdc-4745-ac95-1fe9ec5b88ce`
 
-2. **Eleven trailer lines remain reachable at `refs/pull/{2,3,4,5}/head` on the public repo and no
-   push can remove them.** Recommended: accept it. They are not in main, not in any tag, and not in a
+2. **Eight trailer lines, in six commits, remain reachable at `refs/pull/{2,3,4,5}/head` on the
+   public repo and no push can remove them.** Recommended: accept it. They are not in main, not in any tag, and not in a
    fresh clone. The alternatives are a GitHub Support request to garbage-collect, or deleting and
    recreating the repository and losing its pull requests, releases and stars.
 
