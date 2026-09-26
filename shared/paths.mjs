@@ -31,6 +31,7 @@ import {
   STATE_DIR_NAME,
   SYSTEMD_UNIT,
 } from './config.mjs'
+import { AUTH_SCHEME, runtimeScheme } from './auth.mjs'
 
 /* -------------------------------------------------------------------------- */
 /* Platform                                                                    */
@@ -242,12 +243,18 @@ export function restrictToCurrentUser(file, { onWarn = () => {}, onOk = () => {}
 
 /**
  * Shape written by the broker on every start:
- *   { pipeName, token, pid, startedAt, version }
+ *   { pipeName, token, auth, pid, startedAt, version }
  *
  * The token rotates per boot, so a leaked one dies at the next restart, and
  * every client re-reads this file on EVERY connect attempt rather than caching
  * it. The shape lives here because the host, the MCP client and doctor were
  * each guessing at it independently - doctor tried three different key names.
+ *
+ * `auth` names the HELLO scheme this broker speaks (shared/auth.mjs). It is how
+ * a client decides to prove the token rather than send it, and to demand the
+ * broker's proof back; a file without it was written by a broker from before
+ * the scheme. It comes from this file and never from the pipe, so an impostor
+ * holding the pipe name cannot talk a client down to the old handshake.
  */
 export const RUNTIME_TOKEN_KEY = 'token'
 
@@ -255,6 +262,7 @@ export function writeRuntime({ token, version, pipeName }) {
   const runtime = {
     pipeName,
     [RUNTIME_TOKEN_KEY]: token,
+    auth: AUTH_SCHEME,
     pid: process.pid,
     startedAt: Date.now(),
     version,
@@ -276,6 +284,20 @@ export function readRuntimeToken() {
 
 export function readRuntime() {
   return readJson(RUNTIME_FILE, null)
+}
+
+/**
+ * The token and the HELLO scheme, from ONE read of the file, so a client never
+ * pairs a new broker's token with an old broker's scheme. Never throws, for the
+ * same reason readRuntimeToken does not.
+ */
+export function readRuntimeCredentials() {
+  const runtime = readJson(RUNTIME_FILE, null)
+  const token = runtime?.[RUNTIME_TOKEN_KEY]
+  return {
+    token: typeof token === 'string' && token.length > 0 ? token : null,
+    scheme: runtimeScheme(runtime),
+  }
 }
 
 /* -------------------------------------------------------------------------- */

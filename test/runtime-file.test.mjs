@@ -73,7 +73,7 @@ test('the suite is pointed at a temp directory, not the real state directory', (
 /* Round-trip                                                                  */
 /* -------------------------------------------------------------------------- */
 
-test('writeRuntime then readRuntime returns the pinned five-key shape', () => {
+test('writeRuntime then readRuntime returns the pinned six-key shape', () => {
   clearRuntime()
   const before = Date.now()
 
@@ -84,10 +84,11 @@ test('writeRuntime then readRuntime returns the pinned five-key shape', () => {
   })
 
   const read = readRuntime()
-  assert.deepEqual(Object.keys(read).sort(), ['pid', 'pipeName', 'startedAt', 'token', 'version'])
+  assert.deepEqual(Object.keys(read).sort(), ['auth', 'pid', 'pipeName', 'startedAt', 'token', 'version'])
   assert.deepEqual(read, written, 'the value returned to the broker must be the value on disk')
 
   assert.equal(read.token, 'a-per-boot-token')
+  assert.equal(read.auth, 'hmac-sha256-v1', 'the HELLO scheme clients must use with this broker')
   assert.equal(read.version, '0.1.0')
   assert.equal(read.pipeName, '\\\\.\\pipe\\agent-browser-bridge')
   assert.equal(read.pid, process.pid, 'the pid is how doctor tells a live broker from a stale file')

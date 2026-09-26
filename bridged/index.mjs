@@ -86,6 +86,7 @@ import {
   tierFor,
 } from './policy.mjs'
 import { installedExtensionVersion } from '../shared/config.mjs'
+import { NonceLedger, authenticateHello } from '../shared/auth.mjs'
 import {
   RouteTable,
   absentLabelHolder,
@@ -120,6 +121,9 @@ const STARTED_AT = Date.now()
 
 /** 256 bits, fresh every boot. See the file header for why rotation is safe. */
 const TOKEN = crypto.randomBytes(32).toString('hex')
+
+/** Nonces accepted by the HELLO proof this boot; see shared/auth.mjs. */
+const HELLO_NONCES = new NonceLedger()
 
 /** The broker log rotates on the same terms as the audit log: one generation, 5 MB. */
 const LOG_ROTATE_BYTES = 5 * 1024 * 1024
@@ -430,9 +434,18 @@ function handleHello(conn, msg) {
     )
     return
   }
-  if (!tokenMatches(msg.token)) {
+  // The client proves the token (or, from before the proof existed, sends it).
+  // A proof is answered with the broker's own, which is how the client knows
+  // this pipe is the broker and not something squatting on its name.
+  const verdict = authenticateHello(msg, TOKEN, HELLO_NONCES)
+  if (!verdict.ok) {
     // Say nothing about why. The client either read runtime.json or it did not.
-    log('warn', 'Rejected a connection with a bad token', { conn: conn.id, role: msg.role })
+    log('warn', 'Rejected a connection with a bad token', {
+      conn: conn.id,
+      role: msg.role,
+      scheme: verdict.scheme,
+      reason: verdict.reason,
+    })
     conn.sendAndClose(
       helloAck({
         ok: false,
@@ -521,17 +534,15 @@ function handleHello(conn, msg) {
       role: conn.role,
       pid: process.pid,
       panic: panic.active,
+      proof: verdict.proof,
     })
   )
-  log('info', 'Connection authenticated', { conn: conn.id, role: conn.role, client: conn.meta.client })
-}
-
-function tokenMatches(given) {
-  if (typeof given !== 'string') return false
-  const a = Buffer.from(given, 'utf8')
-  const b = Buffer.from(TOKEN, 'utf8')
-  if (a.length !== b.length) return false
-  return crypto.timingSafeEqual(a, b)
+  log('info', 'Connection authenticated', {
+    conn: conn.id,
+    role: conn.role,
+    client: conn.meta.client,
+    scheme: verdict.scheme || 'token',
+  })
 }
 
 /* -------------------------------------------------------------------------- */

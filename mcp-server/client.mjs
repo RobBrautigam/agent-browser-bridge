@@ -26,7 +26,8 @@
 import net from 'node:net'
 
 import { FrameDecoder, writeFrame } from '../shared/framing.mjs'
-import { RUNTIME_FILE, START_BROKER_COMMAND, readRuntimeToken } from '../shared/paths.mjs'
+import { RUNTIME_FILE, START_BROKER_COMMAND, readRuntimeCredentials } from '../shared/paths.mjs'
+import { ackProvesBroker, helloCredentials, impostorMessage } from '../shared/auth.mjs'
 import { ERR, MSG, PIPE_NAME, ROLE, TIMING, hello, req } from '../shared/protocol.mjs'
 
 /**
@@ -157,7 +158,7 @@ export class BrokerClient {
   }
 
   async #connect() {
-    const token = this.#readToken()
+    const credentials = this.#readCredentials()
     const socket = await this.#dial()
 
     this.#socket = socket
@@ -174,12 +175,19 @@ export class BrokerClient {
     socket.on('error', (err) => this.#teardown(new BridgeError(ERR.NO_BROKER, `Broker link error: ${err.message}`)))
     socket.on('close', () => this.#teardown(new BridgeError(ERR.NO_BROKER, 'The broker closed the connection.')))
 
-    const ack = await this.#handshake(socket, token)
+    const ack = await this.#handshake(socket, credentials.fields)
     if (ack?.ok !== true) {
       const code = ack?.error?.code || ERR.UNAUTHORIZED
       const message = ack?.error?.message || 'The broker refused the connection without saying why.'
       this.#teardown(new BridgeError(code, message))
       throw new BridgeError(code, message)
+    }
+    // An ok ack proves nothing on its own: anything holding the pipe name can
+    // send one. Only the broker that wrote runtime.json can answer the proof.
+    if (!ackProvesBroker(ack, credentials.expect)) {
+      const err = new BridgeError(ERR.UNAUTHORIZED, impostorMessage(this.#socketPath))
+      this.#teardown(err)
+      throw err
     }
 
     this.#handshakeDone = true
@@ -189,19 +197,22 @@ export class BrokerClient {
 
   /**
    * The runtime file's shape is owned by shared/paths.mjs, which is also what
-   * writes it. Reading it through readRuntimeToken() rather than guessing at a
-   * key name is why this client and the host cannot disagree about where the
-   * token lives.
+   * writes it. Reading it through readRuntimeCredentials() rather than guessing
+   * at a key name is why this client and the host cannot disagree about where
+   * the token lives, or about which HELLO the running broker speaks.
+   *
+   * @returns {{fields: object, expect: object|null}} what helloCredentials()
+   *          returns: the HELLO fields, and what the ack must prove
    */
-  #readToken() {
-    const token = readRuntimeToken()
+  #readCredentials() {
+    const { token, scheme } = readRuntimeCredentials()
     if (!token) {
       throw new BridgeError(
         ERR.NO_BROKER,
         `No broker token at ${RUNTIME_FILE}. The broker writes that file when it starts, so its absence means the broker has not run since this machine booted. Start it with: ${START_BROKER_COMMAND}`
       )
     }
-    return token
+    return helloCredentials({ token, scheme, role: ROLE.MCP })
   }
 
   #dial() {
@@ -251,7 +262,7 @@ export class BrokerClient {
    * a connection proves nothing about whether the broker behind it is alive,
    * so the link is not considered up until it has answered.
    */
-  #handshake(socket, token) {
+  #handshake(socket, credentialFields) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#pendingHello = null
@@ -278,7 +289,7 @@ export class BrokerClient {
       }
 
       try {
-        writeFrame(socket, hello({ role: ROLE.MCP, token, pid: process.pid }))
+        writeFrame(socket, hello({ role: ROLE.MCP, ...credentialFields, pid: process.pid }))
       } catch (err) {
         this.#pendingHello?.fail(new BridgeError(ERR.NO_BROKER, `Could not send HELLO: ${err.message}`))
       }

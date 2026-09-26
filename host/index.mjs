@@ -52,7 +52,8 @@ import {
   splitIntoChunks,
   backoffDelay,
 } from '../shared/protocol.mjs'
-import { START_BROKER_COMMAND, readRuntimeToken } from '../shared/paths.mjs'
+import { START_BROKER_COMMAND, readRuntimeCredentials } from '../shared/paths.mjs'
+import { helloCredentials, judgeFirstFrame } from '../shared/auth.mjs'
 
 /* -------------------------------------------------------------------------- */
 /* stdout guard - installed first, before anything else can log                */
@@ -108,6 +109,8 @@ let attempt = 0
 let reconnectTimer = null
 let ackTimer = null
 let awaitingOwnAck = false
+/** What this socket's HELLO_ACK must prove; see shared/auth.mjs. */
+let ackExpect = null
 let stdoutBlocked = false
 let socketBlocked = false
 let shuttingDown = false
@@ -147,18 +150,31 @@ function connect() {
   // Re-read on EVERY connect attempt. The broker mints a fresh token on each
   // start, so a host that cached one would be locked out until the browser
   // restarted it.
-  const token = readRuntimeToken()
+  const { token, scheme } = readRuntimeCredentials()
+
+  // No token, no dial. Without it this host cannot tell the broker from
+  // anything else holding the pipe name, and everything after an ok ack is
+  // relayed straight to the browser. The broker writes the token as it starts,
+  // so this is the same retryable state as a broker that is not up yet.
+  if (!token) {
+    log('no broker token in runtime.json yet, not dialing')
+    onSocketClosed()
+    return
+  }
+
+  const credentials = helloCredentials({ token, scheme, role: ROLE.HOST })
   const s = net.connect({ path: PIPE_NAME })
   socket = s
   socketDecoder = new FrameDecoder()
   awaitingOwnAck = true
+  ackExpect = credentials.expect
 
   s.on('connect', () => {
     writeFrame(
       s,
       hello({
         role: ROLE.HOST,
-        token,
+        ...credentials.fields,
         pid: process.pid,
         ppid: process.ppid,
         extensionOrigin: EXTENSION_ORIGIN,
@@ -205,6 +221,7 @@ function onSocketClosed() {
   socket = null
   socketDecoder = null
   awaitingOwnAck = false
+  ackExpect = null
   socketBlocked = false
   link = LINK.DOWN
   process.stdin.resume()
@@ -229,23 +246,35 @@ function onSocketClosed() {
 
 function handleFromBroker(msg) {
   // The pipe is ordered and we forward nothing until the link is ready, so the
-  // FIRST hello_ack on a fresh socket is unambiguously the answer to our own
-  // hello. Every later one belongs to the extension and is relayed.
-  if (awaitingOwnAck && msg?.type === MSG.HELLO_ACK) {
+  // FIRST frame on a fresh socket must be the answer to our own hello: the
+  // broker says nothing before it. Every later hello_ack belongs to the
+  // extension and is relayed.
+  if (awaitingOwnAck) {
     awaitingOwnAck = false
     clearTimeout(ackTimer)
     ackTimer = null
-    if (msg.ok) {
+    const verdict = judgeFirstFrame(msg, ackExpect)
+    if (verdict === 'ready') {
       link = LINK.READY
       attempt = 0
       log('link ready')
       flushOutbound()
-    } else {
-      logFatal(`broker refused hello: ${msg.error?.code || 'unknown'}`)
-      socket?.destroy()
+      return
     }
+    // Refused, unproven, or out of order: relay nothing, in either direction,
+    // and redial on the usual backoff. An ok ack without the broker's proof, or
+    // a frame ahead of the ack, means something other than the broker may own
+    // the pipe name.
+    if (verdict === 'refused') logFatal(`broker refused hello: ${msg.error?.code || 'unknown'}`)
+    else if (verdict === 'impostor') logFatal('the pipe answered HELLO without proving it is the broker; refusing to relay')
+    else logFatal(`the pipe sent ${String(msg?.type)} before answering HELLO; refusing to relay`)
+    socket?.destroy()
     return
   }
+
+  // Only a proven link relays. Frames decoded from the same chunk as a refused
+  // answer still arrive here while the socket is closing, and must go nowhere.
+  if (link !== LINK.READY) return
 
   if (msg?.type === MSG.RES && msg.id != null) pendingReqIds.delete(msg.id)
   sendToBrowser(msg)
