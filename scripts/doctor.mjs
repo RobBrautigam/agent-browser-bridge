@@ -52,10 +52,13 @@ import {
   installedBrowsers,
   readJson,
   readRuntime,
+  readRuntimeCredentials,
   readRuntimeToken,
   writeJsonAtomic,
 } from '../shared/paths.mjs'
+import { ackProvesBroker, helloCredentials } from '../shared/auth.mjs'
 import {
+  ERR,
   LINK,
   MSG,
   NATIVE_HOST_ID,
@@ -154,14 +157,21 @@ function pipeAnswers(timeoutMs = 2000) {
 /**
  * Full handshake plus one request.
  *
- * The token comes from readRuntimeToken(), which is the one function that knows
- * runtime.json's shape. Doctor used to try three key names of its own invention,
- * which meant a broker that had rotated its token correctly could still be
- * reported as refusing the handshake.
+ * The token comes from readRuntimeCredentials(), which is the one function that
+ * knows runtime.json's shape. Doctor used to try three key names of its own
+ * invention, which meant a broker that had rotated its token correctly could
+ * still be reported as refusing the handshake. Doctor proves the token rather
+ * than sending it, and checks the broker's proof before it believes an answer,
+ * exactly as the host and the MCP client do (shared/auth.mjs).
  */
 function askBroker(op, args = {}, { timeoutMs = 5000 } = {}) {
   return new Promise((resolve) => {
-    const token = readRuntimeToken()
+    const { token, scheme } = readRuntimeCredentials()
+    if (!token) {
+      resolve({ ok: false, error: `no broker token in ${RUNTIME_FILE}` })
+      return
+    }
+    const credentials = helloCredentials({ token, scheme, role: ROLE.MCP })
 
     const sock = net.connect({ path: PIPE_NAME })
     const decoder = new FrameDecoder()
@@ -180,7 +190,7 @@ function askBroker(op, args = {}, { timeoutMs = 5000 } = {}) {
     sock.on('error', (err) => done({ ok: false, error: err?.code || String(err?.message || err) }))
     sock.on('close', () => done({ ok: false, error: 'the broker closed the connection' }))
     sock.on('connect', () => {
-      writeFrame(sock, hello({ role: ROLE.MCP, token, client: 'doctor' }))
+      writeFrame(sock, hello({ role: ROLE.MCP, ...credentials.fields, client: 'doctor' }))
     })
     sock.on('data', (chunk) => {
       let messages
@@ -193,6 +203,12 @@ function askBroker(op, args = {}, { timeoutMs = 5000 } = {}) {
         if (msg?.type === MSG.HELLO_ACK) {
           if (msg.ok === false) {
             return done({ ok: false, error: msg.error?.code || msg.error?.message || 'handshake refused' })
+          }
+          if (!ackProvesBroker(msg, credentials.expect)) {
+            return done({
+              ok: false,
+              error: `${ERR.UNAUTHORIZED}: the pipe answered without the broker's proof; another process may own the name`,
+            })
           }
           writeFrame(sock, req({ id, op, args, timeoutMs: 4000 }))
         } else if (msg?.type === MSG.RES && msg.id === id) {

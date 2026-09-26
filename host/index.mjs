@@ -52,7 +52,8 @@ import {
   splitIntoChunks,
   backoffDelay,
 } from '../shared/protocol.mjs'
-import { START_BROKER_COMMAND, readRuntimeToken } from '../shared/paths.mjs'
+import { START_BROKER_COMMAND, readRuntimeCredentials } from '../shared/paths.mjs'
+import { ackProvesBroker, helloCredentials } from '../shared/auth.mjs'
 
 /* -------------------------------------------------------------------------- */
 /* stdout guard - installed first, before anything else can log                */
@@ -108,6 +109,8 @@ let attempt = 0
 let reconnectTimer = null
 let ackTimer = null
 let awaitingOwnAck = false
+/** What this socket's HELLO_ACK must prove; see shared/auth.mjs. */
+let ackExpect = null
 let stdoutBlocked = false
 let socketBlocked = false
 let shuttingDown = false
@@ -147,18 +150,31 @@ function connect() {
   // Re-read on EVERY connect attempt. The broker mints a fresh token on each
   // start, so a host that cached one would be locked out until the browser
   // restarted it.
-  const token = readRuntimeToken()
+  const { token, scheme } = readRuntimeCredentials()
+
+  // No token, no dial. Without it this host cannot tell the broker from
+  // anything else holding the pipe name, and everything after an ok ack is
+  // relayed straight to the browser. The broker writes the token as it starts,
+  // so this is the same retryable state as a broker that is not up yet.
+  if (!token) {
+    log('no broker token in runtime.json yet, not dialing')
+    onSocketClosed()
+    return
+  }
+
+  const credentials = helloCredentials({ token, scheme, role: ROLE.HOST })
   const s = net.connect({ path: PIPE_NAME })
   socket = s
   socketDecoder = new FrameDecoder()
   awaitingOwnAck = true
+  ackExpect = credentials.expect
 
   s.on('connect', () => {
     writeFrame(
       s,
       hello({
         role: ROLE.HOST,
-        token,
+        ...credentials.fields,
         pid: process.pid,
         ppid: process.ppid,
         extensionOrigin: EXTENSION_ORIGIN,
@@ -205,6 +221,7 @@ function onSocketClosed() {
   socket = null
   socketDecoder = null
   awaitingOwnAck = false
+  ackExpect = null
   socketBlocked = false
   link = LINK.DOWN
   process.stdin.resume()
@@ -235,6 +252,13 @@ function handleFromBroker(msg) {
     awaitingOwnAck = false
     clearTimeout(ackTimer)
     ackTimer = null
+    if (msg.ok && !ackProvesBroker(msg, ackExpect)) {
+      // Something answered on the pipe name without the broker's proof. Relay
+      // nothing, in either direction, and redial on the usual backoff.
+      logFatal('the pipe answered HELLO without proving it is the broker; refusing to relay')
+      socket?.destroy()
+      return
+    }
     if (msg.ok) {
       link = LINK.READY
       attempt = 0
