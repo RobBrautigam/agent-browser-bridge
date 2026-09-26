@@ -332,6 +332,10 @@ export const RESTRICTED_URL_PREFIXES = Object.freeze([
   // also requires a per-extension "allow access to file URLs" opt-in, but the
   // refusal belongs here rather than resting on a browser setting.
   'file://',
+  // javascript: is arbitrary script in the page, which is what browser_eval_js
+  // is armed for, and navigating needs no arm. Chromium refuses it in extension
+  // API navigations today; the broker refuses it too rather than resting on that.
+  'javascript:',
   'https://chromewebstore.google.com/',
   'https://chrome.google.com/webstore',
 ])
