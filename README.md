@@ -280,7 +280,7 @@ landing on whatever tab now holds that number.
 |---|---|---|
 | Read | `browser_list_profiles`, `browser_list_tabs`, `browser_read_page`, `browser_screenshot`, `browser_scroll`, `bridge_status` | always allowed |
 | Write | `browser_navigate`, `browser_open_tab`, `browser_open_or_focus`, `browser_close_tab`, `browser_activate_tab`, `browser_click`, `browser_fill`, `browser_press_keys`, `browser_wait_for`, `browser_reload_extension` | allowed, always audited |
-| Armed | `browser_eval_js` | refused unless a human armed that profile |
+| Armed | `browser_eval_js` | refused unless that profile is armed; see What arm does |
 | Control | `bridge_arm`, `bridge_panic` | |
 
 `browser_read_page` with format `snapshot` returns a tree of interactable
@@ -381,9 +381,17 @@ Stated plainly, because a security model nobody believes is worse than none.
   The only browser file the broker ever opens is `Local State`, and only the
   profile-name section of it: never `Cookies`, `Login Data` or `Web Data`.
 - **What arm does.** `browser_eval_js` runs arbitrary JavaScript inside a
-  logged-in session, so it is refused unless a human arms that profile, for
-  that profile only, for a bounded window (60 minutes at most, 15 by
-  default). Reading, clicking, navigating and typing never need arming.
+  logged-in session, so it is refused unless that profile is armed, for that
+  profile only, for a bounded window (60 minutes at most, 15 by default).
+  Reading, clicking, navigating and typing never need arming.
+- **Who can arm.** You can, from the Board. So can the agent, through the
+  `bridge_arm` tool, whose description tells it to ask you first; the broker
+  cannot tell which of you asked. The human step in front of an agent's arm is
+  therefore your agent client's tool-approval prompt. Keep `bridge_arm` off
+  every auto-approve list: in Claude Code, leave
+  `mcp__agent-browser-bridge__bridge_arm` out of `permissions.allow`, so each
+  arm asks you. A web page cannot arm: the extension's worker answers only its
+  own pages.
 - **What panic does.** `bridge_panic`, the press-and-hold control in the
   extension, or simply creating the file `PANIC` in the state directory drops
   every route, disarms everything and refuses every call until a human deletes
