@@ -321,6 +321,9 @@ export const RESTRICTED_URL_PREFIXES = Object.freeze([
   // tier, so without this a prompt injection could compose them into an
   // unarmed local-file read primitive.
   'file://',
+  // javascript: is arbitrary script in the page, which evalJs is armed for,
+  // and navigate needs no arm.
+  'javascript:',
   'https://chromewebstore.google.com/',
   'https://chrome.google.com/webstore',
 ])
