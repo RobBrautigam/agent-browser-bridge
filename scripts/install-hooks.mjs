@@ -31,14 +31,15 @@ import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 import { PRODUCT_NAME } from '../shared/protocol.mjs'
+import { isMain } from './claim.mjs'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
-const BEGIN = `# === ${PRODUCT_NAME} gate (managed by scripts/install-hooks.mjs) ===`
-const END = `# === end ${PRODUCT_NAME} gate ===`
+export const BEGIN = `# === ${PRODUCT_NAME} gate (managed by scripts/install-hooks.mjs) ===`
+export const END = `# === end ${PRODUCT_NAME} gate ===`
 
-const MSG_BEGIN = '# === no AI attribution in commit messages (managed by scripts/install-hooks.mjs) ==='
-const MSG_END = '# === end no AI attribution in commit messages ==='
+export const MSG_BEGIN = '# === no AI attribution in commit messages (managed by scripts/install-hooks.mjs) ==='
+export const MSG_END = '# === end no AI attribution in commit messages ==='
 
 /**
  * The block itself.
@@ -49,7 +50,7 @@ const MSG_END = '# === end no AI attribution in commit messages ==='
  * causes. The gate is also run in CI and by hand, so this is a fast guard, not
  * the only one.
  */
-const BLOCK = `${BEGIN}
+export const BLOCK = `${BEGIN}
 # Runs scripts/gate.mjs before every commit: no native modules, no dependency
 # outside the allowlist, no credential-store read, no TCP listener, no stray
 # stdout write in the protocol paths, no em dash, no raw color or inline script
@@ -86,12 +87,20 @@ ${END}`
  * staged diff below a scissors line, and that diff can legitimately quote the
  * very trailer this refuses - this file does. Cutting at the scissors before
  * looking is what stops the hook blocking a commit over a word in the change.
+ *
+ * The attribution pattern starts at a WORD START: the start of a line or any
+ * character that is not a letter, digit or underscore. Without it the pattern
+ * matched inside "regenerated with [the new script]" and refused an honest
+ * message, which blocked a real commit on 2026-09-26. The class is spelled in
+ * POSIX bracket form rather than `\b` because the hook runs under whatever grep
+ * the platform ships, and BSD grep on macOS does not promise `\b`.
  */
-const MSG_BLOCK = `${MSG_BEGIN}
+export const MSG_BLOCK = `${MSG_BEGIN}
 written=$(
   sed -e '/^#.*-\\{6,\\} *>8 *-\\{6,\\}/,$d' "$1" | git stripspace --strip-comments
 )
 msg_found=0
+attribution='(^|[^[:alnum:]_])generated with[[:space:]]+(\\[|.*(claude|anthropic|copilot|codex|cursor|gemini|chatgpt|gpt-[0-9]))'
 if printf '%s\\n' "$written" | grep -qiE '^[[:space:]]*co-authored-by:[[:space:]]*[^[:space:]]'; then
   echo ""
   echo "COMMIT BLOCKED: the message carries a Co-Authored-By trailer."
@@ -104,10 +113,10 @@ if printf '%s\\n' "$written" | grep -qiE '^[[:space:]]*co-authored-by:[[:space:]
   echo ""
   msg_found=1
 fi
-if printf '%s\\n' "$written" | grep -qiE 'generated with[[:space:]]+(\\[|.*(claude|anthropic|copilot|codex|cursor|gemini|chatgpt|gpt-[0-9]))'; then
+if printf '%s\\n' "$written" | grep -qiE "$attribution"; then
   echo ""
   echo "COMMIT BLOCKED: the message carries a tool attribution line."
-  printf '%s\\n' "$written" | grep -iE 'generated with' | sed 's/^/    /'
+  printf '%s\\n' "$written" | grep -iE "$attribution" | sed 's/^/    /'
   echo ""
   echo "  Say what the change does, not what wrote it."
   echo "  Take the line out of the commit message and commit again."
@@ -124,7 +133,7 @@ ${MSG_END}`
  * re-running replace its block rather than stack another copy, and the block
  * itself.
  */
-const HOOKS = [
+export const HOOKS = [
   { name: 'pre-commit', begin: BEGIN, end: END, block: BLOCK, what: `the ${PRODUCT_NAME} gate` },
   { name: 'commit-msg', begin: MSG_BEGIN, end: MSG_END, block: MSG_BLOCK, what: 'the no-AI-attribution guard' },
 ]
@@ -293,7 +302,7 @@ function hasBlock(text, hook) {
 }
 
 /** The hook text with our block present exactly once, and nothing else disturbed. */
-function withBlock(existing, hook) {
+export function withBlock(existing, hook) {
   if (existing === null) {
     return `#!/bin/sh\n# ${PRODUCT_NAME} hooks. Installed by scripts/install-hooks.mjs.\n\n${hook.block}\n\nexit 0\n`
   }
@@ -311,7 +320,10 @@ function withBlock(existing, hook) {
   }
   if (insertAt === -1) {
     const tail = existing.endsWith('\n') ? '' : '\n'
-    return `${existing}${tail}\n${BLOCK}\n`
+    // THIS hook's block. This line used to name the pre-commit BLOCK, so a
+    // commit-msg hook with no `exit 0` got the gate appended instead of the
+    // attribution guard, and the guard was never installed.
+    return `${existing}${tail}\n${hook.block}\n`
   }
   lines.splice(insertAt, 0, '', ...hook.block.split('\n'), '')
   return lines.join('\n')
@@ -348,4 +360,7 @@ function insertionDescription(existing) {
     : 'at the end'
 }
 
-process.exitCode = main(process.argv.slice(2))
+// Guarded so test/install-hooks.test.mjs can import the blocks and run them
+// against a temporary hook file. An unguarded import would install into the
+// real hooks folder, which a worktree shares with its main checkout.
+if (isMain(import.meta.url)) process.exitCode = main(process.argv.slice(2))
