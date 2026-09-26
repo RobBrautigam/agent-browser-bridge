@@ -28,6 +28,7 @@ import {
 } from './lib/link.js'
 import { OpError, noteDebuggerDetached, runOp, sweepDebuggees } from './lib/ops.js'
 import { clearSnapshot } from './lib/snapshot.js'
+import { isOwnExtensionPage } from './lib/ui-sender.js'
 
 const KEEPALIVE_ALARM = 'bridge.keepalive'
 
@@ -83,8 +84,18 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo && changeInfo.url) void clearSnapshot(tabId)
 })
 
-/** The options page and popup talk to the worker through here. */
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+/**
+ * The options page and popup talk to the worker through here, and nothing else
+ * may. A content script also reaches this listener, from inside a web page's
+ * renderer, so the sender is checked before the message is read at all: see
+ * lib/ui-sender.js for why.
+ */
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!isOwnExtensionPage(sender, chrome.runtime.id)) {
+    console.warn('[bridge] refused a UI message from outside this extension:', sender && (sender.origin || sender.url))
+    sendResponse(uiError(new Error(`${ERR.UNAUTHORIZED}: only this extension's own pages may use the board API.`)))
+    return false
+  }
   handleUiMessage(message).then(sendResponse, (err) => sendResponse(uiError(err)))
   return true // keeps the channel open for the async reply
 })
