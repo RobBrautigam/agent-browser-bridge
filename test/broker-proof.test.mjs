@@ -104,6 +104,22 @@ test('a client refuses an ack with no proof, a reflected proof, or a proof from 
   assert.equal(auth.ackProvesBroker({ ok: true, proof: auth.brokerProof(TOKEN, ROLE.MCP, fields.nonce) }, expect), true)
 })
 
+test('the first frame after HELLO must be the proven answer, and nothing else', () => {
+  // The broker says nothing before HELLO_ACK. A frame ahead of it is how an
+  // impostor would walk around the proof: the host used to relay any first
+  // frame that was not the ack straight to the browser.
+  const { fields, expect } = auth.helloCredentials({ token: TOKEN, scheme: auth.AUTH_SCHEME, role: ROLE.HOST })
+  const proof = auth.brokerProof(TOKEN, ROLE.HOST, fields.nonce)
+
+  assert.equal(auth.HELLO_ACK_TYPE, MSG.HELLO_ACK)
+  assert.equal(auth.judgeFirstFrame(helloAck({ ok: true, proof }), expect), 'ready')
+  assert.equal(auth.judgeFirstFrame(helloAck({ ok: true }), expect), 'impostor')
+  assert.equal(auth.judgeFirstFrame(helloAck({ ok: false, error: { code: ERR.UNAUTHORIZED } }), expect), 'refused')
+  assert.equal(auth.judgeFirstFrame({ type: MSG.REQ, id: '1', op: 'evalJs', proof }, expect), 'out-of-order')
+  assert.equal(auth.judgeFirstFrame(ok('doctor-1', { fake: true }), expect), 'out-of-order')
+  assert.equal(auth.judgeFirstFrame(null, expect), 'out-of-order')
+})
+
 test('the nonce ledger is bounded', () => {
   const ledger = new auth.NonceLedger(3)
   for (const n of ['a', 'b', 'c', 'd']) assert.equal(ledger.claim(n), true)
@@ -263,7 +279,18 @@ test('the broker, the host and doctor use the shared handshake, not a token of t
   assert.match(broker, /proof: verdict\.proof/, 'the broker does not answer with its proof')
   for (const [name, src] of [['host', host], ['doctor', doctor]]) {
     assert.match(src, /helloCredentials\(/, `${name} does not build HELLO through helloCredentials`)
-    assert.match(src, /ackProvesBroker\(/, `${name} does not check the ack's proof`)
+    assert.match(src, /judgeFirstFrame\(/, `${name} does not judge its first frame`)
     assert.doesNotMatch(src, /hello\(\{[^}]*\btoken\b[^}]*\}\)/, `${name} still puts the token in HELLO itself`)
   }
+
+  // The host judges EVERY first frame, not only a hello_ack, and relays nothing
+  // until the link is proven: frames decoded behind a refused answer arrive
+  // while the socket is still closing.
+  const relay = host.slice(host.indexOf('function handleFromBroker('), host.indexOf('function handleFromBrowser('))
+  assert.match(relay, /if \(awaitingOwnAck\) \{/, 'the host only judges a first frame that is a hello_ack')
+  assert.match(relay, /if \(link !== LINK\.READY\) return\n/, 'the host relays frames before the link is proven')
+  assert.ok(
+    relay.indexOf('if (link !== LINK.READY) return') < relay.indexOf('sendToBrowser('),
+    'the READY gate must come before the relay'
+  )
 })

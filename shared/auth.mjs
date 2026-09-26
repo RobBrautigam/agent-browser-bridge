@@ -165,6 +165,25 @@ export function ackProvesBroker(ack, expect) {
   return sameDigest(ack?.proof, brokerProof(expect.token, expect.role, expect.nonce))
 }
 
+/** MSG.HELLO_ACK, spelled here so this module does not import the protocol. */
+export const HELLO_ACK_TYPE = 'hello_ack'
+
+/**
+ * A client's decision on the FIRST frame after its HELLO.
+ *
+ * The broker says nothing before HELLO_ACK, so a first frame of any other type
+ * is a protocol violation, and it is the one an impostor would use to walk
+ * around the proof: the host used to relay anything that was not the ack
+ * straight to the browser, whether or not the link had been proven.
+ *
+ * @returns {'ready'|'refused'|'impostor'|'out-of-order'}
+ */
+export function judgeFirstFrame(msg, expect) {
+  if (msg?.type !== HELLO_ACK_TYPE) return 'out-of-order'
+  if (msg.ok !== true) return 'refused'
+  return ackProvesBroker(msg, expect) ? 'ready' : 'impostor'
+}
+
 /** The scheme a runtime file advertises, or null for a broker from before it. */
 export function runtimeScheme(runtime) {
   return runtime?.auth === AUTH_SCHEME ? AUTH_SCHEME : null

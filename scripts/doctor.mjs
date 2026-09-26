@@ -56,7 +56,7 @@ import {
   readRuntimeToken,
   writeJsonAtomic,
 } from '../shared/paths.mjs'
-import { ackProvesBroker, helloCredentials } from '../shared/auth.mjs'
+import { helloCredentials, judgeFirstFrame } from '../shared/auth.mjs'
 import {
   ERR,
   LINK,
@@ -177,6 +177,7 @@ function askBroker(op, args = {}, { timeoutMs = 5000 } = {}) {
     const decoder = new FrameDecoder()
     const id = `doctor-${Date.now()}`
     let settled = false
+    let proven = false
 
     const done = (v) => {
       if (settled) return
@@ -200,16 +201,20 @@ function askBroker(op, args = {}, { timeoutMs = 5000 } = {}) {
         return done({ ok: false, error: `framing: ${err.message}` })
       }
       for (const msg of messages) {
-        if (msg?.type === MSG.HELLO_ACK) {
-          if (msg.ok === false) {
+        if (!proven) {
+          // The first frame must be the proven answer to our HELLO; nothing
+          // before it is believed, including a RES that guessed our id.
+          const verdict = judgeFirstFrame(msg, credentials.expect)
+          if (verdict === 'refused') {
             return done({ ok: false, error: msg.error?.code || msg.error?.message || 'handshake refused' })
           }
-          if (!ackProvesBroker(msg, credentials.expect)) {
+          if (verdict !== 'ready') {
             return done({
               ok: false,
               error: `${ERR.UNAUTHORIZED}: the pipe answered without the broker's proof; another process may own the name`,
             })
           }
+          proven = true
           writeFrame(sock, req({ id, op, args, timeoutMs: 4000 }))
         } else if (msg?.type === MSG.RES && msg.id === id) {
           return msg.ok
