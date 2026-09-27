@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Browser bridge</title>
+    <link rel="stylesheet" href="../ui/tokens.css" />
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body class="board-surface" data-boot="loading">
+    <a class="skip" href="#board">Skip to the board</a>
+
+    <!-- Panic banner. Present in the DOM at all times so its state change is a
+         single attribute flip rather than a node insertion, which keeps the
+         page from reflowing under the operator mid-read. -->
+    <div class="panic-banner" id="panic-banner" role="alert" hidden>
+      <span class="panic-banner__mark" data-icon="power" data-icon-size="18"></span>
+      <div class="panic-banner__body">
+        <strong>Panic is active.</strong>
+        <span
+          >Every line is dropped, all arming is cleared, and the broker is refusing
+          operations.</span
+        >
+      </div>
+      <button class="sb-btn sb-btn--accent" id="panic-clear-top" type="button">
+        Clear panic
+      </button>
+    </div>
+
+    <header class="topbar">
+      <div class="topbar__inner">
+        <div class="brand">
+          <span class="brand__mark" data-icon="jack" data-icon-size="30" data-icon-stroke="1.7"></span>
+          <span class="brand__text">
+            <span class="brand__name" id="brand-name"></span>
+            <span class="brand__tagline" id="brand-tagline"></span>
+          </span>
+        </div>
+
+        <div class="topbar__right">
+          <button
+            class="sb-btn sb-btn--quiet sb-btn--icon theme-toggle"
+            id="theme-toggle"
+            type="button"
+            aria-label="Switch color theme"
+          >
+            <span class="theme-toggle__glyph" data-icon="monitor" data-icon-size="16"></span>
+            <span class="theme-toggle__label" id="theme-label">System</span>
+          </button>
+
+          <p class="status-pill" id="status-pill" data-state="loading" role="status" aria-live="polite">
+            <span class="sb-lamp" data-state="connecting" aria-hidden="true"></span>
+            <span class="status-pill__text" id="status-text">Connecting to the broker</span>
+          </p>
+        </div>
+      </div>
+    </header>
+
+    <!-- Hard stop: the page could not load its own protocol module, or is not
+         running inside the extension at all. Nothing else is trustworthy after
+         that, so the whole board is replaced rather than partially rendered. -->
+    <div class="fatal" id="fatal" role="alert" hidden>
+      <span class="fatal__mark" data-icon="alert" data-icon-size="22"></span>
+      <div>
+        <h2 class="fatal__title" id="fatal-title">The bridge could not start</h2>
+        <p class="fatal__body" id="fatal-body"></p>
+      </div>
+    </div>
+
+    <main class="page" id="page">
+      <!-- 1. THIS LINE -------------------------------------------------------->
+      <section class="section" id="self-section" aria-labelledby="self-heading">
+        <div class="section__head">
+          <h2 class="section__title" id="self-heading">This line</h2>
+          <p class="section__note">
+            The browser profile you are viewing this page from.
+          </p>
+        </div>
+        <div id="self-slot">
+          <div class="self-card self-card--skeleton" aria-hidden="true">
+            <div class="sb-skeleton sb-skeleton--title"></div>
+            <div class="sb-skeleton sb-skeleton--sub"></div>
+            <div class="sb-skeleton sb-skeleton--body"></div>
+          </div>
+          <p class="sb-visually-hidden" id="self-loading-msg">Loading this line</p>
+        </div>
+      </section>
+
+      <!-- 2. THE BOARD -------------------------------------------------------->
+      <section class="section" id="board" aria-labelledby="board-heading">
+        <div class="section__head">
+          <h2 class="section__title" id="board-heading">The board</h2>
+          <p class="section__note" id="board-count"></p>
+        </div>
+        <!-- First load only. Hidden by CSS the moment body[data-boot] flips to
+             ready, so a repoll never flashes it back. Three cards because that
+             is a common case and the silhouette should match
+             what arrives. -->
+        <div class="board-grid board-skeleton" id="board-skeleton" aria-hidden="true">
+          <div class="line">
+            <div class="sb-skeleton sb-skeleton--title"></div>
+            <div class="sb-skeleton sb-skeleton--sub"></div>
+            <div class="sb-skeleton sb-skeleton--body"></div>
+          </div>
+          <div class="line">
+            <div class="sb-skeleton sb-skeleton--title"></div>
+            <div class="sb-skeleton sb-skeleton--sub"></div>
+            <div class="sb-skeleton sb-skeleton--body"></div>
+          </div>
+          <div class="line">
+            <div class="sb-skeleton sb-skeleton--title"></div>
+            <div class="sb-skeleton sb-skeleton--sub"></div>
+            <div class="sb-skeleton sb-skeleton--body"></div>
+          </div>
+        </div>
+        <div class="board-grid" id="board-grid" role="list"></div>
+        <p class="empty" id="board-empty" hidden>
+          No lines are connected yet. Load the extension in a browser profile and
+          it will patch itself in here within a few seconds.
+        </p>
+        <!-- The honest statement of where the identity check works and where it
+             cannot. The operator needs to know which of their browsers is actually watched,
+             and a limit that only exists in a design document is a limit they will
+             discover the hard way. -->
+        <p class="section__footnote">
+          Every line shows the account signed into it. The bridge records who a
+          profile was when you claimed it, and re-checks about once a minute while
+          it is connected. If a different account is signed in, the claim is
+          dropped, the line is renamed and disarmed, and nothing can be routed to
+          it until you claim it again. <strong>Chrome</strong> carries the full
+          check, because it records the Google account in its profile metadata.
+          <strong>Brave records no account at all</strong>, so there the check
+          falls back to the profile name: signing a Brave profile into a different
+          account without renaming it cannot be detected, and renaming a Brave
+          profile will unclaim the line and ask you to pick it again.
+        </p>
+      </section>
+
+      <!-- 3. ARMING ----------------------------------------------------------->
+      <section class="section" id="arming" aria-labelledby="arming-heading">
+        <div class="section__head">
+          <h2 class="section__title" id="arming-heading">Arming</h2>
+        </div>
+
+        <div class="panel">
+          <div class="arm-explainer">
+            <span class="arm-explainer__mark" data-icon="zap" data-icon-size="16"></span>
+            <p>
+              Arming a line lets Claude run
+              <strong>arbitrary JavaScript inside that logged in browser session</strong>
+              for a bounded window. Everything that session can reach, the script can
+              reach. Reading, clicking, navigating and typing never need arming; only
+              this does. Arming expires on its own and never carries over a browser
+              restart.
+            </p>
+          </div>
+
+          <fieldset class="arm-duration">
+            <legend class="sb-eyebrow">Window</legend>
+            <div class="arm-duration__options" id="arm-duration"></div>
+          </fieldset>
+
+          <ul class="arm-list" id="arm-list"></ul>
+          <p class="empty" id="arm-empty" hidden>No connected lines to arm.</p>
+        </div>
+      </section>
+
+      <!-- 4. ACTIVITY --------------------------------------------------------->
+      <section class="section" id="activity" aria-labelledby="activity-heading">
+        <div class="section__head">
+          <h2 class="section__title" id="activity-heading">Activity</h2>
+          <p class="section__note" id="activity-count"></p>
+        </div>
+
+        <div class="panel panel--flush">
+          <p class="privacy-note">
+            <span class="privacy-note__mark" data-icon="eyeOff" data-icon-size="14"></span>
+            <span>
+              Origins only. The path, query string and fragment of every URL are
+              discarded before this log is written, because password reset and magic
+              link tokens live in exactly those places.
+            </span>
+          </p>
+
+          <div class="audit" id="audit-scroll">
+            <ol class="audit__list" id="audit-list"></ol>
+            <p class="empty empty--inset" id="audit-empty" hidden>
+              No operations yet this broker lifetime.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 5. PANIC ------------------------------------------------------------>
+      <section class="section section--danger" id="panic" aria-labelledby="panic-heading">
+        <div class="section__head">
+          <h2 class="section__title" id="panic-heading">Panic</h2>
+        </div>
+
+        <div class="panel panel--danger">
+          <div class="panic-copy">
+            <p>
+              <strong>Panic drops every line at once.</strong> All routes are cut, all
+              arming is cleared, and the broker refuses every operation until you clear
+              it. Nothing about the browsers themselves changes and no tab is closed.
+            </p>
+            <p class="panic-copy__sub">
+              This does not need Claude's cooperation. The broker also watches for a
+              <code class="sb-mono">PANIC</code> file on disk, so the switch works even
+              if nothing is answering.
+            </p>
+          </div>
+
+          <div class="panic-actions">
+            <button
+              class="sb-btn sb-hold panic-hold"
+              id="panic-hold"
+              type="button"
+              aria-describedby="panic-hold-hint"
+            >
+              <span data-icon="power" data-icon-size="16"></span>
+              <span id="panic-hold-label">Hold to trip panic</span>
+            </button>
+            <p class="hint" id="panic-hold-hint">
+              Press and hold for one and a half seconds. Deliberately awkward, so it
+              can never be hit by accident.
+            </p>
+
+            <button class="sb-btn sb-btn--accent" id="panic-clear" type="button" hidden>
+              Clear panic
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer" id="footer">
+      <span class="footer__item" id="footer-version"></span>
+      <span class="sb-dot-sep" aria-hidden="true"></span>
+      <span class="footer__item" id="footer-uptime"></span>
+      <span class="sb-dot-sep" aria-hidden="true"></span>
+      <span class="footer__item" id="footer-refresh"></span>
+    </footer>
+
+    <!-- Never given the hidden attribute: an aria-live region that is removed
+         from the layout is removed from the accessibility tree, and messages
+         announced into it are missed. Presentation is toggled with data-open. -->
+    <div class="toast" id="toast" role="status" aria-live="polite" data-open="false"></div>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

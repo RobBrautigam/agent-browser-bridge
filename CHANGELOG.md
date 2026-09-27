@@ -1,0 +1,411 @@
+# Changelog
+
+All notable changes to this project are recorded here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+This repository starts at 1.0.0. The entries below it describe releases made
+from an earlier history; those versions have no tags here. Every clone made
+before 1.0.0 takes the one-time step in the 1.0.0 Upgrading section, which
+replaces the one-time steps in the earlier entries.
+
+## [1.0.0] - 2026-09-27
+
+The first release of this repository: the code of 0.5.1, with its test data
+moved to reserved domains (the consumer-mail tests name only the providers
+the label rule lists). Nothing the bridge does has changed.
+
+### Added
+
+- `consumerMailDomains()` in `shared/paths.mjs`: a read-only copy of the
+  mail providers the label rule treats as consumer mail, which the tests check
+  their fixtures against.
+
+### Changed
+
+- The version is 1.0.0 in `package.json`, `package-lock.json` and
+  `extension/manifest.json`, so doctor, `bridge_status` and every profile
+  report 1.0.0 once the broker is restarted and the extension reloaded.
+- Test fixtures that name a mailbox or a company domain now use the names
+  RFC 2606 reserves for documentation (`acme-corp.example`, `ada.example`,
+  `mailbox.example`), which cannot belong to anybody. Fixtures for a consumer
+  mailbox name only the provider and build the address at run time, so no
+  deliverable address sits in the repository. One
+  expected label changed with its fixture: `brave-ada-dev` is now
+  `brave-ada-example`.
+
+### Upgrading
+
+1. **A clone made before 1.0.0, once.** It shares no commits with this
+   repository's `main`, so `git pull` refuses with "refusing to merge unrelated
+   histories". In the same folder:
+
+   ```bash
+   git fetch origin
+   git reset --hard origin/main
+   ```
+
+   Do not clone into a new folder instead: the browser derives an unpacked
+   extension's ID from its folder path, so a new folder is a new extension to
+   every profile. The reset discards uncommitted changes and local commits in
+   the folder, so copy out anything of your own first. If you pinned the ID
+   with `node scripts/keygen.mjs`, run it again after the reset; if you changed
+   `bridge.config.json`, put it back and run `npm run sync-config`.
+2. `npm ci`
+3. Restart the broker as in the 0.5.0 Upgrading section (on Windows,
+   `schtasks /End /TN "Agent Browser Bridge broker"` and then a minute or two
+   for the watchdog). `node scripts/doctor.mjs` shows `version 1.0.0` on its
+   `runtime` line once it has.
+4. `npm run reload`, so every profile's extension reports 1.0.0. A profile on
+   0.3.0 or earlier needs the Reload arrow on the browser's extensions page
+   once instead.
+5. If you commit to the repository, `npm run hooks:install`.
+
+## [0.5.1] - 2026-09-26
+
+### Added
+
+- `node scripts/doctor.mjs` now warns when the running broker is on a
+  different version from its install folder. The broker reads its code once,
+  when it starts, so after a `git pull` it keeps running the old code until it
+  is restarted. `bridge_status` and `browser_list_profiles` already told an
+  agent; doctor showed it only as the version on its `runtime` line. Doctor now
+  compares that version with the `package.json` of the folder the broker
+  service starts it from (normally the folder you run doctor in; when the
+  service points at another checkout, doctor says so and compares with that
+  one), and when the broker is older, or newer after the folder was moved back
+  to an earlier release, it prints a warning with the restart step for your
+  platform. Versions compare by semver precedence, pre-releases included.
+- Doctor also warns when `runtime.json` has no `auth` field, or one this
+  install does not speak: clients then fall back to the old handshake and send
+  the broker the token instead of proving they hold it. A broker from before
+  0.5.0 is the usual case.
+
+### Fixed
+
+- Doctor's restart advice for a broker that is already running no longer says
+  `schtasks /Run`, which does nothing while the task runs and, straight after
+  `/End`, starts a broker that exits because the old one still holds the pipe.
+  It now gives the `/End`-then-wait step. For a broker running outside the
+  task, which `/End` cannot reach, it gives `taskkill /PID <pid> /F` with the
+  pid from `runtime.json`, after which the task's watchdog starts a supervised
+  one.
+
+### Upgrading
+
+A clone made before 2026-09-26 takes the one-time step at the top of the 0.5.0
+Upgrading section first. Then, in your install folder:
+
+1. `git pull`
+2. `npm ci`
+3. Restart the broker, exactly as in 0.5.0 step 3. On Windows that is
+   `schtasks /End /TN "Agent Browser Bridge broker"` and then a minute or two
+   for the task's watchdog to start the new one, never `schtasks /Run` straight
+   away. `node scripts/doctor.mjs` shows `version 0.5.1` on its `runtime` line
+   once it has.
+4. `npm run reload`, so every profile's extension reports 0.5.1.
+
+## [0.5.0] - 2026-09-26
+
+This release closes three security gaps found in an audit of the broker, the
+host and the extension. Every install should upgrade, and it is also the first
+release from the consolidated history, so a clone from before 2026-09-26 needs
+the one-time step at the top of Upgrading.
+
+### Security
+
+- **Clients now make the broker prove it holds the token, and no longer send
+  it.** On Windows the broker's endpoint is a named pipe, and pipe names are
+  shared by every account on the machine. If another account created the pipe
+  name while the broker was down, the real broker exited at its next start
+  believing one was already running, and every host, MCP server and doctor run
+  then handed that process the token and trusted its answers, so the host
+  relayed its requests to the extension. A single-user machine had nobody to do
+  this; a shared one was exposed. Each client now sends a fresh nonce and an
+  HMAC-SHA256 proof of the token instead of the token, the broker answers with a
+  proof of its own, and a client relays and sends nothing until that proof
+  checks out. The broker refuses a nonce it has already accepted this boot (it
+  remembers the most recent 4,096). `runtime.json` gains
+  `"auth": "hmac-sha256-v1"`, which is how a client knows the broker expects the
+  new handshake. What remains on a shared machine is a denial of service: a
+  squatted name still stops the broker from starting, and
+  `node scripts/doctor.mjs` reports it.
+- **The extension's service worker answers its Board messages only from the
+  extension's own pages.** The worker's message API (claim, rename, arm,
+  disarm, panic, and the profile's own record) answered any sender carrying the
+  extension's id. That includes the extension's content scripts, and a content
+  script shares a renderer process with the page it is injected into. Code
+  that had compromised the renderer of a page the bridge had touched (a browser
+  exploit, not an ordinary page script) could therefore arm `browser_eval_js`
+  on that profile for an hour, or read the profile's record, including the
+  email address it was claimed for. The worker now checks that the sender's
+  URL and origin belong to this extension's own pages and answers anything else
+  with `E_UNAUTHORIZED`.
+- **`javascript:` URLs are refused by the broker and the extension.**
+  Navigating is a write-tier operation that needs no arm, and a `javascript:`
+  URL is arbitrary script in the page. Chromium already refuses these in
+  extension API navigations, so nothing was reachable on a current browser; the
+  refusal no longer depends on that. It is checked on the scheme, so every
+  spelling is refused.
+
+### Fixed
+
+- The commit-message guard that `npm run hooks:install` installs no longer
+  refuses an ordinary sentence such as "regenerated with [a script]": the check
+  now starts at a word boundary. A "Generated with [...]" line, or one that
+  names a known AI coding tool, is still refused, and so is every
+  `Co-Authored-By:` trailer. On an existing hook
+  that did not end in `exit 0`, the installer used to append the pre-commit
+  gate block where the commit-message guard belonged; it now appends the right
+  block.
+
+### Changed
+
+- The extension no longer requests the `activeTab` permission. Nothing called
+  an API that needed it: the `<all_urls>` host permission already covers every
+  page the bridge reads or drives. Removing a permission prompts nothing.
+- Dependencies: `@modelcontextprotocol/server` 2.0.0 to 2.1.0 and `zod` 4.5.2
+  to 4.6.5. The MCP server's tool list and every tool's input schema are
+  unchanged.
+- `package.json` pins `packageManager` to `npm@10.9.8`, the npm that ships with
+  Node 22, and `package-lock.json` now carries the release's own version (it
+  still said 0.3.0).
+
+### Documentation
+
+- The README and `docs/DESIGN.md` now say plainly that the agent can arm a
+  profile itself through `bridge_arm`, that the broker cannot tell that from a
+  Board click, and that the human step in front of an agent's arm is therefore
+  the agent client's tool-approval prompt. Keep `bridge_arm` off every
+  auto-approve list.
+- The README's Updating section now installs dependencies after a pull and
+  covers a clone from before the consolidated history.
+
+### Upgrading
+
+Every step runs in your existing install folder, the one your browsers load
+the extension from.
+
+1. **Only for a clone made before 2026-09-26, once.** An older clone shares no
+   commits with the new `main`, so `git pull` refuses with "refusing to merge
+   unrelated histories". Move the folder onto the new history in place:
+
+   ```bash
+   git fetch origin
+   git reset --hard origin/main
+   ```
+
+   Do not clone into a new folder instead. Unless you pinned it with
+   `node scripts/keygen.mjs`, the browser derives an unpacked extension's ID
+   from its folder path, so a new folder is a different extension to every
+   profile and would have to be loaded, registered and claimed again.
+   `git reset --hard` discards uncommitted changes and local commits in the
+   folder, so copy out anything of your own first. Two cases need a step right
+   after the reset:
+
+   - If you pinned the ID with `node scripts/keygen.mjs`, the reset removes the
+     `key` it wrote into `extension/manifest.json`. Run
+     `node scripts/keygen.mjs` again: it writes the same key back from the copy
+     it saved in the state directory, so the ID does not change.
+   - If you changed `bridge.config.json` (for example with `npm run rename`),
+     save it before the reset, put it back afterwards and run
+     `npm run sync-config`.
+
+   A clone made on or after 2026-09-26 updates with `git pull` as usual.
+2. Install the updated dependencies: `npm ci`.
+3. Restart the broker, so it runs the new handshake.
+   - Windows: `schtasks /End /TN "Agent Browser Bridge broker"`, then let the
+     task's one-minute watchdog start the new broker, which takes a minute or
+     two. Do not run `schtasks /Run` straight away: the old broker holds the
+     pipe for up to about 30 seconds after `/End`, and a broker started in that
+     window finds the name taken and exits.
+   - macOS:
+     `launchctl kickstart -k gui/$(id -u)/com.agent_browser_bridge.host.broker`.
+   - Linux: `systemctl --user restart agent-browser-bridge-broker`.
+   - If you renamed the product, the Windows task name is `serviceName` in
+     your `bridge.config.json`, the launchd label is `<nativeHostId>.broker`
+     and the systemd unit is `<stateDirName>-broker`.
+
+   The broker is on the new version when `node scripts/doctor.mjs` shows its
+   `runtime` line with `version 0.5.0`. An older version there means the
+   broker was not restarted, and clients are still using the old handshake.
+4. Reload the extension in every profile: `npm run reload` (the same as
+   `node scripts/reload-extension.mjs --all`). It reloads each connected
+   profile that is still on an older version and waits for each one to come
+   back on 0.5.0. A profile on 0.3.0 or earlier needs the Reload arrow on the
+   browser's extensions page once instead.
+5. If you commit to the repository, reinstall the hooks: `npm run hooks:install`.
+6. Check the result with `node scripts/doctor.mjs`: every profile connected,
+   and the `runtime` line at `version 0.5.0`.
+
+Old and new pieces keep working together while you upgrade. A 0.5.0 broker
+still accepts the old handshake from a host or MCP server that has not
+restarted yet, and a 0.5.0 client uses the old handshake while the broker has
+not been restarted. The token stops crossing the pipe once both ends run 0.5.0.
+An agent session that was open before the upgrade keeps its old MCP server
+until the session is restarted.
+
+## [0.4.1] - 2026-09-18
+
+### Fixed
+
+- `scripts/reload-extension.mjs` now names the right next action for the one
+  failure it is most likely to meet. An extension older than 0.4.0 does not know
+  the reload operation, and the generic explanation for that error talks about
+  chrome.debugger policy and its tier 1 alternatives, which have nothing to do
+  with it. Anybody upgrading from 0.3.0 or earlier saw that paragraph once per
+  profile, when the answer was the single click this command exists to replace.
+  It now says which version the profile is running, why this one reload cannot
+  be automated, and where the button is.
+
+## [0.4.0] - 2026-09-18
+
+### Added
+
+- Every profile now reports which extension version it is RUNNING, and
+  `browser_list_profiles`, `bridge_status`, the extension's board and its popup
+  all show it and flag any profile that is behind the version in the install
+  folder. This closes a gap that had already cost a release: a browser reads an
+  unpacked extension's code once, when it loads it, so a merged and deployed
+  change can be absent from every browser on the machine with nothing on any
+  screen saying so. The broker re-reads the folder's manifest rather than
+  reporting its own version, because the folder changes under a broker that has
+  been running since login.
+- `browser_reload_extension`, and `scripts/reload-extension.mjs --all` for
+  callers with no MCP client: ask one profile's extension to reload itself, which
+  is what the Reload arrow on the extensions page does. It is refused unless the
+  install folder holds a different version from the one that profile is running,
+  because a reload invalidates every open tab handle in every session driving
+  that browser and clears the ledger `browser_open_or_focus` uses to know which
+  tabs it opened. The command waits for each profile to come back on the new
+  version before reporting success, because the acknowledgement necessarily
+  leaves before the reload happens and therefore proves only that the extension
+  was asked. The release that adds this cannot use it, so upgrading from 0.3.0
+  costs one click per profile and no release after it does.
+- A README "Updating" section, which the project did not have: pull, then reload
+  the extension in each profile, and why the second half is not optional.
+
+### Fixed
+
+- **A refused URL scheme is now refused however it is spelled.** The restricted
+  list was checked as text prefixes, which made it a rule about slashes. `file:`
+  is a special scheme in the URL Standard, so `file:/C:/Users/me/.env` and
+  `file:\\server\share\x` both canonicalize to ordinary `file://` URLs while
+  starting with neither `file://` nor anything else on the list. Verified against
+  a real browser before the fix: `browser_navigate`, a WRITE-tier operation that
+  needs no arm, accepted the one-slash form, Chromium canonicalized it, and the
+  tab rendered the local file. That is the unarmed local-file primitive the
+  refusal exists to prevent, reachable by deleting two characters. The check is
+  now on the scheme as well as the prefix, with a test named after it.
+
+### Changed
+
+- `browser_open_or_focus` may FIND a tab already showing any `file:` address and
+  MOVE it to the far right, while still OPENING and RELOADING only `.html` and
+  `.htm`. A PDF therefore gets the same one-page-one-tab behavior as an HTML
+  report: the launcher opens it the first time, because the bridge refuses to,
+  and every call after that moves the tab that already exists. This is not a
+  widening of the file rule. Finding and moving performs no navigation and no
+  read, so it cannot be half of the navigate-then-read composition the refusal
+  exists to prevent, and READ-tier `browser_list_tabs` already reports every
+  tab's address. In this mode the reload is not attempted at all rather than
+  attempted and reported as failed, no tab is ever closed, and the one-line
+  answer names the rule so a launcher knows to open the file itself.
+
+## [0.3.0] - 2026-09-18
+
+### Added
+
+- `browser_open_or_focus`, and `scripts/open-or-focus.mjs` for callers with no
+  MCP client: show a page to the human at the machine without giving them a
+  sixth copy of it. A tab already showing the address is reloaded and moved to
+  the far right of the window it is already in; with no such tab, one opens at
+  the far right of that profile's most recently focused window. Matching is
+  exact, then ignoring the query and the fragment, and optionally by file name
+  across folders (off by default, because two worktrees hold the same file name
+  and routinely different versions of the page). The answer is one line: reused,
+  moved from which index to which, reloaded, or opened new.
+- A ledger of the tabs this operation opened, in `chrome.storage.session`, so
+  duplicates it created can be closed and tabs the operator opened never are.
+  Session storage on purpose: the keys are raw tab ids, and a ledger that
+  outlived them would authorize closing somebody else's tab.
+- `BrokerClient` takes a `socketPath`, and the command line takes `--socket`, so
+  a caller can prove its broker-unreachable fallback against a dead endpoint
+  instead of stopping the broker other sessions are using.
+
+### Changed
+
+- `file:` URLs stay refused everywhere except `browser_open_or_focus`, and
+  there only for a path ending in `.html` or `.htm`. The reasoning, and why it
+  does not restore the navigate-then-read primitive the refusal exists to
+  prevent, is in SECURITY.md and on `isOpenOrFocusUrl` in the contract. The rule
+  is enforced in the extension and again in the broker. It refuses the four ways a
+  string ends in .html without being a local page: a host or a leading double
+  slash (a UNC network path), a control character (a NUL truncates the name at
+  the filesystem), and a colon past the drive letter (an NTFS alternate data
+  stream).
+
+## [0.2.0] - 2026-09-16
+
+### Added
+
+- `scripts/claim.mjs`: claim a Brave profile from the command line, without
+  the options-page click. Lists every line and the candidate directories of
+  the unclaimed ones; claims only on an exact, unique match of the profile
+  name or email; moves an already-claimed line only with `--reclaim`.
+- `scripts/label.mjs`: rename a connected line to a custom label from the
+  command line. A custom label survives a derived-label collision; a derived
+  one gets a directory suffix, so pinning the name a line already derived is
+  a real change.
+
+### Changed
+
+- README: the clone is a standalone install folder. Moving, renaming or
+  removing it after a profile has loaded the extension changes the extension
+  ID and drops every profile off the bridge.
+- The custom-label rule is one shared constant, `LABEL_PATTERN` in
+  `shared/protocol.mjs`, used by the broker and the scripts. `BrokerClient`
+  takes a `keepAlive` option for command-line callers, so a one-shot script
+  waits for the broker's answer instead of exiting first.
+
+## [0.1.0] - 2026-09-14
+
+First public release. A white-labeled release of a bridge that has been in
+daily use on a Windows machine with several Chrome and Brave profiles since
+2026-08-29.
+
+### Added
+
+- An MV3 extension, loaded unpacked into any number of Chrome or Brave
+  profiles, that holds one native-messaging port per profile.
+- A per-profile native messaging host that relays framed bytes to the broker.
+- One always-on broker that owns the route table, the profile identity join,
+  policy, arming and the audit log. Supervised by Task Scheduler on Windows,
+  launchd on macOS and systemd on Linux.
+- A stdio MCP server, one per agent session, with 17 tools across a read tier,
+  a write tier, an armed tier and control: `browser_list_profiles`,
+  `browser_list_tabs`, `browser_read_page`, `browser_screenshot`,
+  `browser_scroll`, `browser_navigate`, `browser_open_tab`,
+  `browser_close_tab`, `browser_activate_tab`, `browser_click`,
+  `browser_fill`, `browser_press_keys`, `browser_wait_for`,
+  `browser_eval_js`, `bridge_arm`, `bridge_panic`, `bridge_status`.
+- Opaque, profile-stamped tab handles, so a handle from one profile is refused
+  by another and a handle from before a browser restart fails loudly.
+- Identity drift detection: a claimed profile whose signed-in account changes
+  is unclaimed rather than driven as the wrong person.
+- The Board (options page) and the popup: claiming, renaming, arming with a
+  countdown, an origin-only activity log and a press-and-hold panic switch.
+- Installers for the host, the broker and the MCP entry (Claude Code, Cursor,
+  Codex), a doctor that names every silent failure, and a gate that enforces
+  the security rules on every commit.
+- `bridge.config.json` as the single source of the product's identity, with
+  `npm run rename` to rebrand the whole thing in one command.
+
+### Platform notes
+
+- Windows is the reference platform and the one the end-to-end harness has run
+  on.
+- macOS and Linux support follows Chromium's documented native messaging
+  locations and has not yet been exercised on a real machine. Reports welcome.
+
+[1.0.0]: https://github.com/RobBrautigam/agent-browser-bridge/releases/tag/v1.0.0

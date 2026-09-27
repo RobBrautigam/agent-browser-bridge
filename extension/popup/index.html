@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Browser bridge</title>
+    <link rel="stylesheet" href="../ui/tokens.css" />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body class="popup-surface" data-boot="loading">
+    <header class="pop-top">
+      <span class="pop-mark" data-icon="jack" data-icon-size="20" data-icon-stroke="1.8"></span>
+      <span class="pop-name" id="brand-name"></span>
+      <p class="status-pill pop-status" id="status-pill" data-state="loading" role="status" aria-live="polite">
+        <span class="sb-lamp" data-state="connecting" aria-hidden="true"></span>
+        <span id="status-text">Connecting</span>
+      </p>
+    </header>
+
+    <div class="pop-fatal" id="fatal" role="alert" hidden>
+      <span data-icon="alert" data-icon-size="16"></span>
+      <p id="fatal-body"></p>
+    </div>
+
+    <main class="pop-body" id="pop-body">
+      <!-- This line -->
+      <section class="pop-line" id="line-card" aria-labelledby="line-heading">
+        <h1 class="sb-visually-hidden" id="line-heading">This line</h1>
+
+        <div class="pop-line__head">
+          <span class="sb-lamp pop-line__lamp" id="line-lamp" aria-hidden="true"></span>
+          <div class="pop-line__id">
+            <p class="pop-line__label" id="line-label">
+              <span class="sb-skeleton sb-skeleton--inline"></span>
+            </p>
+            <p class="pop-line__sub" id="line-sub"></p>
+          </div>
+          <span class="sb-chip" id="line-state-chip" hidden></span>
+        </div>
+
+        <p class="pop-line__detail" id="line-detail"></p>
+
+        <dl class="pop-stats" id="pop-stats">
+          <div class="pop-stat">
+            <dt>Tabs</dt>
+            <dd id="stat-tabs">-</dd>
+          </div>
+          <div class="pop-stat">
+            <dt>Latency</dt>
+            <dd id="stat-latency">-</dd>
+          </div>
+          <div class="pop-stat">
+            <dt>Lines up</dt>
+            <dd id="stat-lines">-</dd>
+          </div>
+        </dl>
+      </section>
+
+      <!-- Needs claiming -->
+      <section class="pop-claim" id="claim-callout" hidden>
+        <span class="pop-claim__mark" data-icon="cord" data-icon-size="16"></span>
+        <div>
+          <p class="pop-claim__title" id="claim-title">This line needs claiming</p>
+          <p class="pop-claim__body" id="claim-body">
+            Open the board and pick which browser profile this is. It takes one click and you
+            never do it again.
+          </p>
+        </div>
+      </section>
+
+      <!-- Broker down -->
+      <section class="pop-down" id="broker-down" hidden>
+        <p class="pop-down__title">
+          <span data-icon="alert" data-icon-size="14"></span>
+          <span>The broker is not answering</span>
+        </p>
+        <p class="pop-down__body">Nothing can be driven until it is back. Start it with:</p>
+        <code class="pop-down__cmd" id="broker-cmd"></code>
+        <button class="sb-btn sb-btn--sm" id="copy-cmd" type="button">
+          <span data-icon="copy" data-icon-size="13"></span>
+          <span>Copy command</span>
+        </button>
+      </section>
+
+      <!-- Arming -->
+      <section class="pop-arm" id="arm-block" aria-labelledby="arm-heading">
+        <div class="pop-arm__head">
+          <h2 class="sb-eyebrow" id="arm-heading">Arming</h2>
+          <span class="pop-arm__count sb-num" id="arm-count" hidden></span>
+        </div>
+        <p class="pop-arm__copy" id="arm-copy">
+          Arming lets Claude run arbitrary JavaScript in this logged in session. Reading and
+          clicking never need it.
+        </p>
+        <div class="sb-bar pop-arm__bar" id="arm-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" hidden></div>
+        <div class="pop-arm__actions">
+          <button class="sb-btn sb-btn--accent pop-arm__btn" id="arm-btn" type="button">
+            <span data-icon="zap" data-icon-size="14"></span>
+            <span id="arm-btn-label">Arm</span>
+          </button>
+          <button class="sb-btn pop-arm__btn" id="disarm-btn" type="button" hidden>
+            <span data-icon="slash" data-icon-size="14"></span>
+            <span>Disarm</span>
+          </button>
+        </div>
+      </section>
+    </main>
+
+    <footer class="pop-foot">
+      <button class="sb-btn sb-btn--sm pop-foot__board" id="open-board" type="button">
+        <span data-icon="externalLink" data-icon-size="13"></span>
+        <span>Open the board</span>
+      </button>
+
+      <button class="sb-btn sb-btn--sm sb-hold pop-foot__panic" id="panic-hold" type="button" title="Press and hold for one and a half seconds">
+        <span data-icon="power" data-icon-size="13"></span>
+        <span id="panic-label">Hold for panic</span>
+      </button>
+    </footer>
+
+    <!-- Stays mounted. An aria-live region taken out of the layout is taken out
+         of the accessibility tree, and anything announced into it is lost. -->
+    <div class="pop-toast" id="toast" role="status" aria-live="polite" data-open="false"></div>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

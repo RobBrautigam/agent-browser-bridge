@@ -1,0 +1,1418 @@
+/*
+ * The Board. the bridge's full-page surface.
+ *
+ * Composes entirely from ui/tokens.css. There is not a single literal color in
+ * this file on purpose: a palette change must be one file, and a state that
+ * hard-codes its own tint is exactly how a theme ends up half-applied.
+ */
+
+body.board-surface {
+  min-height: 100vh;
+  background:
+    radial-gradient(
+      120% 55% at 50% 0%,
+      var(--sb-accent-wash) 0%,
+      transparent 62%
+    ),
+    var(--sb-bg);
+  background-attachment: fixed;
+}
+
+.skip {
+  position: absolute;
+  left: var(--sb-sp-4);
+  top: calc(var(--sb-sp-4) * -4);
+  z-index: 40;
+  padding: var(--sb-sp-2) var(--sb-sp-3);
+  border-radius: var(--sb-r-sm);
+  background: var(--sb-accent);
+  color: var(--sb-on-accent);
+  font-weight: var(--sb-fw-semibold);
+  text-decoration: none;
+  transition: top var(--sb-dur) var(--sb-ease);
+}
+
+.skip:focus {
+  top: var(--sb-sp-4);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Top bar                                                                     */
+/* -------------------------------------------------------------------------- */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  border-bottom: var(--sb-hairline) solid var(--sb-border);
+  background: var(--sb-scrim);
+  backdrop-filter: blur(var(--sb-blur));
+}
+
+.topbar__inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sb-sp-4);
+  max-width: var(--sb-maxw);
+  margin: 0 auto;
+  padding: var(--sb-sp-4) var(--sb-sp-6);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sb-sp-3);
+  min-width: 0;
+}
+
+.brand__mark {
+  display: grid;
+  place-items: center;
+  width: var(--sb-tile-xl);
+  height: var(--sb-tile-xl);
+  border: var(--sb-hairline) solid var(--sb-accent-line);
+  border-radius: var(--sb-r-lg);
+  background: var(--sb-accent-wash);
+  color: var(--sb-accent-ink);
+}
+
+.brand__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* The wordmark carries the product. Display face, tight tracking, one weight
+   step above everything else on the page and nothing else competing with it. */
+.brand__name {
+  font-family: var(--sb-font-display);
+  font-size: var(--sb-fs-2xl);
+  font-weight: var(--sb-fw-semibold);
+  letter-spacing: var(--sb-track-tight);
+  line-height: var(--sb-lh-tight);
+  color: var(--sb-text);
+}
+
+.brand__tagline {
+  font-size: var(--sb-fs-sm);
+  color: var(--sb-text-muted);
+}
+
+.topbar__right {
+  display: flex;
+  align-items: center;
+  gap: var(--sb-sp-3);
+}
+
+.theme-toggle {
+  gap: var(--sb-sp-m);
+  padding: var(--sb-sp-m) var(--sb-sp-2);
+}
+
+.theme-toggle__label {
+  font-size: var(--sb-fs-xs);
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sb-sp-2);
+  padding: var(--sb-sp-m) var(--sb-sp-3);
+  border: var(--sb-hairline) solid var(--sb-border);
+  border-radius: var(--sb-r-full);
+  background: var(--sb-surface);
+  font-size: var(--sb-fs-sm);
+  font-weight: var(--sb-fw-medium);
+  color: var(--sb-text-muted);
+  white-space: nowrap;
+  transition: border-color var(--sb-dur) var(--sb-ease),
+    color var(--sb-dur) var(--sb-ease), background var(--sb-dur) var(--sb-ease);
+}
+
+.status-pill[data-state="connected"] {
+  border-color: var(--sb-accent-line);
+  color: var(--sb-accent-ink);
+  background: var(--sb-accent-wash);
+}
+
+.status-pill[data-state="down"] {
+  border-color: var(--sb-warn-line);
+  color: var(--sb-warn-ink);
+  background: var(--sb-warn-wash);
+}
+
+.status-pill[data-state="panic"] {
+  border-color: var(--sb-danger-line);
+  color: var(--sb-danger-ink);
+  background: var(--sb-danger-wash);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Panic banner and the page-wide panic state                                  */
+/* -------------------------------------------------------------------------- */
+
+.panic-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--sb-sp-3);
+  padding: var(--sb-sp-3) var(--sb-sp-6);
+  border-bottom: var(--sb-hairline) solid var(--sb-danger-line);
+  background: var(--sb-danger-wash);
+  color: var(--sb-danger-ink);
+}
+
+.panic-banner__mark {
+  display: grid;
+  place-items: center;
+}
+
+.panic-banner__body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sb-sp-2);
+  flex: 1;
+  font-size: var(--sb-fs-sm);
+}
+
+.panic-banner__body span {
+  color: var(--sb-text-muted);
+}
+
+/* When panic is tripped the whole surface changes register: the ambient brass
+   wash is replaced with a danger wash and the board itself is visibly held
+   back, so there is no chance of reading a stale card as a live line. */
+body[data-panic="on"] {
+  background:
+    radial-gradient(120% 55% at 50% 0%, var(--sb-danger-wash) 0%, transparent 62%),
+    var(--sb-bg);
+}
+
+body[data-panic="on"] .board-grid,
+body[data-panic="on"] .arm-list {
+  opacity: 0.5;
+  filter: saturate(0.35);
+  pointer-events: none;
+}
+
+/* A danger edge painted over the viewport, above the toast and outside the
+   scroll container. The banner at the top can be scrolled past on a long board;
+   this cannot, so there is no reading position from which a panicked system
+   looks like a working one. */
+body[data-panic="on"]::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 var(--sb-halo) var(--sb-danger);
+}
+
+body[data-panic="on"] .topbar {
+  border-bottom-color: var(--sb-danger-line);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Fatal state                                                                 */
+/* -------------------------------------------------------------------------- */
+
+.fatal {
+  display: flex;
+  gap: var(--sb-sp-3);
+  max-width: var(--sb-w-prose);
+  margin: var(--sb-sp-8) auto;
+  padding: var(--sb-sp-5);
+  border: var(--sb-hairline) solid var(--sb-danger-line);
+  border-radius: var(--sb-r-lg);
+  background: var(--sb-danger-wash);
+}
+
+.fatal__mark {
+  color: var(--sb-danger-ink);
+}
+
+.fatal__title {
+  font-size: var(--sb-fs-lg);
+  font-weight: var(--sb-fw-semibold);
+  margin-bottom: var(--sb-sp-2);
+}
+
+.fatal__body {
+  font-size: var(--sb-fs-md);
+  color: var(--sb-text-muted);
+}
+
+body[data-boot="fatal"] .page,
+body[data-boot="fatal"] .footer {
+  display: none;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Page shell and sections                                                     */
+/* -------------------------------------------------------------------------- */
+
+.page {
+  max-width: var(--sb-maxw);
+  margin: 0 auto;
+  padding: var(--sb-sp-7) var(--sb-sp-6) var(--sb-sp-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sb-sp-7);
+}
+
+.section__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sb-sp-3);
+  margin-bottom: var(--sb-sp-4);
+  padding-bottom: var(--sb-sp-3);
+  border-bottom: var(--sb-hairline) solid var(--sb-border);
+}
+
+.section__title {
+  font-family: var(--sb-font-display);
+  font-size: var(--sb-fs-lg);
+  font-weight: var(--sb-fw-semibold);
+  letter-spacing: var(--sb-track-tight);
+}
+
+.section__note {
+  font-size: var(--sb-fs-sm);
+  color: var(--sb-text-faint);
+}
+
+/* Standing explanatory copy under a section, as opposed to the note beside its
+   heading. Used for the identity check, whose Chrome-versus-Brave asymmetry has
+   to be readable without opening a design document. */
+.section__footnote {
+  margin-top: var(--sb-sp-3);
+  max-width: var(--sb-measure-narrow);
+  font-size: var(--sb-fs-xs);
+  line-height: var(--sb-lh);
+  color: var(--sb-text-faint);
+}
+
+.section__footnote strong {
+  color: var(--sb-text-muted);
+  font-weight: var(--sb-fw-semibold);
+}
+
+.panel {
+  border: var(--sb-hairline) solid var(--sb-border);
+  border-radius: var(--sb-r-lg);
+  background: var(--sb-surface);
+  padding: var(--sb-sp-5);
+}
+
+.panel--flush {
+  padding: 0;
+  overflow: hidden;
+}
+
+.panel--danger {
+  border-color: var(--sb-danger-line);
+}
+
+.empty {
+  padding: var(--sb-sp-5);
+  border: var(--sb-hairline) dashed var(--sb-border-strong);
+  border-radius: var(--sb-r-lg);
+  color: var(--sb-text-muted);
+  font-size: var(--sb-fs-md);
+  text-align: center;
+}
+
+.empty--inset {
+  border: 0;
+  text-align: left;
+}
+
+.hint {
+  font-size: var(--sb-fs-xs);
+  color: var(--sb-text-faint);
+}
+
+/* -------------------------------------------------------------------------- */
+/* THIS LINE                                                                   */
+/* -------------------------------------------------------------------------- */
+
+.self-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sb-sp-4);
+  padding: var(--sb-sp-5);
+  border: var(--sb-hairline) solid var(--sb-border);
+  border-radius: var(--sb-r-xl);
+  background: var(--sb-surface);
+  box-shadow: var(--sb-shadow-1);
+}
+
+/* A rail down the left edge. The claim prompt is the only thing on this page
+   that is a task rather than a readout, and it has to look like one from the
+   corner of the eye. */
+.self-card--claim::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: var(--sb-sp-5);
+  bottom: var(--sb-sp-5);
+  width: var(--sb-halo);
+  border-radius: var(--sb-r-full);
+  background: var(--sb-accent);
+}
+
+.self-card--claim {
+  border-color: var(--sb-accent-line);
+  background: linear-gradient(
+    180deg,
+    var(--sb-accent-wash) 0%,
+    var(--sb-surface) var(--sb-fade-depth)
+  );
+}
+
+.self-card--skeleton {
+  gap: var(--sb-sp-3);
+}
+
+.self-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sb-sp-3);
+  flex-wrap: wrap;
+}
+
+.self-head__lamp {
+  margin-top: var(--sb-lamp-nudge-lg);
+}
+
+.self-head__main {
+  flex: 1;
+  min-width: var(--sb-w-self-main);
+}
+
+.self-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sb-sp-2);
+  flex-wrap: wrap;
+}
+
+/* The label is the primary identity on the page, so it gets display type. The
+   rename affordance is the label itself: a button styled as a heading, with the
+   pencil only appearing on hover or focus so the resting state stays calm. */
+.label-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sb-sp-2);
+  padding: var(--sb-sp-2xs) var(--sb-sp-m);
+  margin-left: calc(var(--sb-sp-m) * -1);
+  border: var(--sb-hairline) solid transparent;
+  border-radius: var(--sb-r-sm);
+  background: transparent;
+  font-family: var(--sb-font-display);
+  font-size: var(--sb-fs-xl);
+  font-weight: var(--sb-fw-semibold);
+  letter-spacing: var(--sb-track-tight);
+  color: var(--sb-text);
+  text-align: left;
+}
+
+.label-edit:hover {
+  border-color: var(--sb-border);
+  background: var(--sb-surface-hover);
+}
+
+.label-edit__pencil {
+  opacity: 0;
+  color: var(--sb-text-faint);
+  transition: opacity var(--sb-dur-fast) var(--sb-ease);
+}
+
+.label-edit:hover .label-edit__pencil,
+.label-edit:focus-visible .label-edit__pencil {
+  opacity: 1;
+}
+
+.label-input {
+  width: min(var(--sb-w-input), 100%);
+  padding: var(--sb-sp-2xs) var(--sb-sp-m);
+  border: var(--sb-hairline) solid var(--sb-accent-line);
+  border-radius: var(--sb-r-sm);
+  background: var(--sb-surface-inset);
+  font-family: var(--sb-font-display);
+  font-size: var(--sb-fs-xl);
+  font-weight: var(--sb-fw-semibold);
+  letter-spacing: var(--sb-track-tight);
+}
+
+.label-input:focus {
+  outline: var(--sb-stroke) solid var(--sb-ring);
+  outline-offset: var(--sb-sp-hair);
+}
+
+.meta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sb-sp-2);
+  margin-top: var(--sb-sp-1);
+  font-size: var(--sb-fs-sm);
+  color: var(--sb-text-muted);
+}
+
+.meta-row__vendor {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sb-sp-s);
+  font-weight: var(--sb-fw-medium);
+  color: var(--sb-text);
+}
+
+.install-id {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sb-sp-m);
+  font-family: var(--sb-font-mono);
+  font-size: var(--sb-fs-xs);
+  color: var(--sb-text-faint);
+  word-break: break-all;
+}
+
+/* ---- Claim prompt --------------------------------------------------------- */
+
+.claim {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sb-sp-4);
+}
+
+.claim__head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sb-sp-3);
+}
+
+.claim__mark {
+  display: grid;
+  place-items: center;
+  width: var(--sb-tile-lg);
+  height: var(--sb-tile-lg);
+  flex: none;
+  border-radius: var(--sb-r-md);
+  border: var(--sb-hairline) solid var(--sb-accent-line);
+  background: var(--sb-accent-wash);
+  color: var(--sb-accent-ink);
+}
+
+.claim__eyebrow {
+  display: block;
+  margin-bottom: var(--sb-sp-1);
+  color: var(--sb-accent-ink);
+}
+
+.claim__title {
+  font-family: var(--sb-font-display);
+  font-size: var(--sb-fs-xl);
+  font-weight: var(--sb-fw-semibold);
+  letter-spacing: var(--sb-track-tight);
+}
+
+.claim__body {
+  font-size: var(--sb-fs-md);
+  color: var(--sb-text-muted);
+  max-width: var(--sb-measure-narrow);
+}
+
+.claim__options {
+  display: grid;
+  gap: var(--sb-sp-2);
+}
+
+/* One click, one line. The whole row is the target and it reads as a physical
+   choice rather than a form control, because it is the only manual step in the
+   entire install and it should feel like plugging something in. */
+.claim-option {
+  display: flex;
+  align-items: center;
+  gap: var(--sb-sp-3);
+  width: 100%;
+  padding: var(--sb-sp-3) var(--sb-sp-4);
+  border: var(--sb-hairline) solid var(--sb-border-strong);
+  border-radius: var(--sb-r-md);
+  background: var(--sb-surface);
+  text-align: left;
+  transition: border-color var(--sb-dur-fast) var(--sb-ease),
+    background var(--sb-dur-fast) var(--sb-ease),
+    transform var(--sb-dur-fast) var(--sb-ease);
+}
+
+.claim-option:hover:not(:disabled) {
+  border-color: var(--sb-accent);
+  background: var(--sb-accent-wash);
+  transform: translateX(var(--sb-nudge));
+}
+
+.claim-option:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+/* While a claim is in flight the rest of the group recedes, so the row being
+   plugged in is the only thing on the card at full contrast. */
+.claim__options[data-claiming="true"] .claim-option {
+  opacity: 0.3;
+}
+
+.claim-option[data-busy="true"],
+.claim-option[data-busy="true"]:disabled {
+  opacity: 1;
+  border-color: var(--sb-accent);
+  background: var(--sb-accent-wash);
+}
+
+.claim-option__port {
+  display: grid;
+  place-items: center;
+  width: var(--sb-tile-sm);
+  height: var(--sb-tile-sm);
+  flex: none;
+  border-radius: var(--sb-r-full);
+  border: var(--sb-stroke) solid var(--sb-border-strong);
+  color: transparent;
+  transition: border-color var(--sb-dur-fast) var(--sb-ease),
+    background var(--sb-dur-fast) var(--sb-ease),
+    color var(--sb-dur-fast) var(--sb-ease);
+}
+
+.claim-option:hover .claim-option__port {
+  border-color: var(--sb-accent);
+  background: var(--sb-accent);
+  color: var(--sb-on-accent);
+}
+
+.claim-option[data-busy="true"] .claim-option__port {
+  border-color: var(--sb-accent);
+  background: var(--sb-accent);
+  color: var(--sb-on-accent);
+}
+
+.claim-option__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.claim-option__dir {
+  font-family: var(--sb-font-mono);
+  font-size: var(--sb-fs-sm);
+  font-weight: var(--sb-fw-semibold);
+  color: var(--sb-text);
+}
+
+.claim-option__name {
+  font-size: var(--sb-fs-sm);
+  color: var(--sb-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claim-option__arrow {
+  margin-left: auto;
+  color: var(--sb-text-faint);
+}
+
+.claim__footnote {
+  font-size: var(--sb-fs-sm);
+  color: var(--sb-text-faint);
+}
+
+/* ---- Re-claiming a line that was claimed wrongly -------------------------- */
+
+/* Deliberately quiet and at the bottom of the identity card. It undoes the one
+   decision on this page that is supposed to be permanent, so it should be
+   findable when wanted and invisible the rest of the time. */
+.reclaim {
+  margin-top: var(--sb-sp-2);
+  display: flex;
+  align-items: center;
+  gap: var(--sb-sp-2);
+  font-size: var(--sb-fs-xs);
+}
+
+.reclaim__ask,
+.reclaim__yes,
+.reclaim__no {
+  border: var(--sb-hairline) solid transparent;
+  border-radius: var(--sb-r-sm);
+  padding: var(--sb-sp-1) var(--sb-sp-2);
+  background: transparent;
+  color: var(--sb-text-faint);
+  font: inherit;
+  cursor: pointer;
+}
+
+.reclaim__ask:hover,
+.reclaim__no:hover {
+  color: var(--sb-text-muted);
+  border-color: var(--sb-border-strong);
+}
+
+.reclaim__confirm {
+  display: flex;
+  align-items: center;
+  gap: var(--sb-sp-1);
+}
+
+.reclaim__yes {
+  border-color: var(--sb-danger-line);
+  background: var(--sb-danger-wash);
+  color: var(--sb-danger-ink);
+}
+
+.claim__cancel {
+  align-self: flex-start;
+}
+
+/* -------------------------------------------------------------------------- */
+/* THE BOARD                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/* The first-load skeleton. Driven off body[data-boot] rather than a JS toggle
+   so it can never flash back on a repoll: data-boot goes to ready once and
+   stays there for the life of the page. */
+body[data-boot="ready"] .board-skeleton {
+  display: none;
+}
+
+/* Scoped to the skeleton grid rather than written as a bare .line--skeleton:
+   a single-class selector would tie against .line and lose on source order,
+   which is how a modifier silently does nothing. */
+.board-skeleton .line {
+  gap: var(--sb-sp-3);
+  pointer-events: none;
+}
+
+.board-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--sb-w-card-min), 1fr));
+  gap: var(--sb-sp-4);
+}
+
+.line {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sb-sp-4);
+  padding: var(--sb-sp-4);
+  border: var(--sb-hairline) solid var(--sb-border);
+  border-radius: var(--sb-r-lg);
+  background: var(--sb-surface);
+  transition: border-color var(--sb-dur) var(--sb-ease),
+    background var(--sb-dur) var(--sb-ease), opacity var(--sb-dur) var(--sb-ease);
+}
+
+.line:hover {
+  border-color: var(--sb-border-strong);
+}
+
+/* The current profile always carries a ring, so the operator can find their own line on a board
+   of many identical looking cards without reading a single label. */
+.line[data-self="true"] {
+  border-color: var(--sb-accent-line);
+  box-shadow: 0 0 0 var(--sb-halo) var(--sb-accent-wash);
+}
+
+.line[data-link="stale"] {
+  border-color: var(--sb-warn-line);
+  background: var(--sb-surface);
+}
+
+.line[data-present="false"] {
+  border-style: dashed;
+  border-color: var(--sb-border-strong);
+  background: transparent;
+  opacity: 0.78;
+}
+
+.line[data-claimed="false"] {
+  border-color: var(--sb-accent-line);
+  border-style: dashed;
+}
+
+/* Wins over both of the above, because a line whose identity changed is also
+   unclaimed and may also be absent, and the reason it is unclaimed is the part
+   that matters. */
+.line[data-state="identity"] {
+  border-style: solid;
+  border-color: var(--sb-danger-line);
+  background: var(--sb-danger-wash);
+  opacity: 1;
+}
+
+/* The signed-in account, on every row. It is the answer to the question a label
+   collision poses, so it is never truncated away. */
+.line__account {
+  word-break: break-all;
+}
+
+.line__head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sb-sp-3);
+}
+
+.line__lamp {
+  margin-top: var(--sb-lamp-nudge);
+}
+
+.line__id {
+  flex: 1;
+  min-width: 0;
+}
+
+.line__label {
+  font-size: var(--sb-fs-md);
+  font-weight: var(--sb-fw-semibold);
+  letter-spacing: var(--sb-track-tight);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.line__sub {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sb-sp-m);
+  margin-top: var(--sb-sp-2xs);
+  font-size: var(--sb-fs-xs);
+  color: var(--sb-text-muted);
+}
+
+.line__sub .meta-row__vendor {
+  font-size: var(--sb-fs-xs);
+}
+
+.line__state {
+  display: flex;
+  align-items: center;
+  gap: var(--sb-sp-2);
+  font-size: var(--sb-fs-sm);
+}
+
+.line__state-word {
+  font-weight: var(--sb-fw-semibold);
+  letter-spacing: var(--sb-track-wide);
+  text-transform: uppercase;
+  font-size: var(--sb-fs-2xs);
+}
+
+.line[data-link="ready"] .line__state-word {
+  color: var(--sb-accent-ink);
+}
+
+.line[data-link="stale"] .line__state-word {
+  color: var(--sb-warn-ink);
+}
+
+.line[data-present="false"] .line__state-word,
+.line[data-link="down"] .line__state-word {
+  color: var(--sb-text-faint);
+}
+
+.line__state-detail {
+  color: var(--sb-text-muted);
+  font-size: var(--sb-fs-xs);
+}
+
+.line__stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sb-sp-2);
+  padding-top: var(--sb-sp-3);
+  border-top: var(--sb-hairline) solid var(--sb-border);
+}
+
+.line__stat dt {
+  font-size: var(--sb-fs-2xs);
+  font-weight: var(--sb-fw-semibold);
+  letter-spacing: var(--sb-track-wide);
+  text-transform: uppercase;
+  color: var(--sb-text-faint);
+}
+
+.line__stat dd {
+  font-size: var(--sb-fs-md);
+  font-weight: var(--sb-fw-medium);
+  font-variant-numeric: tabular-nums;
+  color: var(--sb-text);
+}
+
+.line__stat dd .unit {
+  font-size: var(--sb-fs-xs);
+  font-weight: var(--sb-fw-regular);
+  color: var(--sb-text-faint);
+  margin-left: var(--sb-sp-2xs);
+}
+
+/* Grid rows stretch every card to the tallest one in the row, so the footer is
+   pinned to the bottom rather than left floating in the middle of the dead
+   space a short card inherits from a tall neighbor. */
+.line__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sb-sp-2);
+  flex-wrap: wrap;
+  min-height: var(--sb-h-foot-row);
+  margin-top: auto;
+  padding-top: var(--sb-sp-1);
+}
+
+.line__ops {
+  margin-left: auto;
+  font-size: var(--sb-fs-xs);
+  color: var(--sb-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.line__notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sb-sp-m);
+  padding: var(--sb-sp-2) var(--sb-sp-3);
+  border-radius: var(--sb-r-sm);
+  background: var(--sb-warn-wash);
+  color: var(--sb-warn-ink);
+  font-size: var(--sb-fs-xs);
+}
+
+.line__notice--muted {
+  background: var(--sb-surface-inset);
+  color: var(--sb-text-muted);
+}
+
+/* Reserved for one thing: the account behind a claimed line changed. Warn amber
+   is what a stale heartbeat looks like, and this must not look like that. */
+.line__notice--alarm {
+  background: var(--sb-danger-wash);
+  color: var(--sb-danger-ink);
+  border: var(--sb-hairline) solid var(--sb-danger-line);
+}
+
+/* An armed chip is a link back to the control that set it, so the operator can
+   get from "why is that lit" to "turn it off" in one keystroke. */
+.chip-link {
+  border: var(--sb-hairline) solid var(--sb-accent-line);
+  background: var(--sb-accent-wash);
+  color: var(--sb-accent-ink);
+  text-decoration: none;
+}
+
+.chip-link:hover {
+  background: var(--sb-accent-wash-strong);
+}
+
+/* -------------------------------------------------------------------------- */
+/* ARMING                                                                      */
+/* -------------------------------------------------------------------------- */
+
+.arm-explainer {
+  display: flex;
+  gap: var(--sb-sp-3);
+  padding-bottom: var(--sb-sp-4);
+  margin-bottom: var(--sb-sp-4);
+  border-bottom: var(--sb-hairline) solid var(--sb-border);
+  font-size: var(--sb-fs-md);
+  color: var(--sb-text-muted);
+  max-width: var(--sb-measure-wide);
+}
+
+.arm-explainer__mark {
+  flex: none;
+  margin-top: var(--sb-sp-xs);
+  color: var(--sb-accent-ink);
+}
+
+.arm-explainer strong {
+  color: var(--sb-text);
+  font-weight: var(--sb-fw-semibold);
+}
+
+.arm-duration {
+  border: 0;
+  padding: 0;
+  margin: 0 0 var(--sb-sp-4);
+}
+
+.arm-duration legend {
+  padding: 0;
+  margin-bottom: var(--sb-sp-2);
+}
+
+.arm-duration__options {
+  display: inline-flex;
+  padding: var(--sb-sp-xs);
+  border: var(--sb-hairline) solid var(--sb-border);
+  border-radius: var(--sb-r-md);
+  background: var(--sb-surface-inset);
+  gap: var(--sb-sp-2xs);
+}
+
+.arm-duration__option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.arm-duration__option span {
+  display: block;
+  padding: var(--sb-sp-s) var(--sb-sp-3);
+  border-radius: var(--sb-r-sm);
+  font-size: var(--sb-fs-sm);
+  font-weight: var(--sb-fw-medium);
+  font-variant-numeric: tabular-nums;
+  color: var(--sb-text-muted);
+  cursor: pointer;
+  transition: background var(--sb-dur-fast) var(--sb-ease),
+    color var(--sb-dur-fast) var(--sb-ease);
+}
+
+.arm-duration__option:hover span {
+  color: var(--sb-text);
+}
+
+.arm-duration__option input:checked + span {
+  background: var(--sb-surface-raised);
+  border: var(--sb-hairline) solid var(--sb-border-strong);
+  padding: var(--sb-sp-1) calc(var(--sb-sp-3) - var(--sb-hairline));
+  color: var(--sb-text);
+  font-weight: var(--sb-fw-semibold);
+}
+
+.arm-duration__option input:focus-visible + span {
+  outline: var(--sb-stroke) solid var(--sb-ring);
+  outline-offset: var(--sb-sp-hair);
+}
+
+.arm-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.arm-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sb-sp-3);
+  padding: var(--sb-sp-3) 0;
+  border-top: var(--sb-hairline) solid var(--sb-border);
+}
+
+.arm-row:first-child {
+  border-top: 0;
+}
+
+.arm-row:target {
+  background: var(--sb-accent-wash);
+  border-radius: var(--sb-r-sm);
+  padding-left: var(--sb-sp-2);
+  padding-right: var(--sb-sp-2);
+}
+
+.arm-row__id {
+  display: flex;
+  align-items: center;
+  gap: var(--sb-sp-2);
+  min-width: var(--sb-w-arm-id);
+}
+
+.arm-row__label {
+  font-size: var(--sb-fs-md);
+  font-weight: var(--sb-fw-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arm-row__status {
+  flex: 1;
+  min-width: var(--sb-w-arm-status);
+}
+
+.arm-row__status-text {
+  display: block;
+  font-size: var(--sb-fs-sm);
+  color: var(--sb-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.arm-row[data-armed="true"] .arm-row__status-text {
+  color: var(--sb-accent-ink);
+  font-weight: var(--sb-fw-semibold);
+}
+
+/* A bar rather than a ring: it sits inline with the row, reads left to right
+   like every other progress in the product, and stays legible at 4px tall.
+   The bar itself is .sb-bar in the token layer; this is only its placement. */
+.arm-row__bar {
+  margin-top: var(--sb-sp-s);
+}
+
+.arm-row[data-armed="false"] .arm-row__bar {
+  visibility: hidden;
+}
+
+.arm-row__actions {
+  display: flex;
+  gap: var(--sb-sp-2);
+  margin-left: auto;
+}
+
+/* -------------------------------------------------------------------------- */
+/* ACTIVITY                                                                    */
+/* -------------------------------------------------------------------------- */
+
+.privacy-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sb-sp-2);
+  padding: var(--sb-sp-3) var(--sb-sp-4);
+  border-bottom: var(--sb-hairline) solid var(--sb-border);
+  background: var(--sb-surface-inset);
+  font-size: var(--sb-fs-xs);
+  color: var(--sb-text-muted);
+}
+
+.privacy-note__mark {
+  flex: none;
+  margin-top: var(--sb-sp-2xs);
+  color: var(--sb-text-faint);
+}
+
+.audit {
+  max-height: var(--sb-h-audit);
+  overflow-y: auto;
+  overflow-x: auto;
+}
+
+.audit__list {
+  font-family: var(--sb-font-mono);
+  font-size: var(--sb-fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.audit-row {
+  display: grid;
+  grid-template-columns:
+    var(--sb-col-time) var(--sb-col-profile) var(--sb-col-op)
+    minmax(0, 1fr) var(--sb-col-mark);
+  gap: var(--sb-sp-3);
+  align-items: center;
+  padding: var(--sb-sp-s) var(--sb-sp-4);
+  border-bottom: var(--sb-hairline) solid var(--sb-border);
+  white-space: nowrap;
+}
+
+.audit-row:last-child {
+  border-bottom: 0;
+}
+
+.audit-row:hover {
+  background: var(--sb-surface-hover);
+}
+
+.audit-row__time {
+  color: var(--sb-text-faint);
+}
+
+.audit-row__profile {
+  color: var(--sb-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.audit-row__op {
+  color: var(--sb-accent-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.audit-row__origin {
+  color: var(--sb-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.audit-row__mark {
+  justify-self: end;
+  color: var(--sb-text-faint);
+}
+
+.audit-row[data-ok="false"] .audit-row__mark {
+  color: var(--sb-danger-ink);
+}
+
+.audit-row[data-ok="false"] {
+  background: var(--sb-danger-wash);
+}
+
+/* -------------------------------------------------------------------------- */
+/* PANIC                                                                       */
+/* -------------------------------------------------------------------------- */
+
+.panic-copy {
+  max-width: var(--sb-measure);
+  font-size: var(--sb-fs-md);
+  color: var(--sb-text-muted);
+}
+
+.panic-copy strong {
+  color: var(--sb-text);
+}
+
+.panic-copy__sub {
+  margin-top: var(--sb-sp-2);
+  font-size: var(--sb-fs-sm);
+}
+
+.panic-copy code {
+  padding: var(--sb-sp-hair) var(--sb-sp-s);
+  border-radius: var(--sb-r-xs);
+  background: var(--sb-surface-inset);
+  border: var(--sb-hairline) solid var(--sb-border);
+  font-size: var(--sb-fs-xs);
+}
+
+.panic-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sb-sp-3);
+  flex-wrap: wrap;
+  margin-top: var(--sb-sp-4);
+}
+
+.panic-hold {
+  min-width: var(--sb-w-hold);
+  justify-content: center;
+  user-select: none;
+  touch-action: none;
+}
+
+.panic-actions .hint {
+  max-width: var(--sb-measure-hint);
+}
+
+/* The hint explains the hold control, and the hold control is replaced by the
+   clear button while panic is engaged. Leaving the hint behind would tell the
+   operator to press and hold a button that is no longer on the page. */
+body[data-panic="on"] .panic-actions .hint {
+  display: none;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Broker down card, rendered into the board slot                              */
+/* -------------------------------------------------------------------------- */
+
+.broker-down {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sb-sp-3);
+  padding: var(--sb-sp-5);
+  border: var(--sb-hairline) solid var(--sb-warn-line);
+  border-radius: var(--sb-r-lg);
+  background: var(--sb-warn-wash);
+}
+
+.broker-down__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sb-sp-2);
+  font-size: var(--sb-fs-lg);
+  font-weight: var(--sb-fw-semibold);
+  color: var(--sb-warn-ink);
+}
+
+.broker-down__body {
+  font-size: var(--sb-fs-md);
+  color: var(--sb-text-muted);
+  max-width: var(--sb-measure);
+}
+
+.cmd {
+  display: flex;
+  align-items: center;
+  gap: var(--sb-sp-2);
+  padding: var(--sb-sp-2) var(--sb-sp-3);
+  border: var(--sb-hairline) solid var(--sb-border-strong);
+  border-radius: var(--sb-r-sm);
+  background: var(--sb-surface);
+}
+
+.cmd__text {
+  flex: 1;
+  font-family: var(--sb-font-mono);
+  font-size: var(--sb-fs-sm);
+  color: var(--sb-text);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.broker-down__detail {
+  font-size: var(--sb-fs-xs);
+  color: var(--sb-text-faint);
+  font-family: var(--sb-font-mono);
+  word-break: break-word;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Footer and toast                                                            */
+/* -------------------------------------------------------------------------- */
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sb-sp-3);
+  padding: var(--sb-sp-5) var(--sb-sp-6) var(--sb-sp-7);
+  border-top: var(--sb-hairline) solid var(--sb-border);
+  font-size: var(--sb-fs-xs);
+  color: var(--sb-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The toast is never given the hidden attribute, because display:none would
+ * take this aria-live region out of the accessibility tree and its messages
+ * with it. It is hidden by opacity instead, which leaves it announceable, and
+ * emptied by JS when it closes so nothing stale can be read out.
+ */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: var(--sb-sp-5);
+  transform: translateX(-50%);
+  z-index: 50;
+  padding: var(--sb-sp-2) var(--sb-sp-4);
+  border: var(--sb-hairline) solid var(--sb-border-strong);
+  border-radius: var(--sb-r-full);
+  background: var(--sb-surface-raised);
+  box-shadow: var(--sb-shadow-3);
+  font-size: var(--sb-fs-sm);
+  font-weight: var(--sb-fw-medium);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--sb-dur) var(--sb-ease);
+}
+
+/* Naming the animation only on the open state is what makes it replay: the
+   animation-name changes from none to sb-toast-in every time the attribute
+   flips, which is the only restart trigger CSS gives us on a node that is
+   never re-inserted. */
+.toast[data-open="true"] {
+  opacity: 1;
+  animation: sb-toast-in var(--sb-dur-slow) var(--sb-ease-out);
+}
+
+.toast[data-tone="error"] {
+  border-color: var(--sb-danger-line);
+  color: var(--sb-danger-ink);
+}
+
+@keyframes sb-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, var(--sb-lift));
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Narrow widths. The board is a desktop surface but it must never break.      */
+/* -------------------------------------------------------------------------- */
+
+/* The breakpoint is a literal because it has to be: a media query is evaluated
+   before the cascade, so it cannot read a custom property. It is the only raw
+   length outside the token layer, and it is a viewport threshold rather than a
+   design decision. */
+@media (max-width: 720px) {
+  .topbar__inner,
+  .page {
+    padding-left: var(--sb-sp-4);
+    padding-right: var(--sb-sp-4);
+  }
+
+  .page {
+    padding-top: var(--sb-sp-5);
+    gap: var(--sb-sp-6);
+  }
+
+  .topbar__inner {
+    flex-wrap: wrap;
+    row-gap: var(--sb-sp-2);
+  }
+
+  .brand__name {
+    font-size: var(--sb-fs-xl);
+  }
+
+  /* The tagline wraps to three lines in a 390px header and turns the wordmark
+     into a block of text. The mark plus the name carry the identity on their
+     own at this width. */
+  .brand__tagline {
+    display: none;
+  }
+
+  .board-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .arm-row {
+    flex-wrap: wrap;
+  }
+
+  .arm-row__actions {
+    margin-left: 0;
+  }
+
+  .audit-row {
+    grid-template-columns: var(--sb-col-time-narrow) 1fr var(--sb-col-mark-narrow);
+    grid-template-areas:
+      "time profile mark"
+      "time op mark"
+      "time origin mark";
+    row-gap: 0;
+  }
+
+  .audit-row__time {
+    grid-area: time;
+  }
+  .audit-row__profile {
+    grid-area: profile;
+  }
+  .audit-row__op {
+    grid-area: op;
+  }
+  .audit-row__origin {
+    grid-area: origin;
+  }
+  .audit-row__mark {
+    grid-area: mark;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Reduced motion                                                              */
+/* The token layer collapses every transition and animation. Transform is       */
+/* neither, so a resting position displaced by a hover state has to be pinned   */
+/* back by hand. This is the only such displacement in the product.             */
+/* -------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .claim-option:hover:not(:disabled) {
+    transform: none;
+  }
+}

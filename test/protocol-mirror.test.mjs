@@ -1,0 +1,166 @@
+/**
+ * The extension's copy of the protocol must match the shared contract.
+ *
+ * extension/lib/protocol.js is a hand-maintained mirror of
+ * shared/protocol.mjs, because an extension cannot import a file outside its
+ * own folder. A drift between them is not a load error: it is a silent wire
+ * incompatibility, the exact class of bug that once had every Brave profile
+ * register as Chrome. scripts/gate.mjs runs the same comparison on every
+ * commit; this test runs it under `npm test`.
+ */
+
+import test from 'node:test'
+import assert from 'node:assert/strict'
+
+import * as shared from '../shared/protocol.mjs'
+import * as mirror from '../extension/lib/protocol.js'
+
+/** Constants that must be byte-for-byte identical on both sides. */
+const IDENTICAL = [
+  'PROTOCOL_VERSION',
+  'PRODUCT_NAME',
+  'PRODUCT_TAGLINE',
+  'NATIVE_HOST_ID',
+  'MSG',
+  'CHUNK_SLICE_BYTES',
+  'OPS',
+  'TIER',
+  'OP_TIER',
+  'BROWSER_OPS',
+  'BROKER_OPS',
+  'HOST_REQ_ALLOWED_OPS',
+  'MAX_ARM_MINUTES',
+  'ERR',
+  'LINK',
+  'RESTRICTED_URL_PREFIXES',
+  'RAW_TAB_ID_FIELD',
+  'LOCAL_PAGE_EXTENSIONS',
+  'OPEN_OR_FOCUS_MATCH',
+  'OPEN_OR_FOCUS_MODE',
+]
+
+test('every mirrored constant is identical to the shared contract', () => {
+  for (const name of IDENTICAL) {
+    assert.ok(name in shared, `shared/protocol.mjs no longer exports ${name}`)
+    assert.ok(name in mirror, `extension/lib/protocol.js no longer exports ${name}`)
+    assert.deepEqual(mirror[name], shared[name], `${name} drifted between the contract and the extension mirror`)
+  }
+})
+
+test('every timing the extension carries matches the shared value', () => {
+  // The extension copies TIMING whole but may lag behind broker-only entries
+  // (PARENT_WATCH_INTERVAL is a Windows launcher concern). Every key it DOES
+  // carry must agree.
+  for (const [key, value] of Object.entries(mirror.TIMING)) {
+    assert.equal(value, shared.TIMING[key], `TIMING.${key} drifted`)
+  }
+})
+
+test('the message builders produce the same envelopes', () => {
+  assert.deepEqual(mirror.register({ installId: 'i' }), shared.register({ installId: 'i' }))
+  assert.deepEqual(mirror.registerAck({ ok: true }), shared.registerAck({ ok: true }))
+  assert.deepEqual(mirror.req({ id: 1, op: 'x', timeoutMs: 5 }), shared.req({ id: 1, op: 'x', timeoutMs: 5 }))
+  assert.deepEqual(mirror.ok(1, { a: 1 }), shared.ok(1, { a: 1 }))
+  assert.deepEqual(mirror.fail(1, 'E_X', 'm'), shared.fail(1, 'E_X', 'm'))
+  assert.deepEqual(mirror.ping(3), shared.ping(3))
+  assert.deepEqual(mirror.pong(3, { t: 1 }), shared.pong(3, { t: 1 }))
+  assert.deepEqual(mirror.event('n', { p: 1 }), shared.event('n', { p: 1 }))
+  assert.deepEqual(mirror.chunk({ id: 'c', seq: 0, total: 1, data: 'AA==' }), shared.chunk({ id: 'c', seq: 0, total: 1, data: 'AA==' }))
+})
+
+test('tab handles and URL rules agree', () => {
+  const h = shared.mintTabHandle('chrome-work', 4, 17)
+  assert.equal(mirror.mintTabHandle('chrome-work', 4, 17), h)
+  assert.deepEqual(mirror.parseTabHandle(h), shared.parseTabHandle(h))
+  for (const url of ['file:///x', 'chrome://a', 'https://example.com/', '', 'about:blank']) {
+    assert.equal(mirror.isRestrictedUrl(url), shared.isRestrictedUrl(url), url)
+  }
+  assert.equal(mirror.originOf('https://a.example/p?q#f'), shared.originOf('https://a.example/p?q#f'))
+})
+
+test('the openOrFocus rules agree, address by address', () => {
+  // The extension DECIDES with its copy of these and the broker ENFORCES with
+  // the contract's, so a drift here is a page opened in one place and refused
+  // in the other, or worse, a local file the broker lets through and the
+  // extension has a different opinion about.
+  const urls = [
+    'file:///C:/work/report.html',
+    'file:///C:/work/report.HTM',
+    'file:///C:/work/notes.html.txt',
+    'file:///C:/Users/someone/.env',
+    'https://example.com/report',
+    'chrome://settings',
+    '',
+    // The adversarial cases specifically. These are the inputs where a drift
+    // between the two copies would not merely disagree, it would let one side
+    // accept a network path, a truncated name or an alternate data stream.
+    'file://attacker.example/share/report.html',
+    'file:////attacker.example/share/report.html',
+    'file:///C:/Users/someone/.env%00.html',
+    'file:///C:/Users/someone/secrets.env:report.html',
+    'file:///C:/Users/someone/.env.html.',
+    'file:///C:/Users/someone/.env?x=.html',
+    'file:///home/someone/report.html',
+  ]
+  for (const url of urls) {
+    assert.equal(mirror.isLocalPageUrl(url), shared.isLocalPageUrl(url), url)
+    assert.equal(mirror.isOpenOrFocusUrl(url), shared.isOpenOrFocusUrl(url), url)
+    // The mode matters as much as the predicate now: a drift here would have
+    // one side finding and moving a tab the other side refused outright, or
+    // worse, one side willing to OPEN an address the other would only find.
+    assert.equal(mirror.openOrFocusMode(url), shared.openOrFocusMode(url), `mode for ${url}`)
+  }
+  for (const url of [
+    'file:///C:/work/report.pdf',
+    'file:///C:/Users/someone/.env',
+    'file:/c:/x.png',
+    // The invisible-character forms, which is where a drift would be invisible
+    // in review AND invisible on screen: one side would open what the other
+    // refused, over a character neither a reader nor a diff shows.
+    'fi\tle:///C:/Users/me/.env',
+    'file\t:///C:/Users/me/.env',
+    'ch\trome://settings',
+    '\uFB01le:///C:/x.env',
+    'file :///C:/x.env',
+  ]) {
+    assert.equal(mirror.openOrFocusMode(url), shared.openOrFocusMode(url), `mode for ${JSON.stringify(url)}`)
+    assert.equal(mirror.isRestrictedUrl(url), shared.isRestrictedUrl(url), `restricted for ${JSON.stringify(url)}`)
+  }
+
+  const target = 'file:///C:/work/repo/docs/report.html'
+  const others = [target, 'file:///c:/work/repo/docs/report.html#x', 'file:///C:/work/other/docs/report.html']
+  for (const other of others) {
+    for (const allowFileName of [false, true]) {
+      assert.equal(
+        mirror.openOrFocusMatch(target, other, { allowFileName }),
+        shared.openOrFocusMatch(target, other, { allowFileName }),
+        `${other} (allowFileName ${allowFileName})`
+      )
+    }
+  }
+
+  const spec = {
+    url: target,
+    tabs: [
+      { tabId: 1, windowId: 1, index: 0, url: target, active: false, pinned: false },
+      { tabId: 2, windowId: 2, index: 0, url: target, active: true, pinned: false },
+    ],
+    lastFocusedWindowId: 2,
+    openedByUs: [1],
+  }
+  assert.deepEqual(mirror.planOpenOrFocus(spec), shared.planOpenOrFocus(spec))
+  const result = { action: 'reused', match: 'exact', fromIndex: 0, toIndex: 3, windowId: 2, moved: true, reloaded: true, closed: 1, kept: 0 }
+  assert.equal(mirror.describeOpenOrFocus(result), shared.describeOpenOrFocus(result))
+  const findOnly = { ...result, mode: shared.OPEN_OR_FOCUS_MODE.FIND_ONLY, reloaded: false }
+  assert.equal(mirror.describeOpenOrFocus(findOnly), shared.describeOpenOrFocus(findOnly))
+})
+
+test('the extension reload sentence is the same on both sides', () => {
+  for (const spec of [
+    { profile: 'chrome-work', from: '0.3.0', to: '0.4.0', verified: true, waitedMs: 2100 },
+    { profile: 'chrome-work', from: '0.3.0', to: '0.4.0', verified: false },
+    {},
+  ]) {
+    assert.equal(mirror.describeExtensionReload(spec), shared.describeExtensionReload(spec), JSON.stringify(spec))
+  }
+})
