@@ -159,14 +159,15 @@ test('a runtime.json with no auth field draws the pre-0.5.0 warning', () => {
   }
 })
 
-test('an auth value clients do not speak draws a warning too, because they fall back to the token', () => {
-  // shared/auth.mjs runtimeScheme: anything but the one known scheme means the
-  // legacy handshake, which sends the token.
+test('an auth value clients do not speak draws a warning too, because they refuse to dial on it', () => {
+  // shared/auth.mjs runtimeScheme: anything but the one known scheme is no
+  // scheme, and helloCredentials gives a client nothing to send.
   for (const auth of ['', 'hmac-sha256-v2', 42]) {
     const warnings = brokerAgeWarnings(runtime({ version: '0.5.1', auth }), '0.5.1')
     assert.equal(warnings.length, 1, `auth ${JSON.stringify(auth)} drew ${warnings.length} warnings`)
     assert.match(warnings[0].text, /does not speak/)
-    assert.match(warnings[0].text, /sending the token/)
+    assert.match(warnings[0].text, /refuse to dial/)
+    assert.doesNotMatch(warnings[0].text, /sending the token/)
   }
 })
 

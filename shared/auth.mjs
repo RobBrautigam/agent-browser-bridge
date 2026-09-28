@@ -25,13 +25,22 @@
  * it can use later. The broker only answers with a proof after the client's
  * proof checked out, so it is never an oracle for anyone without the token.
  *
- * NO DOWNGRADE ON THE PIPE. Which handshake a client uses is decided by the
- * `auth` field in runtime.json, which only the broker writes and which is
- * restricted to the current user. A client never falls back to sending the
- * token because of anything the pipe said; it falls back only when the file
- * says the broker running is one from before this scheme existed. A new broker
- * still accepts the old token HELLO, so a host or MCP server started before an
- * upgrade keeps working until it restarts.
+ * NO DOWNGRADE, ON THE PIPE OR IN THE FILE. A client speaks this scheme or
+ * does not dial. It used to fall back to the token HELLO when runtime.json had
+ * no `auth` field, the mark of a broker from before the scheme; but a broker
+ * that loses the pipe name to a squatter exits without rewriting the file, so
+ * a runtime.json left behind by an old broker, or restored from a backup, is
+ * exactly what a squatter needs in order to be handed the token and trusted
+ * without a proof. So a missing or unknown `auth` field now means "restart the
+ * broker", never "send the token". The broker still ACCEPTS the token HELLO,
+ * which costs nothing (whoever can send the token could compute a proof) and
+ * lets a host or MCP server process started before an upgrade keep working
+ * until it restarts.
+ *
+ * A REFUSAL IS NOT A PROOF. The broker answers a bad HELLO before any proof
+ * exists, so everything in a refusal is the word of whoever holds the pipe
+ * name. Clients report it in their own words, with one of the codes the
+ * broker can send (refusalCode), and never pass on its text.
  *
  * Pure functions over node:crypto, so the broker, the host, the MCP client and
  * doctor share one implementation and the tests exercise the real thing.
@@ -135,34 +144,59 @@ export function authenticateHello(msg, token, ledger) {
 }
 
 /**
- * What a client puts in HELLO, and what it must see in HELLO_ACK.
+ * What a client puts in HELLO, and what it must see in HELLO_ACK: a nonce and
+ * a proof, never the token.
  *
- * With the scheme: a nonce and a proof, never the token. Without it (the
- * runtime file was written by a broker from before this scheme): the token, as
- * before, and nothing to check in the ack.
+ * Null when the runtime file names no scheme this client speaks, or holds no
+ * token. The caller then does not dial (see NO DOWNGRADE above); there is no
+ * HELLO a client can send that an impostor could not use.
  *
- * @returns {{fields: object, expect: {token: string, role: string, nonce: string}|null}}
+ * @returns {{fields: object, expect: {token: string, role: string, nonce: string}}|null}
  */
 export function helloCredentials({ token, scheme, role }) {
-  if (scheme === AUTH_SCHEME) {
-    const nonce = newNonce()
-    return {
-      fields: { auth: AUTH_SCHEME, nonce, proof: clientProof(token, role, nonce) },
-      expect: { token, role, nonce },
-    }
+  if (scheme !== AUTH_SCHEME || !usableToken(token)) return null
+  const nonce = newNonce()
+  return {
+    fields: { auth: AUTH_SCHEME, nonce, proof: clientProof(token, role, nonce) },
+    expect: { token, role, nonce },
   }
-  return { fields: { token }, expect: null }
 }
 
 /**
  * Whether an ok HELLO_ACK came from the broker that owns this boot's token.
- * `expect` is what helloCredentials returned; null means the legacy handshake,
- * where there is nothing to verify.
+ * `expect` is what helloCredentials returned. Anything else, null included,
+ * proves nothing.
  */
 export function ackProvesBroker(ack, expect) {
-  if (expect === null) return true
   if (!expect || !usableToken(expect.token)) return false
   return sameDigest(ack?.proof, brokerProof(expect.token, expect.role, expect.nonce))
+}
+
+/**
+ * The codes the broker refuses a HELLO with: ERR.UNAUTHORIZED, ERR.BAD_REQUEST
+ * and ERR.PANIC, spelled here for the same reason as HELLO_ACK_TYPE below (a
+ * test pins them to the protocol).
+ */
+export const REFUSAL_CODES = Object.freeze(['E_UNAUTHORIZED', 'E_BAD_REQUEST', 'E_PANIC'])
+
+/**
+ * The code of a refused HELLO_ACK, as far as a client can know it: the one the
+ * endpoint gave when the broker could have given it, E_UNAUTHORIZED otherwise.
+ * The refusal comes before any proof (A REFUSAL IS NOT A PROOF, above), so the
+ * code is all a client keeps of it.
+ */
+export function refusalCode(ack) {
+  const code = ack?.error?.code
+  return REFUSAL_CODES.includes(code) ? code : REFUSAL_CODES[0]
+}
+
+/** The sentence every client uses when runtime.json names no scheme it speaks. */
+export function noSchemeMessage(runtimeFile, startCommand) {
+  return (
+    `${runtimeFile} does not say the broker proves itself (its auth field is missing or unknown), ` +
+    'so nothing was sent: the file may be from a broker older than this client, or left behind by ' +
+    `one that stopped. Restart the broker, which rewrites it: ${startCommand}`
+  )
 }
 
 /** MSG.HELLO_ACK, spelled here so this module does not import the protocol. */

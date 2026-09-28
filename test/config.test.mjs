@@ -11,9 +11,12 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import {
   CONFIG,
@@ -22,6 +25,7 @@ import {
   loadConfig,
   renderExtensionConfig,
   renderProjections,
+  socketNameFor,
   validateConfig,
 } from '../shared/config.mjs'
 import { deriveConfig } from '../scripts/rename.mjs'
@@ -130,6 +134,48 @@ test('loadConfig refuses a missing key rather than defaulting it', () => {
   fs.writeFileSync(file, JSON.stringify(rest), 'utf8')
   assert.throws(() => loadConfig(file), /socketName/)
   fs.rmSync(dir, { recursive: true, force: true })
+})
+
+/* -------------------------------------------------------------------------- */
+/* BRIDGE_SOCKET_NAME: a throwaway endpoint for tests                           */
+/* -------------------------------------------------------------------------- */
+
+test('BRIDGE_SOCKET_NAME replaces the socket name only when it is set', () => {
+  assert.equal(socketNameFor({}), CONFIG.socketName)
+  assert.equal(socketNameFor({ BRIDGE_SOCKET_NAME: '' }), CONFIG.socketName, 'an empty value is unset, as for BRIDGE_HOME')
+  assert.equal(socketNameFor({ BRIDGE_SOCKET_NAME: 'abb-test-1' }), 'abb-test-1')
+  assert.equal(socketNameFor({ BRIDGE_SOCKET_NAME: 'a'.repeat(20) }), 'a'.repeat(20))
+})
+
+test('BRIDGE_SOCKET_NAME is held to the socketName rule, and the error names the variable', () => {
+  const bad = ['Upper', 'a'.repeat(21), '-lead', 'has space', '../up', 'a/b', 'a\\b', '\\\\.\\pipe\\x', 'con', 'NUL', 'lpt1']
+  for (const value of bad) {
+    assert.throws(() => socketNameFor({ BRIDGE_SOCKET_NAME: value }), /BRIDGE_SOCKET_NAME/, JSON.stringify(value))
+  }
+})
+
+test('the endpoint a process dials and listens on follows BRIDGE_SOCKET_NAME', () => {
+  // The endpoint is fixed when shared/paths.mjs is imported, so this asks a
+  // fresh process for it rather than re-importing a cached module.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-sock-'))
+  const name = `abb-cfg-${crypto.randomBytes(4).toString('hex')}`
+  const paths = pathToFileURL(path.join(REPO_ROOT, 'shared', 'paths.mjs')).href
+  const endpointWith = (value) => {
+    const run = spawnSync(
+      process.execPath,
+      ['--input-type=module', '-e', `const m = await import(${JSON.stringify(paths)}); process.stdout.write(m.PIPE_NAME)`],
+      { env: { ...process.env, BRIDGE_HOME: home, BRIDGE_SOCKET_NAME: value }, encoding: 'utf8', windowsHide: true }
+    )
+    assert.equal(run.status, 0, run.stderr)
+    return run.stdout
+  }
+  const expected = (slug) => (process.platform === 'win32' ? `\\\\.\\pipe\\${slug}` : path.join(home, `${slug}.sock`))
+  try {
+    assert.equal(endpointWith(name), expected(name))
+    assert.equal(endpointWith(''), expected(CONFIG.socketName))
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
 })
 
 /* -------------------------------------------------------------------------- */

@@ -389,8 +389,10 @@ Stated plainly, because a security model nobody believes is worse than none.
   named pipe (Windows) or a Unix socket file (macOS, Linux), and every client
   proves a 256-bit token the broker mints on each start and writes to a file
   only your user can read. The broker proves it back, so the token never
-  crosses the pipe and a process squatting on the pipe name gets nothing. A
-  leaked token dies at the next restart.
+  crosses the pipe and a process squatting on the pipe name gets nothing, not
+  even behind a `runtime.json` left over from an older broker (a client that
+  finds no scheme in it does not dial). A leaked token dies at the next
+  restart.
 - **What the extension can read.** It has `host_permissions` for all URLs,
   because the agent may need to read any page you are logged into. It never
   requests `chrome.cookies`, and the build gate fails any commit that adds it.
