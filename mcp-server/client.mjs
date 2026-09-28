@@ -27,7 +27,7 @@ import net from 'node:net'
 
 import { FrameDecoder, writeFrame } from '../shared/framing.mjs'
 import { RUNTIME_FILE, START_BROKER_COMMAND, readRuntimeCredentials } from '../shared/paths.mjs'
-import { ackProvesBroker, helloCredentials, impostorMessage } from '../shared/auth.mjs'
+import { ackProvesBroker, helloCredentials, impostorMessage, noSchemeMessage, refusalCode } from '../shared/auth.mjs'
 import { ERR, MSG, PIPE_NAME, ROLE, TIMING, hello, req } from '../shared/protocol.mjs'
 
 /**
@@ -45,6 +45,16 @@ const CONNECT_TIMEOUT_MS = 3_000
  * typed error names the operation and ours cannot.
  */
 const LOCAL_TIMEOUT_GRACE_MS = 2_000
+
+/**
+ * What this client says about a refused HELLO, by code. Never the refusal's
+ * own text: it arrives before the endpoint has proven anything.
+ */
+const REFUSAL_MESSAGES = Object.freeze({
+  [ERR.UNAUTHORIZED]: `The endpoint at the broker's pipe refused this client's proof. If the broker restarted a moment ago, the next call re-reads its new token; if it keeps happening, restart it: ${START_BROKER_COMMAND}`,
+  [ERR.BAD_REQUEST]: 'The endpoint at the broker\'s pipe refused this client\'s HELLO as malformed, which usually means the broker and this client are from different versions of the bridge.',
+  [ERR.PANIC]: 'The endpoint at the broker\'s pipe refused the connection because the panic switch is engaged.',
+})
 
 /** A failure with a code from shared/protocol.mjs ERR. Everything above this layer reads `.code`. */
 export class BridgeError extends Error {
@@ -177,10 +187,13 @@ export class BrokerClient {
 
     const ack = await this.#handshake(socket, credentials.fields)
     if (ack?.ok !== true) {
-      const code = ack?.error?.code || ERR.UNAUTHORIZED
-      const message = ack?.error?.message || 'The broker refused the connection without saying why.'
-      this.#teardown(new BridgeError(code, message))
-      throw new BridgeError(code, message)
+      // A refusal arrives before any proof, so it may not be the broker's.
+      // Its text goes to the agent as tool output, so none of it is passed on:
+      // one of the broker's refusal codes, in this client's own words.
+      const code = refusalCode(ack)
+      const err = new BridgeError(code, REFUSAL_MESSAGES[code])
+      this.#teardown(err)
+      throw err
     }
     // An ok ack proves nothing on its own: anything holding the pipe name can
     // send one. Only the broker that wrote runtime.json can answer the proof.
@@ -212,7 +225,9 @@ export class BrokerClient {
         `No broker token at ${RUNTIME_FILE}. The broker writes that file when it starts, so its absence means the broker has not run since this machine booted. Start it with: ${START_BROKER_COMMAND}`
       )
     }
-    return helloCredentials({ token, scheme, role: ROLE.MCP })
+    const credentials = helloCredentials({ token, scheme, role: ROLE.MCP })
+    if (!credentials) throw new BridgeError(ERR.UNAUTHORIZED, noSchemeMessage(RUNTIME_FILE, START_BROKER_COMMAND))
+    return credentials
   }
 
   #dial() {
@@ -313,10 +328,26 @@ export class BrokerClient {
   #onMessage(msg) {
     if (!msg || typeof msg !== 'object') return
 
+    // Until the ack has proven the broker, the only frame read is the first
+    // one, and it must be the ack (judgeFirstFrame's rule, as in the host and
+    // doctor). Anything ahead of it fails the handshake; anything behind it in
+    // the same chunk, or after a refusal, is dropped. None of it is logged:
+    // the endpoint has proven nothing, so its text has no place in the log.
+    if (!this.#handshakeDone) {
+      const pending = this.#pendingHello
+      if (!pending) return
+      if (msg.type === MSG.HELLO_ACK) {
+        pending.settle(msg)
+        return
+      }
+      const err = new BridgeError(ERR.UNAUTHORIZED, impostorMessage(this.#socketPath))
+      this.#teardown(err)
+      return
+    }
+
     switch (msg.type) {
       case MSG.HELLO_ACK:
-        this.#pendingHello?.settle(msg)
-        return
+        return // the one that counted was read above, before the proof
 
       case MSG.RES: {
         const waiter = this.#pending.get(msg.id)

@@ -397,8 +397,15 @@ test('the vbs uses CRLF, since Windows Script Host reads it as a Windows text fi
 test('the bootstrap imports the broker entry as a file URL', () => {
   // A bare Windows path is not a valid import specifier; this is the difference
   // between the broker starting and the launcher failing on every boot.
-  const boot = buildLauncherBoot({ entry: win('C:', 'work', 'repo', 'bridged', 'index.mjs') })
-  assert.match(boot, /const ENTRY = "file:\/\/\/C:\/work\/repo\/bridged\/index\.mjs"/)
+  //
+  // A Windows path only becomes a Windows file URL on Windows (elsewhere Node
+  // reads it as a relative name), so the same check runs on a POSIX path there.
+  const [entry, url] =
+    process.platform === 'win32'
+      ? [win('C:', 'work', 'repo', 'bridged', 'index.mjs'), 'file:///C:/work/repo/bridged/index.mjs']
+      : ['/work/repo/bridged/index.mjs', 'file:///work/repo/bridged/index.mjs']
+  const boot = buildLauncherBoot({ entry })
+  assert.ok(boot.includes(`const ENTRY = ${JSON.stringify(url)}`), boot)
   assert.match(boot, /await import\(ENTRY\)/)
 })
 

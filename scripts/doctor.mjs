@@ -56,7 +56,14 @@ import {
   readRuntimeToken,
   writeJsonAtomic,
 } from '../shared/paths.mjs'
-import { AUTH_SCHEME, helloCredentials, judgeFirstFrame, runtimeScheme } from '../shared/auth.mjs'
+import {
+  AUTH_SCHEME,
+  helloCredentials,
+  judgeFirstFrame,
+  noSchemeMessage,
+  refusalCode,
+  runtimeScheme,
+} from '../shared/auth.mjs'
 import {
   ERR,
   LINK,
@@ -173,6 +180,10 @@ function askBroker(op, args = {}, { timeoutMs = 5000 } = {}) {
       return
     }
     const credentials = helloCredentials({ token, scheme, role: ROLE.MCP })
+    if (!credentials) {
+      resolve({ ok: false, error: `${ERR.UNAUTHORIZED}: ${noSchemeMessage(RUNTIME_FILE, START_BROKER_COMMAND)}` })
+      return
+    }
 
     const sock = net.connect({ path: PIPE_NAME })
     const decoder = new FrameDecoder()
@@ -206,8 +217,11 @@ function askBroker(op, args = {}, { timeoutMs = 5000 } = {}) {
           // The first frame must be the proven answer to our HELLO; nothing
           // before it is believed, including a RES that guessed our id.
           const verdict = judgeFirstFrame(msg, credentials.expect)
+          // A refusal comes before any proof, so only its code is kept, and
+          // only a code the broker could have sent: its text is whatever the
+          // holder of the pipe name chose to print on this terminal.
           if (verdict === 'refused') {
-            return done({ ok: false, error: msg.error?.code || msg.error?.message || 'handshake refused' })
+            return done({ ok: false, error: `handshake refused (${refusalCode(msg)})` })
           }
           if (verdict !== 'ready') {
             return done({
@@ -404,15 +418,15 @@ export function brokerAgeWarnings(runtime, installedVersion) {
     }
   }
   // The same test every client applies (runtimeScheme), so doctor warns exactly
-  // when clients fall back to sending the token.
+  // when clients refuse to dial.
   if (runtimeScheme(runtime) === null) {
     const absent = runtime.auth === undefined || runtime.auth === null
     warnings.push({
       text: absent
-        ? 'runtime.json has no auth field, so the running broker is from before 0.5.0 ' +
-          'and clients still send it the token instead of proving they hold it'
+        ? 'runtime.json has no auth field, so the broker that wrote it is from before 0.5.0 (or the ' +
+          'file was left behind by one), and clients refuse to dial until the broker restarts'
         : `runtime.json names an auth scheme this install does not speak (${JSON.stringify(runtime.auth)}), ` +
-          'so clients fall back to sending the token instead of proving they hold it',
+          'so clients refuse to dial until the broker restarts',
       // A broker this old is usually behind on version too, and that warning
       // already carries the restart step; printing it twice buries the difference.
       hint:

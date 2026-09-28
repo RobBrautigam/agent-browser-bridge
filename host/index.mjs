@@ -52,8 +52,8 @@ import {
   splitIntoChunks,
   backoffDelay,
 } from '../shared/protocol.mjs'
-import { START_BROKER_COMMAND, readRuntimeCredentials } from '../shared/paths.mjs'
-import { helloCredentials, judgeFirstFrame } from '../shared/auth.mjs'
+import { RUNTIME_FILE, START_BROKER_COMMAND, readRuntimeCredentials } from '../shared/paths.mjs'
+import { helloCredentials, judgeFirstFrame, noSchemeMessage, refusalCode } from '../shared/auth.mjs'
 
 /* -------------------------------------------------------------------------- */
 /* stdout guard - installed first, before anything else can log                */
@@ -162,7 +162,17 @@ function connect() {
     return
   }
 
+  // No proof, no dial either. A runtime.json with no auth field used to mean
+  // "send the token", and a squatter behind a stale file would then have been
+  // handed it and trusted. Retryable the same way: a broker restart rewrites
+  // the file.
   const credentials = helloCredentials({ token, scheme, role: ROLE.HOST })
+  if (!credentials) {
+    log(noSchemeMessage(RUNTIME_FILE, START_BROKER_COMMAND))
+    onSocketClosed()
+    return
+  }
+
   const s = net.connect({ path: PIPE_NAME })
   socket = s
   socketDecoder = new FrameDecoder()
@@ -264,10 +274,12 @@ function handleFromBroker(msg) {
     // Refused, unproven, or out of order: relay nothing, in either direction,
     // and redial on the usual backoff. An ok ack without the broker's proof, or
     // a frame ahead of the ack, means something other than the broker may own
-    // the pipe name.
-    if (verdict === 'refused') logFatal(`broker refused hello: ${msg.error?.code || 'unknown'}`)
+    // the pipe name. Nothing from the frame is logged but a known refusal
+    // code: stderr goes to the browser's log, and the endpoint has proven
+    // nothing, so its text has no place there.
+    if (verdict === 'refused') logFatal(`broker refused hello: ${refusalCode(msg)}`)
     else if (verdict === 'impostor') logFatal('the pipe answered HELLO without proving it is the broker; refusing to relay')
-    else logFatal(`the pipe sent ${String(msg?.type)} before answering HELLO; refusing to relay`)
+    else logFatal('the pipe sent another frame before answering HELLO; refusing to relay')
     socket?.destroy()
     return
   }
@@ -518,11 +530,19 @@ function shutdown(code) {
     return
   }
 
-  // Hand the broker whatever the browser already gave us before the pipe goes.
-  try {
-    while (outbound.length > 0) writeFrame(s, outbound.shift())
-  } catch (err) {
-    log('flush on shutdown failed:', err?.message || String(err))
+  // Hand the broker whatever the browser already gave us before the pipe goes,
+  // but only a broker that has proven itself. The buffer only fills while the
+  // link is NOT ready, so without this check a browser closing mid-handshake
+  // sent its buffered frames to whatever held the pipe name, proof or not.
+  if (link === LINK.READY) {
+    try {
+      while (outbound.length > 0) writeFrame(s, outbound.shift())
+    } catch (err) {
+      log('flush on shutdown failed:', err?.message || String(err))
+    }
+  } else if (outbound.length > 0) {
+    log('link not proven at shutdown, dropping', String(outbound.length), 'buffered frame(s)')
+    outbound.length = 0
   }
   s.on('close', () => process.exit(code))
   s.end()

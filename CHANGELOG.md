@@ -9,6 +9,82 @@ from an earlier history; those versions have no tags here. Every clone made
 before 1.0.0 takes the one-time step in the 1.0.0 Upgrading section, which
 replaces the one-time steps in the earlier entries.
 
+## [1.0.1] - 2026-09-27
+
+Three fixes to what the clients do around the broker's proof, found by two
+adversarial reviews of the handshake and by the end-to-end test this release
+adds. The wire format is unchanged and the broker's behavior is unchanged: a
+1.0.1 client talks to a 1.0.0 broker, and the reverse.
+
+### Security
+
+- **A `runtime.json` without the `auth` field no longer talks a client down
+  to sending the token.** Since 0.5.0 the host, the MCP server and doctor fell
+  back to the old token HELLO when the file named no scheme, the mark of a
+  broker from before 0.5.0. But a broker that finds its pipe name taken exits
+  without rewriting the file, so a file left behind by an old broker (or
+  restored from a backup) let whoever held the name be handed the token and
+  trusted without a proof, which is the attack 0.5.0 closed. A client now
+  sends nothing when the file names no scheme it speaks, and says to restart
+  the broker. The broker still accepts the token HELLO, so a host or MCP
+  server process started before an upgrade keeps working until it restarts.
+- **The host no longer hands buffered frames to an unproven endpoint when the
+  browser closes.** Frames the extension sends while the host is still waiting
+  for the broker's answer are held until the proof arrives. If the browser
+  closed the connection in that window, the host's shutdown wrote the held
+  frames to the pipe anyway, proof or not. It now drops them unless the link
+  was proven.
+- **A refused HELLO is reported in the client's own words, and nothing an
+  unproven endpoint sends is logged.** A refusal arrives before any proof,
+  but the MCP server passed its code and message to the agent as tool output,
+  and doctor printed them on the terminal, so whoever held the pipe name could
+  put text of its choosing in front of the model or the user. Clients now keep
+  only a code the broker refuses HELLO with (`E_UNAUTHORIZED`,
+  `E_BAD_REQUEST`, `E_PANIC`; anything else reads as `E_UNAUTHORIZED`) and
+  describe it themselves. In the same way the host no longer writes the type
+  of a frame sent ahead of the answer to its stderr, which the browser logs,
+  and the MCP client now reads nothing before the answer but the answer: a
+  frame ahead of it fails the connection, frames behind an unproven one are
+  dropped, and neither reaches its log.
+
+### Added
+
+- `BRIDGE_SOCKET_NAME`: a socket name that replaces `socketName` from
+  `bridge.config.json` for one process, held to the same rule. It exists for
+  tests: Windows pipe names are global, so `BRIDGE_HOME` alone cannot keep a
+  test's broker off the pipe of a broker already running.
+- `test/handshake-e2e.test.mjs`: the real broker, host and MCP client on a
+  throwaway endpoint, against impostors that answer without a proof, reflect
+  the client's proof, send frames ahead of and behind their answer in the same
+  chunk, withhold the answer, refuse with planted text, or plant text in a
+  frame type or an event name; and the real broker refusing a replayed HELLO
+  and a bad proof.
+- A GitHub Actions workflow that runs `npm ci`, `npm test` and `npm run gate`
+  on every pull request, on Ubuntu and Windows, with read-only permissions and
+  no secrets.
+
+### Changed
+
+- The version is 1.0.1 in `package.json`, `package-lock.json` and
+  `extension/manifest.json`.
+- Doctor's warning for a `runtime.json` with no or an unknown `auth` field
+  now says clients refuse to dial until the broker restarts.
+
+### Fixed
+
+- The launcher bootstrap's test built a Windows path and expected a Windows
+  file URL, which only Windows produces, so it failed on Linux; it now checks
+  a POSIX path there. The launcher itself is unchanged.
+
+### Upgrading
+
+1. `git pull` (a fast-forward from 1.0.0), then `npm ci`.
+2. Restart the broker as in the 1.0.0 Upgrading section, so doctor's
+   `runtime` line reads `version 1.0.1`. A broker from before 0.5.0 has to be
+   restarted before any 1.0.1 client will talk to it.
+3. `npm run reload`, so every profile's extension reports 1.0.1 and starts a
+   host with the fix. MCP servers pick up theirs when their sessions restart.
+
 ## [1.0.0] - 2026-09-27
 
 The first release of this repository: the code of 0.5.1, with its test data

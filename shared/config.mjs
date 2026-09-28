@@ -10,9 +10,10 @@
  * as "Specified native messaging host not found".
  *
  * Environment variables are deliberately NOT derived from the product name:
- * BRIDGE_DEBUG, BRIDGE_QUIET, BRIDGE_WATCH_PARENT, BRIDGE_NODE and BRIDGE_HOME
- * are fixed, so a rename never silently changes which variable a launcher or a
- * shim reads. The same goes for log prefixes such as `[bridge-host]`.
+ * BRIDGE_DEBUG, BRIDGE_QUIET, BRIDGE_WATCH_PARENT, BRIDGE_NODE, BRIDGE_HOME and
+ * BRIDGE_SOCKET_NAME are fixed, so a rename never silently changes which
+ * variable a launcher or a shim reads. The same goes for log prefixes such as
+ * `[bridge-host]`.
  */
 
 import fs from 'node:fs'
@@ -96,10 +97,40 @@ export function loadConfig(file = CONFIG_FILE) {
 
 export const CONFIG = loadConfig()
 
+/**
+ * The socket name this process dials or listens on: `socketName` from the
+ * config, or BRIDGE_SOCKET_NAME when that is set.
+ *
+ * The override exists for tests. A test that starts the real broker and the
+ * real host needs an endpoint no live broker owns, and on Windows a pipe name
+ * is global to the machine, so the configured name would collide with the
+ * broker the machine is already running. BRIDGE_HOME alone cannot help: it
+ * moves the socket FILE on macOS and Linux, but a Windows pipe lives in no
+ * directory.
+ *
+ * Held to the same rule as `socketName`, so a value that could not be a valid
+ * config cannot become an endpoint either. An empty value counts as unset, as
+ * BRIDGE_HOME's does. A broker and its clients agree on an endpoint only when
+ * they agree on this variable, which is why it is read here, once, and not by
+ * each caller.
+ */
+export function socketNameFor(env = process.env, config = CONFIG) {
+  const value = env.BRIDGE_SOCKET_NAME
+  if (value === undefined || value === '') return config.socketName
+  const spec = CONFIG_SHAPE.socketName
+  if (typeof value !== 'string' || !spec.rule.test(value)) {
+    throw new Error(`BRIDGE_SOCKET_NAME is ${JSON.stringify(value)}; it must be ${spec.why}.`)
+  }
+  if (WINDOWS_RESERVED.test(value)) {
+    throw new Error(`BRIDGE_SOCKET_NAME is "${value}", which Windows reserves as a device name.`)
+  }
+  return value
+}
+
 export const PRODUCT_NAME = CONFIG.productName
 export const PRODUCT_TAGLINE = CONFIG.tagline
 export const NATIVE_HOST_ID = CONFIG.nativeHostId
-export const SOCKET_NAME = CONFIG.socketName
+export const SOCKET_NAME = socketNameFor()
 export const STATE_DIR_NAME = CONFIG.stateDirName
 export const SERVICE_NAME = CONFIG.serviceName
 export const MCP_SERVER_NAME = CONFIG.mcpServerName

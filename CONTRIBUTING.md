@@ -65,6 +65,15 @@ npm run e2e              # the whole chain against a real browser and a throwawa
 binary. Google Chrome ignores `--load-extension`, so the automated harness
 runs on Brave; Chrome is verified by hand through "Load unpacked".
 
+`npm test` also starts the real broker and host, against impostors, in
+`test/handshake-e2e.test.mjs`. They run under a throwaway `BRIDGE_HOME` and a
+throwaway socket name (`BRIDGE_SOCKET_NAME`), so a broker you already have
+running is never dialed. A test that starts a broker or a host sets both.
+
+Every pull request runs `npm ci`, `npm test` and `npm run gate` on Ubuntu and
+Windows (`.github/workflows/ci.yml`), with read-only permissions and no
+secrets.
+
 ## Style
 
 - Plain ESM, Node 22, no build step, no TypeScript, no bundler. Every file runs

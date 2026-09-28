@@ -78,8 +78,13 @@ export const LOG_FILE = path.join(BASE_DIR, 'broker.log')
  * any reasonable user name; BRIDGE_HOME can shorten it if it does not.
  *
  * Exported under both names: PIPE_NAME is what every existing caller imports.
+ * socketPathFor() is the same rule for any name, so a test can build the
+ * endpoint of a throwaway name (BRIDGE_SOCKET_NAME) exactly as the broker will.
  */
-export const SOCKET_PATH = IS_WINDOWS ? `\\\\.\\pipe\\${SOCKET_NAME}` : path.join(BASE_DIR, `${SOCKET_NAME}.sock`)
+export function socketPathFor(name, baseDir = BASE_DIR) {
+  return IS_WINDOWS ? `\\\\.\\pipe\\${name}` : path.join(baseDir, `${name}.sock`)
+}
+export const SOCKET_PATH = socketPathFor(SOCKET_NAME)
 export const PIPE_NAME = SOCKET_PATH
 
 /* ---- Native messaging manifest --------------------------------------------- */
