@@ -11,8 +11,8 @@ replaces the one-time steps in the earlier entries.
 
 ## [1.0.1] - 2026-09-27
 
-Three fixes to what the clients do around the broker's proof, found by an
-adversarial review of the handshake and by the end-to-end test this release
+Three fixes to what the clients do around the broker's proof, found by two
+adversarial reviews of the handshake and by the end-to-end test this release
 adds. The wire format is unchanged and the broker's behavior is unchanged: a
 1.0.1 client talks to a 1.0.0 broker, and the reverse.
 
@@ -34,13 +34,18 @@ adds. The wire format is unchanged and the broker's behavior is unchanged: a
   closed the connection in that window, the host's shutdown wrote the held
   frames to the pipe anyway, proof or not. It now drops them unless the link
   was proven.
-- **A refused HELLO is reported in the client's own words.** A refusal arrives
-  before any proof, but the MCP server passed its code and message to the
-  agent as tool output, and doctor printed them on the terminal, so whoever
-  held the pipe name could put text of its choosing in front of the model or
-  the user. Clients now keep only a code the broker refuses HELLO with
-  (`E_UNAUTHORIZED`, `E_BAD_REQUEST`, `E_PANIC`; anything else reads as
-  `E_UNAUTHORIZED`) and describe it themselves.
+- **A refused HELLO is reported in the client's own words, and nothing an
+  unproven endpoint sends is logged.** A refusal arrives before any proof,
+  but the MCP server passed its code and message to the agent as tool output,
+  and doctor printed them on the terminal, so whoever held the pipe name could
+  put text of its choosing in front of the model or the user. Clients now keep
+  only a code the broker refuses HELLO with (`E_UNAUTHORIZED`,
+  `E_BAD_REQUEST`, `E_PANIC`; anything else reads as `E_UNAUTHORIZED`) and
+  describe it themselves. In the same way the host no longer writes the type
+  of a frame sent ahead of the answer to its stderr, which the browser logs,
+  and the MCP client now reads nothing before the answer but the answer: a
+  frame ahead of it fails the connection, frames behind an unproven one are
+  dropped, and neither reaches its log.
 
 ### Added
 
@@ -51,8 +56,9 @@ adds. The wire format is unchanged and the broker's behavior is unchanged: a
 - `test/handshake-e2e.test.mjs`: the real broker, host and MCP client on a
   throwaway endpoint, against impostors that answer without a proof, reflect
   the client's proof, send frames ahead of and behind their answer in the same
-  chunk, withhold the answer, or refuse with planted text; and the real broker
-  refusing a replayed HELLO and a bad proof.
+  chunk, withhold the answer, refuse with planted text, or plant text in a
+  frame type or an event name; and the real broker refusing a replayed HELLO
+  and a bad proof.
 - A GitHub Actions workflow that runs `npm ci`, `npm test` and `npm run gate`
   on every pull request, on Ubuntu and Windows, with read-only permissions and
   no secrets.
@@ -63,6 +69,12 @@ adds. The wire format is unchanged and the broker's behavior is unchanged: a
   `extension/manifest.json`.
 - Doctor's warning for a `runtime.json` with no or an unknown `auth` field
   now says clients refuse to dial until the broker restarts.
+
+### Fixed
+
+- The launcher bootstrap's test built a Windows path and expected a Windows
+  file URL, which only Windows produces, so it failed on Linux; it now checks
+  a POSIX path there. The launcher itself is unchanged.
 
 ### Upgrading
 

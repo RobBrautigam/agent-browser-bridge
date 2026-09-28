@@ -274,10 +274,12 @@ function handleFromBroker(msg) {
     // Refused, unproven, or out of order: relay nothing, in either direction,
     // and redial on the usual backoff. An ok ack without the broker's proof, or
     // a frame ahead of the ack, means something other than the broker may own
-    // the pipe name.
+    // the pipe name. Nothing from the frame is logged but a known refusal
+    // code: stderr goes to the browser's log, and the endpoint has proven
+    // nothing, so its text has no place there.
     if (verdict === 'refused') logFatal(`broker refused hello: ${refusalCode(msg)}`)
     else if (verdict === 'impostor') logFatal('the pipe answered HELLO without proving it is the broker; refusing to relay')
-    else logFatal(`the pipe sent ${String(msg?.type)} before answering HELLO; refusing to relay`)
+    else logFatal('the pipe sent another frame before answering HELLO; refusing to relay')
     socket?.destroy()
     return
   }

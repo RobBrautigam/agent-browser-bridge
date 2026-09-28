@@ -13,12 +13,16 @@ names, machine names or private paths.
   back to sending the token, which a squatter behind a stale file could use;
   the host's shutdown flushed frames it was holding to an endpoint that had not
   proven itself; and a refused HELLO's text reached the agent and the terminal
-  although nothing had proven who sent it. All three were seen to fail in
-  `test/handshake-e2e.test.mjs` before the fix. After it, nine mutations (each
-  fix undone, the READY gate removed, the first-frame check bypassed, the
-  broker proof forced true, the nonce ledger ignored, `BRIDGE_SOCKET_NAME`
-  ignored) each turned a test red. `BRIDGE_SOCKET_NAME` gives that test its
-  own pipe, and pull requests now run the tests and the gate in CI.
+  although nothing had proven who sent it. A second review, of the fix, found
+  two more of the third kind: the host logged the type of a frame sent ahead of
+  the answer, and the MCP client read and logged frames before the proof. All
+  five were seen to fail in `test/handshake-e2e.test.mjs` before their fix.
+  After them, eleven mutations (each fix undone, the READY gate removed, the
+  first-frame check bypassed, the broker proof forced true, the nonce ledger
+  ignored, `BRIDGE_SOCKET_NAME` ignored) each turned a test red.
+  `BRIDGE_SOCKET_NAME` gives that test its own pipe, and pull requests now run
+  the tests and the gate in CI, whose first run found a launcher test that
+  could only pass on Windows.
 - Version 1.0.0, the first release of this repository: the code of 0.5.1
   with its test data moved to the domains RFC 2606 reserves for examples.
   Consumer-mailbox fixtures name only the provider and build the address at

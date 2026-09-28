@@ -328,10 +328,26 @@ export class BrokerClient {
   #onMessage(msg) {
     if (!msg || typeof msg !== 'object') return
 
+    // Until the ack has proven the broker, the only frame read is the first
+    // one, and it must be the ack (judgeFirstFrame's rule, as in the host and
+    // doctor). Anything ahead of it fails the handshake; anything behind it in
+    // the same chunk, or after a refusal, is dropped. None of it is logged:
+    // the endpoint has proven nothing, so its text has no place in the log.
+    if (!this.#handshakeDone) {
+      const pending = this.#pendingHello
+      if (!pending) return
+      if (msg.type === MSG.HELLO_ACK) {
+        pending.settle(msg)
+        return
+      }
+      const err = new BridgeError(ERR.UNAUTHORIZED, impostorMessage(this.#socketPath))
+      this.#teardown(err)
+      return
+    }
+
     switch (msg.type) {
       case MSG.HELLO_ACK:
-        this.#pendingHello?.settle(msg)
-        return
+        return // the one that counted was read above, before the proof
 
       case MSG.RES: {
         const waiter = this.#pending.get(msg.id)

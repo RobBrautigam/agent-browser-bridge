@@ -429,3 +429,51 @@ test("an unproven refusal reaches the agent in the client's own words, never the
     await refuser.close()
   }
 })
+
+test('nothing an unproven endpoint sends reaches a log: not a frame type, not an event name', async () => {
+  // The host's stderr goes to the browser's log, and the MCP server's log to
+  // its stderr. Both are read by people and by tools, and an endpoint that has
+  // not proven itself has no business writing in either.
+  freshRuntime()
+  const planted = '\u001b[2J\u001b[31mPLANTED-BY-THE-PIPE'
+  const marker = 'PLANTED-BY-THE-PIPE'
+
+  // The host: a first frame that is not the answer, typed with the planted text.
+  const name = throwawayName()
+  const squatter = await impostor(name, (h, write) => write([{ type: planted, id: '1' }, EVAL()]))
+  const host = startHost(name)
+  try {
+    host.send(registration())
+    await waitFor('the host to refuse the frame ahead of the answer', () => host.stderr().includes('refusing to relay'))
+    assert.equal(host.stderr().includes(marker), false, `the host logged the endpoint's text: ${host.stderr()}`)
+    assertNothingRelayed(host, 'a frame ahead of the answer')
+  } finally {
+    host.child.kill()
+    await squatter.close()
+  }
+
+  // The MCP client, with its log captured: frames ahead of an answer, and
+  // behind an unproven one in the same chunk.
+  const scripts = [
+    [{ type: MSG.EVENT, name: planted }, helloAck({ ok: true })],
+    [{ type: planted }, helloAck({ ok: true })],
+    [helloAck({ ok: true }), { type: MSG.EVENT, name: planted }, { type: planted }],
+  ]
+  for (const frames of scripts) {
+    const other = throwawayName()
+    const liar = await impostor(other, (h, write) => write(frames))
+    const logs = []
+    const client = new BrokerClient({ socketPath: liar.endpoint, onLog: (line) => logs.push(line) })
+    try {
+      await assert.rejects(client.request({ op: OPS.STATUS, timeoutMs: 2_000 }), (err) => {
+        assert.equal(err.code, ERR.UNAUTHORIZED, `${JSON.stringify(frames.map((f) => f.type))}: ${err.code}`)
+        return true
+      })
+      assert.equal(logs.join('\n').includes(marker), false, `the client logged the endpoint's text: ${logs.join(' | ')}`)
+      assert.deepEqual(liar.types(), [MSG.HELLO], 'the client sent more than HELLO to an unproven endpoint')
+    } finally {
+      client.close()
+      await liar.close()
+    }
+  }
+})
