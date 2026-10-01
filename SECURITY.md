@@ -169,12 +169,18 @@ therefore refused with `E_SECRET_FIELD` unless the agent session carries a
   PIN, OTP, 2FA, MFA, one-time, verification code or security code.
 - **Where the keys land.** A trusted key types into whatever has focus when it
   lands, so the check follows focus: the focused element, into shadow roots
-  (closed ones too) and same-origin frames; again after a selector is focused
-  (an element that cannot take focus leaves it where it was); and again before
-  any key that follows one able to move focus (Tab, Enter, a chord, a named
-  key, a newline in a typed value). Focus inside another site's frame or an
-  `<embed>` cannot be seen, counts as a secret field, and is refused even with
-  a recorded yes, because which site that frame belongs to cannot be read.
+  (closed ones too) and frames; again after a selector is focused (an element
+  that cannot take focus leaves it where it was); and again before every key
+  after the first, because Tab and Enter move focus and so do page scripts, on
+  a plain character (auto-advance) or a moment after an Enter. Focus inside
+  another site's frame is read by asking that frame, and judged by that
+  frame's own site. A frame that cannot be read (a sandbox, a browser page),
+  an `<embed>` other than a PDF viewer, or a nesting deeper than the walk goes
+  counts as a secret field and is refused even with a recorded yes. A page the
+  last key sent navigating is waited for (about two seconds), never typed into
+  unseen; a refusal mid-sequence says how many keys were already sent, never
+  which. Untrusted key events cannot type at all, so they are checked where
+  they are sent: the selected element or the top document's focused one.
 - **The receipt.** The session's own configuration, never a tool argument:
   the MCP server reads it from `BRIDGE_ACCOUNT_WORD` (or the variable
   `BRIDGE_ACCOUNT_WORD_ENV` names) and forwards it on `browser_fill` and
@@ -188,12 +194,16 @@ therefore refused with `E_SECRET_FIELD` unless the agent session carries a
   forwards only the file name and the services it names. The extension lets a
   secret field through only when a service names the site of the page it
   probed: a service with a dot is a domain and matches itself and its
-  subdomains (a bare registry suffix such as `co.uk` matches nothing); one
-  without is the site's own name and matches only the label just before the
-  top-level domain or a country's second level, so `ledgerly` covers
-  `accounts.ledgerly.example` and `ledgerly.co.uk`, never
-  `ledgerly.login-check.example`. The audit line records the receipt's file
-  name, never its path or contents.
+  subdomains (a registry or shared-hosting suffix such as `co.uk` or
+  `github.io` matches nothing); one without is the site's own name and matches
+  the host's registrable domain, `<name>.<top-level domain>` or
+  `<name>.<a listed country second level>`, with its subdomains. So `ledgerly`
+  covers `accounts.ledgerly.example` and `ledgerly.co.uk`, never
+  `ledgerly.login-check.example`, `ledgerly.co.de` or a site on a shared host.
+  A name cannot tell a site from a lookalike registered under another
+  top-level domain; a recorded yes that must be exact writes the domain
+  (`ACCOUNT WORD: ledgerly.example`). The audit line records the receipt's
+  file name, never its path or contents.
 
 What it does not defend, stated plainly:
 

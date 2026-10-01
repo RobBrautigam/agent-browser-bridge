@@ -1045,12 +1045,17 @@ async function click(args) {
  * it, so a redirect in between is judged as the page it landed on.
  *
  * A trusted key types into whatever has focus when it lands, and focus moves,
- * so the typing paths check again where it matters (guardFocus, keyMayMoveFocus).
+ * so the trusted paths check again before every key (guardFocus). `shallow`
+ * is for untrusted key events, which are sent to the top document's focused
+ * element and can never type, inside a frame or anywhere else.
  *
  * @returns {{receipt?: string}} the receipt's file name when it let a secret field through
  */
-async function guardSecretField(tabId, tab, selector, args) {
-  const probe = assertPageOk(await runInPage(tabId, inject.pageFieldKind, { selector }), 'field check')
+async function guardSecretField(tabId, tab, selector, args, { shallow = false } = {}) {
+  const probe =
+    selector || shallow
+      ? assertPageOk(await runInPage(tabId, inject.pageFieldKind, { selector, shallow }), 'field check')
+      : await probeFocusedField(tabId)
   const verdict = secretFieldVerdict({
     field: probe.field,
     grant: args && args.accountWordGrant ? args.accountWordGrant : null,
@@ -1061,18 +1066,71 @@ async function guardSecretField(tabId, tab, selector, args) {
 }
 
 /**
- * Check the FOCUSED element, where the next trusted key lands, and fold a
- * receipt it needed into `secret`. Called after focusing a selector (an element
- * that cannot take focus leaves it on the field that had it) and before any key
- * that follows one able to move focus.
+ * What the next trusted key lands in: the focused element, followed into
+ * another site's frame by asking every frame (the extension may script all of
+ * them) and taking the one that holds focus and is not itself a frame's host.
+ * That frame's own address judges the grant. A frame that answers nothing (a
+ * sandbox, a browser page) stays opaque, which the contract refuses.
  */
-async function guardFocus(tabId, tab, args, secret) {
-  Object.assign(secret, await guardSecretField(tabId, tab, null, args))
+async function probeFocusedField(tabId) {
+  const top = assertPageOk(await runInPage(tabId, inject.pageFieldKind, { selector: null }), 'field check')
+  if (!top.field || top.field.frame !== true) return top
+  let frames = []
+  try {
+    frames = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      world: 'ISOLATED',
+      func: inject.pageFieldKind,
+      args: [{ selector: null }],
+    })
+  } catch (_err) {
+    frames = []
+  }
+  const inner = (Array.isArray(frames) ? frames : [])
+    .filter((f) => f && f.frameId !== 0)
+    .map((f) => f.result)
+    .filter((r) => r && r.ok === true && r.focused === true && r.field && r.field.frame !== true)
+  return inner.length === 1 ? inner[0] : top
 }
 
-/** A plain character types and stays put; Tab, Enter, a modifier chord or a named key can move focus. */
-function keyMayMoveFocus(spec) {
-  return !/^[^+\s]$/.test(String(spec))
+/** How long a check waits for a page the previous key sent navigating. */
+const FOCUS_CHECK_TRIES = 8
+const FOCUS_CHECK_WAIT_MS = 250
+
+/**
+ * Check the FOCUSED element, where the next trusted key lands, and fold a
+ * receipt it needed into `secret`. Run after focusing a selector (an element
+ * that cannot take focus leaves it on the field that had it) and before every
+ * key after the first: Tab and Enter move focus, and so do page scripts on a
+ * plain character (auto-advance) or a moment after an Enter. One probe a key
+ * is the price; a key list is short and a typed value is capped.
+ *
+ * A page the last key sent navigating cannot be read for a moment: the check
+ * waits for it (about two seconds) rather than type into a field it has not
+ * seen, and a page that never answers stops the sequence. Either refusal says
+ * how many keys were already sent, never which ones: a typed value is not
+ * repeated into an error.
+ */
+async function guardFocus(tabId, tab, args, secret, sent = 0) {
+  let last = null
+  for (let attempt = 0; attempt < FOCUS_CHECK_TRIES; attempt++) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, FOCUS_CHECK_WAIT_MS))
+    try {
+      Object.assign(secret, await guardSecretField(tabId, tab, null, args))
+      return
+    } catch (err) {
+      if (!(err instanceof OpError) || err.code === ERR.SECRET_FIELD || err.code === ERR.TAB_GONE) {
+        if (err instanceof OpError && sent > 0) err.data = { ...(err.data || {}), sent }
+        throw err
+      }
+      last = err
+    }
+  }
+  throw new OpError(
+    last.code,
+    `Stopped after ${sent} key(s): the page changed and the field the next key would land in could not be checked (${last.message}).`,
+    { sent }
+  )
 }
 
 async function fill(args) {
@@ -1110,12 +1168,10 @@ async function fill(args) {
   await guardFocus(tabId, tab, args, secret)
 
   await withDebugger(tabId, async () => {
-    let recheck = false
+    let sent = 0
     for (const ch of Array.from(text)) {
-      if (recheck) await guardFocus(tabId, tab, args, secret)
-      // A newline is an Enter and a control character is no character at all:
-      // either may move focus, so the key after it is checked again.
-      recheck = ch < ' '
+      if (sent > 0) await guardFocus(tabId, tab, args, secret, sent)
+      sent += 1
       if (ch === '\n') {
         await cdp(tabId, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
         await cdp(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
@@ -1144,9 +1200,10 @@ async function pressKeys(args) {
 
   let selector = null
   if (args && (args.ref || args.selector)) selector = await requireSelector(tabId, args)
-  const secret = await guardSecretField(tabId, tab, selector, args)
+  const trusted = Boolean(args && args.trusted === true)
+  const secret = await guardSecretField(tabId, tab, selector, args, { shallow: !trusted })
 
-  if (!(args && args.trusted === true)) {
+  if (!trusted) {
     const result = await runInPage(tabId, inject.pagePressKeys, { selector, keys: list })
     return { ...assertPageOk(result, 'pressKeys'), tier: 1, trusted: false, ...secret }
   }
@@ -1180,7 +1237,7 @@ async function pressKeys(args) {
   const dispatched = []
   await withDebugger(tabId, async () => {
     for (const [i, spec] of list.entries()) {
-      if (i > 0 && keyMayMoveFocus(list[i - 1])) await guardFocus(tabId, tab, args, secret)
+      if (i > 0) await guardFocus(tabId, tab, args, secret, i)
       let modifiers = 0
       let base = ''
       for (const part of String(spec).split('+').map((s) => s.trim()).filter(Boolean)) {

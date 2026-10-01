@@ -952,37 +952,61 @@ export function isSecretField(field) {
   return false
 }
 
-/** The second level a country's registry sells names under: ledgerly.co.uk, ledgerly.com.au. */
-const COUNTRY_SECOND_LEVEL = new Set(['ac', 'co', 'com', 'edu', 'go', 'gob', 'gov', 'ne', 'net', 'or', 'org'])
+/**
+ * The second levels countries' registries sell names under: ledgerly.co.uk is
+ * a site, co.uk is not. A list, not a rule, because a rule ("a short word and a
+ * country code") also matches co.de, which is somebody's ordinary domain. A
+ * country second level missing here fails closed: the name does not match, and
+ * the recorded yes has to write the domain out.
+ */
+const COUNTRY_SECOND_LEVELS = new Set([
+  'ac.uk', 'co.uk', 'gov.uk', 'ltd.uk', 'me.uk', 'org.uk', 'plc.uk',
+  'com.au', 'net.au', 'org.au', 'co.nz', 'org.nz', 'co.jp', 'ne.jp', 'or.jp',
+  'com.br', 'com.mx', 'co.in', 'co.za', 'com.sg', 'com.hk', 'co.kr', 'com.tr',
+  'com.cn', 'com.tw', 'co.il', 'com.ar', 'com.co',
+])
 
-/** The labels after a site's own name: one top-level domain, or a country's second level and its code. */
-function isRegistryTail(labels) {
-  if (labels.length === 1) return true
-  return labels.length === 2 && COUNTRY_SECOND_LEVEL.has(labels[0]) && labels[1].length === 2
-}
+/**
+ * Shared hosting: every customer gets a subdomain of the provider's domain, so
+ * the provider's name names none of their sites, and the domain itself, as a
+ * service, would name all of them.
+ */
+const SHARED_HOSTING = new Set([
+  'amplifyapp.com', 'appspot.com', 'azurewebsites.net', 'blogspot.com', 'cloudfront.net', 'deno.dev',
+  'firebaseapp.com', 'fly.dev', 'framer.app', 'github.io', 'gitlab.io', 'glitch.me', 'herokuapp.com',
+  'myshopify.com', 'netlify.app', 'ngrok-free.app', 'ngrok.io', 'notion.site', 'onrender.com',
+  'pages.dev', 'railway.app', 'repl.co', 'replit.app', 's3.amazonaws.com', 'sharepoint.com', 'surge.sh',
+  'trycloudflare.com', 'vercel.app', 'web.app', 'webflow.io', 'wixsite.com', 'wordpress.com', 'workers.dev',
+])
 
 /**
  * Does a service named in a recorded yes name this host?
  *
- * A service with a dot is a domain and matches itself and its subdomains; a
- * bare registry suffix (co.uk) names every site under it, so it names none. One
- * without a dot is the site's own name, and matches only the label just before
- * the top-level domain or a country's second level: "ledgerly" matches
- * accounts.ledgerly.example and ledgerly.co.uk, and never ledgerlyish.example
- * or ledgerly.login-check.example, where the name is a subdomain of somebody
- * else's site.
+ * A service with a dot is a domain and matches itself and its subdomains,
+ * unless it is a registry's or a host's suffix (co.uk, github.io), which would
+ * name everybody's sites. One without a dot is the site's own name: it matches
+ * the host's registrable domain, `<name>.<top-level domain>` or
+ * `<name>.<a country's second level>`, and that domain's subdomains. So
+ * "ledgerly" matches accounts.ledgerly.example and ledgerly.co.uk, and never
+ * ledgerly.login-check.example, ledgerly.co.de or a site on ledgerly's shared
+ * hosting. It cannot tell ledgerly.example from a lookalike registered under
+ * another top-level domain; a recorded yes that must be exact writes the domain.
  */
 export function serviceNamesHost(service, host) {
   const s = String(service || '').toLowerCase().replace(/\.+$/, '')
   const h = String(host || '').toLowerCase().replace(/\.+$/, '')
   if (!s || !h) return false
   if (s.includes('.')) {
-    if (isRegistryTail(s.split('.'))) return false
+    if (COUNTRY_SECOND_LEVELS.has(s) || SHARED_HOSTING.has(s)) return false
     return h === s || h.endsWith(`.${s}`)
   }
   const labels = h.split('.')
-  const at = labels.lastIndexOf(s)
-  return at >= 0 && isRegistryTail(labels.slice(at + 1))
+  const tail = labels.length >= 3 && COUNTRY_SECOND_LEVELS.has(labels.slice(-2).join('.')) ? 2 : 1
+  if (labels.length <= tail) return false
+  const site = labels.slice(-(tail + 1))
+  if (site[0] !== s) return false
+  const registrable = site.join('.')
+  return SHARED_HOSTING.has(registrable) ? h === registrable : true
 }
 
 function hostOf(url) {

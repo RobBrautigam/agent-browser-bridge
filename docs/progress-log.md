@@ -28,6 +28,12 @@ names, machine names or private paths.
   registration racing panic, a held flag outliving its connection, restored
   tabs stamped as new, the re-key delaying registration), and the tenth (a
   receipt an agent with file access could write) is documented in SECURITY.md.
+- A second pass on those fixes found eight more, all fixed the same way: a
+  check before every trusted key (page scripts move focus on plain keys too),
+  a wait through navigation instead of a mid-sequence failure, frames read in
+  place instead of refused, PDF viewers and untrusted keys no longer refused,
+  deep nesting, and site matching by registrable domain with listed country
+  second levels and shared hosts.
 
 ## 2026-09-27
 
