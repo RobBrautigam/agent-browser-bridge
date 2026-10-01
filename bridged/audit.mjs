@@ -39,6 +39,8 @@ export const AUDIT_ROTATE_BYTES = 5 * 1024 * 1024
  * code is dropped rather than truncated, because a truncated URL is still a URL.
  */
 const ERR_CODE_RE = /^E_[A-Z0-9_]{1,40}$/
+/** A receipt is recorded by its file name only, and only a name of this shape. */
+const RECEIPT_RE = /^[\w .()-]{1,120}\.md$/i
 
 export class AuditLog {
   #file
@@ -82,9 +84,12 @@ export class AuditLog {
    * @param {boolean} [entry.ok]
    * @param {number|null} [entry.ms]     round trip in milliseconds
    * @param {string|null} [entry.err]    a typed E_* code, anything else is dropped
+   * @param {string|null} [entry.receipt] the account-word receipt's FILE NAME a
+   *   password-field call carried; written only when present, and never a path
+   *   or anything the file says
    * @param {number} [entry.at]
    */
-  record({ profile = null, op, url = null, ok = true, ms = null, err = null, at = Date.now() }) {
+  record({ profile = null, op, url = null, ok = true, ms = null, err = null, receipt = null, at = Date.now() }) {
     const code = err == null ? null : String(err)
     const entry = {
       at,
@@ -95,6 +100,7 @@ export class AuditLog {
       ms: Number.isFinite(ms) ? Math.round(ms) : null,
       err: code && ERR_CODE_RE.test(code) ? code : null,
     }
+    if (typeof receipt === 'string' && RECEIPT_RE.test(receipt)) entry.receipt = receipt
 
     this.#ring.push(entry)
     if (this.#ring.length > this.#ringMax) this.#ring.shift()

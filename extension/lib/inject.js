@@ -801,6 +801,89 @@ export function pageRect(payload) {
 }
 
 /** Focus and select an element so a CDP keystroke sequence replaces its contents. */
+/**
+ * What the page says about one field, for the password guard: its tag, type,
+ * autocomplete, name, id and the words labeling it. Never its value.
+ *
+ * With no selector it reads the FOCUSED element, which is where a key press
+ * lands: into open shadow roots and same-origin frames. Focus inside another
+ * site's frame cannot be seen from here, so it is reported as `opaque`, and the
+ * contract treats a field it cannot see as one that may take a password.
+ */
+export function pageFieldKind(payload) {
+  const { selector = null } = payload || {}
+  let el = null
+  let opaque = false
+  try {
+    if (selector) {
+      el = document.querySelector(selector)
+    } else {
+      el = document.activeElement || null
+      for (let depth = 0; el && depth < 8; depth++) {
+        if (el.shadowRoot && el.shadowRoot.activeElement) {
+          el = el.shadowRoot.activeElement
+          continue
+        }
+        const tag = String(el.tagName || '').toUpperCase()
+        if (tag === 'IFRAME' || tag === 'FRAME') {
+          let inner = null
+          try {
+            inner = el.contentDocument
+          } catch (_e) {
+            inner = null
+          }
+          if (!inner) {
+            opaque = true
+            break
+          }
+          el = inner.activeElement || null
+          continue
+        }
+        break
+      }
+    }
+  } catch (_e) {
+    return { ok: false, reason: 'bad_selector', selector }
+  }
+  if (!el) return selector ? { ok: false, reason: 'not_found', selector } : { ok: true, field: null }
+
+  const attr = (name) => {
+    try {
+      const v = el.getAttribute(name)
+      return typeof v === 'string' ? v : ''
+    } catch (_e) {
+      return ''
+    }
+  }
+  const words = []
+  try {
+    for (const label of el.labels || []) words.push(label.textContent || '')
+  } catch (_e) {
+    /* an element with no labels collection */
+  }
+  words.push(attr('aria-label'), attr('placeholder'), attr('title'))
+  for (const id of attr('aria-labelledby').split(/\s+/).filter(Boolean)) {
+    try {
+      const node = document.getElementById(id)
+      if (node) words.push(node.textContent || '')
+    } catch (_e) {
+      /* a missing label is no label */
+    }
+  }
+  return {
+    ok: true,
+    field: {
+      tag: String(el.tagName || '').toLowerCase(),
+      type: String(attr('type') || el.type || '').toLowerCase(),
+      autocomplete: attr('autocomplete'),
+      name: attr('name'),
+      id: attr('id'),
+      label: words.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim().slice(0, 300),
+      opaque,
+    },
+  }
+}
+
 export function pageFocusSelect(payload) {
   const { selector, select = true } = payload || {}
   let el = null

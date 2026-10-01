@@ -295,7 +295,7 @@ landing on whatever tab now holds that number.
 | Tier | Tools | Policy |
 |---|---|---|
 | Read | `browser_list_profiles`, `browser_list_tabs`, `browser_read_page`, `browser_screenshot`, `browser_scroll`, `bridge_status` | always allowed |
-| Write | `browser_navigate`, `browser_open_tab`, `browser_open_or_focus`, `browser_close_tab`, `browser_activate_tab`, `browser_click`, `browser_fill`, `browser_press_keys`, `browser_wait_for`, `browser_reload_extension` | allowed, always audited |
+| Write | `browser_navigate`, `browser_open_tab`, `browser_open_or_focus`, `browser_close_tab`, `browser_activate_tab`, `browser_click`, `browser_fill`, `browser_press_keys`, `browser_wait_for`, `browser_sort_window`, `browser_reload_extension` | allowed, always audited |
 | Armed | `browser_eval_js` | refused unless that profile is armed; see What arm does |
 | Control | `bridge_arm`, `bridge_panic` | |
 
@@ -303,7 +303,15 @@ landing on whatever tab now holds that number.
 elements with stable refs, which `browser_click` and `browser_fill` prefer
 over CSS selectors. `browser_fill` has a `set` mode that defeats React's value
 tracker and a `type` mode that sends real keystrokes for consoles that only
-enable Save on them.
+enable Save on them. A password or one-time-code field is refused unless the
+session carries a recorded yes for that site (see Security).
+
+`browser_sort_window` puts a window's oldest tab on the left and its newest on
+the right, for one window or every window of a profile, each on its own.
+Pinned tabs stay put and a tab group moves as one block, placed by its oldest
+tab. The popup has the same two buttons. A tab's age is the open time the
+extension recorded when the tab was created; tabs opened before 1.1.0 have
+none, so they are aged by when they were last shown.
 
 ### Showing a page to the human at the machine
 
@@ -412,8 +420,15 @@ Stated plainly, because a security model nobody believes is worse than none.
   own pages.
 - **What panic does.** `bridge_panic`, the press-and-hold control in the
   extension, or simply creating the file `PANIC` in the state directory drops
-  every route, disarms everything and refuses every call until a human deletes
-  that file. The bridge cannot clear its own panic, on purpose.
+  every route, disarms everything and refuses every call until a human clears
+  it: "Hold to resume" in the extension popup, or deleting that file. No agent
+  can clear it, on purpose: there is no tool for it, and the broker drops an
+  agent connection that asks.
+- **Passwords need the recorded yes.** A fill or key press into a password or
+  one-time-code field is refused unless the agent session was launched with a
+  receipt pointing at a recorded yes for that site, read by the broker from
+  one configured folder. The audit line names the receipt's file, never its
+  contents. See SECURITY.md for what this does and does not cover.
 - **Identity is checked, not assumed.** A profile is claimed to a person, and
   the broker re-reads who is signed in about once a minute. If the account
   changes, the claim is dropped and the old label stops resolving, so a tool

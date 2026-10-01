@@ -1071,12 +1071,15 @@ function fieldWords(text) {
  * one-time-code, or a name, id or label that says password, passcode, PIN, OTP,
  * 2FA, MFA, one-time, verification code or security code. A custom field that
  * draws its own dots is a text input with a label, which is why the label
- * counts as much as the type.
+ * counts as much as the type. Focus inside another site's frame cannot be read
+ * at all (`opaque`), and a field the bridge cannot see counts as one that may
+ * take a password.
  *
  * @param {{type?:string, autocomplete?:string, name?:string, id?:string, label?:string}} field
  */
 export function isSecretField(field) {
   if (!field || typeof field !== 'object') return false
+  if (field.opaque === true) return true
   if (String(field.type || '').toLowerCase() === 'password') return true
   const auto = String(field.autocomplete || '').toLowerCase().split(/\s+/)
   if (auto.some((token) => SECRET_AUTOCOMPLETE.includes(token))) return true
@@ -1093,8 +1096,8 @@ export function isSecretField(field) {
  * Does a service named in a recorded yes name this host?
  *
  * A service with a dot is a domain and matches itself and its subdomains. One
- * without is a name and matches a whole label of the host: "intuit" matches
- * accounts.intuit.com and never intuitive.example.
+ * without is a name and matches a whole label of the host: "ledgerly" matches
+ * accounts.ledgerly.example and never ledgerlyish.example.
  */
 export function serviceNamesHost(service, host) {
   const s = String(service || '').toLowerCase().replace(/\.+$/, '')
@@ -1113,7 +1116,8 @@ function hostOf(url) {
 }
 
 const SECRET_REFUSED =
-  'This field takes a password or a one-time code, so the bridge refused to fill it. ' +
+  'This field takes a password or a one-time code (or sits inside another site\'s frame, where the bridge ' +
+  'cannot tell), so the bridge refused to type into it. ' +
   'A password is typed by a person, or by an agent session that carries a recorded yes for this site ' +
   '(the account-word receipt described in SECURITY.md).'
 

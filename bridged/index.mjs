@@ -86,6 +86,7 @@ import {
   tierFor,
 } from './policy.mjs'
 import { installedExtensionVersion } from '../shared/config.mjs'
+import { loadAccountWordSettings, readAccountWord } from '../shared/account-word.mjs'
 import { NonceLedger, authenticateHello } from '../shared/auth.mjs'
 import {
   RouteTable,
@@ -1655,6 +1656,38 @@ function forwardToBrowser(conn, msg, route, op) {
     return
   }
 
+  // The password guard's receipt. A grant is only ever written HERE, from a
+  // receipt file this broker read itself, so whatever the caller put under the
+  // grant's name is thrown away first. The receipt's path never travels on: the
+  // extension gets the file name and the services, or the problem.
+  delete args.accountWordGrant
+  let receipt = null
+  if ((op === OPS.FILL || op === OPS.PRESS_KEYS) && typeof args.accountWord === 'string' && args.accountWord) {
+    args.accountWordGrant = readAccountWord(args.accountWord, loadAccountWordSettings())
+    if (!args.accountWordGrant.problem) receipt = args.accountWordGrant.file
+  }
+  delete args.accountWord
+
+  // A sort's ages arrive keyed by tab handle and leave keyed by raw tab id, by
+  // the same rule as `tab`: a handle that is not this profile's is refused.
+  if (op === OPS.SORT_WINDOW && args.ages !== undefined && args.ages !== null) {
+    if (typeof args.ages !== 'object' || Array.isArray(args.ages)) {
+      reply(conn, msg, fail(id, ERR.BAD_REQUEST, '"ages" maps tab handles to times.'), { route })
+      return
+    }
+    const ages = {}
+    for (const [handle, at] of Object.entries(args.ages)) {
+      const check = routes.validateHandle(route, handle)
+      if (!check.ok) {
+        reply(conn, msg, fail(id, check.code, check.message), { route })
+        return
+      }
+      const time = Number(at)
+      if (Number.isFinite(time) && time > 0) ages[check.tabId] = time
+    }
+    args.ages = ages
+  }
+
   if (typeof args.url === 'string' && !urlAllowedFor(op, args.url)) {
     // An empty url reaches here too: isRestrictedUrl treats it as restricted
     // rather than as "no url", because a caller that passes an empty string is
@@ -1709,6 +1742,7 @@ function forwardToBrowser(conn, msg, route, op) {
     route,
     op,
     url: typeof args.url === 'string' ? args.url : null,
+    receipt,
     startedAt: Date.now(),
     timer: setTimeout(() => {
       pendings.delete(brokerId)
@@ -1784,6 +1818,7 @@ function finish(pending, response, result) {
       ok: response.ok === true,
       ms: Date.now() - pending.startedAt,
       err: response.ok ? null : response.error?.code,
+      receipt: pending.receipt,
     })
   }
   pending.mcpConn?.send(response)

@@ -34,6 +34,7 @@ import {
   originOf,
   parseTabHandle,
   planOpenOrFocus,
+  secretFieldVerdict,
 } from './protocol.js'
 import { buildSnapshot, clearSnapshot, resolveRef, snapshotMeta } from './snapshot.js'
 import * as inject from './inject.js'
@@ -1031,6 +1032,29 @@ async function click(args) {
   return { ok: true, selector, tier: 2, trusted: true, x: Math.round(rect.cx), y: Math.round(rect.cy), tag: rect.tag }
 }
 
+/**
+ * The password guard, checked before a fill or a key press types anything.
+ *
+ * The page says what the field is (inject.pageFieldKind); the contract's
+ * secretFieldVerdict decides, with the grant the BROKER wrote from the
+ * session's account-word receipt (it strips any grant a caller sent). A
+ * password or one-time-code field with no grant for this site is refused with
+ * E_SECRET_FIELD. A probe that cannot find the element fails the call here, so
+ * the guard can never be skipped by an element that appears a moment later.
+ *
+ * @returns {{receipt?: string}} the receipt's file name when it let a secret field through
+ */
+async function guardSecretField(tabId, tab, selector, args) {
+  const probe = assertPageOk(await runInPage(tabId, inject.pageFieldKind, { selector }), 'field check')
+  const verdict = secretFieldVerdict({
+    field: probe.field,
+    grant: args && args.accountWordGrant ? args.accountWordGrant : null,
+    url: tab.url || tab.pendingUrl || '',
+  })
+  if (!verdict.allowed) throw new OpError(ERR.SECRET_FIELD, verdict.message)
+  return verdict.secret ? { receipt: verdict.receipt } : {}
+}
+
 async function fill(args) {
   const tabId = await requireTabId(args)
   const tab = await getTab(tabId)
@@ -1038,6 +1062,7 @@ async function fill(args) {
   const selector = await requireSelector(tabId, args)
   const value = args && args.value !== undefined ? args.value : ''
   const mode = String((args && args.mode) || 'set').toLowerCase()
+  const secret = await guardSecretField(tabId, tab, selector, args)
 
   if (mode === 'set') {
     const result = await runInPage(tabId, inject.pageFill, {
@@ -1045,7 +1070,7 @@ async function fill(args) {
       value,
       blurAfter: !!(args && args.blurAfter),
     })
-    return { ...assertPageOk(result, 'fill'), tier: 1, mode: 'set' }
+    return { ...assertPageOk(result, 'fill'), tier: 1, mode: 'set', ...secret }
   }
 
   if (mode !== 'type') throw new OpError(ERR.BAD_REQUEST, `Unknown mode "${mode}". Use "set" or "type".`)
@@ -1077,7 +1102,7 @@ async function fill(args) {
     }
   })
 
-  return { ok: true, selector, tier: 2, mode: 'type', typed: text.length, focused: focus.focused, tag: focus.tag }
+  return { ok: true, selector, tier: 2, mode: 'type', typed: text.length, focused: focus.focused, tag: focus.tag, ...secret }
 }
 
 async function pressKeys(args) {
@@ -1093,10 +1118,11 @@ async function pressKeys(args) {
 
   let selector = null
   if (args && (args.ref || args.selector)) selector = await requireSelector(tabId, args)
+  const secret = await guardSecretField(tabId, tab, selector, args)
 
   if (!(args && args.trusted === true)) {
     const result = await runInPage(tabId, inject.pagePressKeys, { selector, keys: list })
-    return { ...assertPageOk(result, 'pressKeys'), tier: 1, trusted: false }
+    return { ...assertPageOk(result, 'pressKeys'), tier: 1, trusted: false, ...secret }
   }
 
   if (!debuggerAvailable()) throw unsupported('Trusted key events were requested.')
@@ -1146,7 +1172,7 @@ async function pressKeys(args) {
     }
   })
 
-  return { ok: true, tier: 2, trusted: true, dispatched }
+  return { ok: true, tier: 2, trusted: true, dispatched, ...secret }
 }
 
 async function waitFor(args) {

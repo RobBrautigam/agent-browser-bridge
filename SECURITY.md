@@ -129,6 +129,76 @@ the profile coming back on a different version proves it landed. And it is not
 originable by a host connection, so an extension cannot ask the broker to reload
 that same extension and bypass the gate a normal request is held to.
 
+## Resuming from panic
+
+Panic stops everything: every route dropped, everything disarmed, every call
+refused. Until 1.1.0 the only way out was deleting the panic file by hand, and
+the extension's popup could not even show the panic, because the broker
+refused the extension's link while it was on. Now a person can resume from the
+popup, with a press-and-hold, and nothing else can:
+
+- **No agent can.** `resume` is a host-only operation in the contract. An MCP
+  connection that sends it is dropped as a capability violation, there is no
+  MCP tool for it, and `bridge_panic` refuses `on: false`. An emergency stop
+  the agent could clear is not an emergency stop.
+- **Only the popup page can ask.** The extension's worker takes the request
+  only from its own `popup/index.html`. A content script carries the
+  extension's id but the browser stamps the page's address on its messages, so
+  it is refused, and so is the Board, which can trip panic but not clear it.
+- **Only a held extension link can carry it.** During panic the broker answers
+  an extension's registration with `E_PANIC` and holds the connection with no
+  route: it can read the board and ask to resume, and nothing on it can reach
+  a browser. A connection that never registered is refused.
+
+What this does not change: the panic file is still the control that works
+without anybody's cooperation, and code running as your user can delete it
+(or speak the host's role, having read the token) exactly as before. The
+property kept is that the bridge's own request paths have one way to clear
+panic, and it is a person holding a button in the popup.
+
+## Password and one-time-code fields
+
+An agent that can type into a logged-in browser can type a password into a
+signup form. A fill or key press into a password or one-time-code field is
+therefore refused with `E_SECRET_FIELD` unless the agent session carries a
+**receipt** pointing at a recorded yes for that site.
+
+- **Which fields.** Judged from what the page says about the field:
+  `type="password"`, an `autocomplete` of `new-password`, `current-password`
+  or `one-time-code`, or a name, id or label that says password, passcode,
+  PIN, OTP, 2FA, MFA, one-time, verification code or security code. A key
+  press with no target checks the focused element, into open shadow roots and
+  same-origin frames; focus inside another site's frame cannot be seen and
+  counts as a secret field.
+- **The receipt.** The session's own configuration, never a tool argument:
+  the MCP server reads it from `BRIDGE_ACCOUNT_WORD` (or the variable
+  `BRIDGE_ACCOUNT_WORD_ENV` names) and forwards it on `browser_fill` and
+  `browser_press_keys` only. It is the path of a Markdown drop file inside the
+  one folder named in `account-word.json` in the state directory
+  (`{"folder": "...", "ignoreWords": [...]}`), and the file must carry a line
+  `ACCOUNT WORD: <service> ...`. No folder configured means no receipt is
+  accepted, which is the default.
+- **The grant.** The broker reads the file (inside the folder on its real
+  path, a regular file, at most 256 KB), strips any grant the caller sent, and
+  forwards only the file name and the services it names. The extension lets a
+  secret field through only when a service names the tab's site: a service
+  with a dot is a domain and matches itself and its subdomains; one without
+  matches a whole label of the host name. The audit line records the receipt's
+  file name, never its path or contents.
+
+What it does not defend, stated plainly:
+
+- **An armed profile.** `browser_eval_js` runs arbitrary JavaScript, which can
+  set any field. Arming is its own human-gated step; keep `bridge_arm` off
+  every auto-approve list.
+- **Code running as your user.** It can write a drop file into the folder, set
+  the environment variable, or drive the browser without this bridge. The
+  guard binds the agent's tool path, not the machine.
+- **A field that hides what it is.** A page that collects a password in a
+  field with no password type, no matching autocomplete and no label words is
+  not recognized. Most sign-in and sign-up forms say what their fields are,
+  because password managers depend on it.
+
 ## Reporting a vulnerability
 
 Open a private security advisory on the GitHub repository (Security tab,

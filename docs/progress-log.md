@@ -5,6 +5,23 @@ The user-facing record is [CHANGELOG.md](../CHANGELOG.md); this file holds the
 working notes behind it. This repository is public: entries carry no account
 names, machine names or private paths.
 
+## 2026-10-01
+
+- Version 1.1.0: sort by age per window, resume from the popup, and the
+  password-field guard. Every new test was seen to fail before its code, or
+  under a mutation of the code it guards when the code came first: the
+  planner (group placed by its newest tab, pinned tabs sorted, the age
+  sources reordered), the ledger (no restart re-key, an open time
+  overwritten, a window closing forgetting its tabs, an ambiguous address
+  guessed), the resume path (an MCP connection allowed, a host that never
+  registered allowed, the popup check removed in the worker or in the
+  sender rule), and the guard (each field rule, a grant with a problem or
+  none, substring and suffix host matching, a forged grant kept, the folder
+  containment on the lexical and the real path, the audit's file-name
+  filter).
+- During panic the broker now holds the extension's link instead of refusing
+  it; that is what lets the popup see the panic and resume.
+
 ## 2026-09-27
 
 - Version 1.0.1: an adversarial review of the handshake, run against a local

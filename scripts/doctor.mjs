@@ -895,7 +895,10 @@ async function main() {
           pass(`every connected profile is running extension ${board.result.installedVersion}`)
         }
         if (board.result?.panic) {
-          fail('the broker is in PANIC and is refusing every operation', 'delete the PANIC file in ' + BASE_DIR)
+          fail(
+            'the broker is in PANIC and is refusing every operation',
+            'hold "Hold to resume" in the extension popup, or delete the PANIC file in ' + BASE_DIR
+          )
         }
       }
     }
