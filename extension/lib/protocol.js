@@ -954,10 +954,8 @@ export function isSecretField(field) {
 
 /**
  * The second levels countries' registries sell names under: ledgerly.co.uk is
- * a site, co.uk is not. A list, not a rule, because a rule ("a short word and a
- * country code") also matches co.de, which is somebody's ordinary domain. A
- * country second level missing here fails closed: the name does not match, and
- * the recorded yes has to write the domain out.
+ * a site, co.uk is not. Written as a service, one of these names nobody; the
+ * rule in isRegistrySuffix backs the list for the ones it misses.
  */
 const COUNTRY_SECOND_LEVELS = new Set([
   'ac.uk', 'co.uk', 'gov.uk', 'ltd.uk', 'me.uk', 'org.uk', 'plc.uk',
@@ -979,34 +977,45 @@ const SHARED_HOSTING = new Set([
   'trycloudflare.com', 'vercel.app', 'web.app', 'webflow.io', 'wixsite.com', 'wordpress.com', 'workers.dev',
 ])
 
+/** The words registries sell second-level names under (gov.au, com.pl). */
+const REGISTRY_WORDS = new Set(['ac', 'co', 'com', 'edu', 'gen', 'go', 'gob', 'gov', 'ltd', 'me', 'mil', 'ne', 'net', 'nic', 'nom', 'or', 'org', 'plc', 'sch'])
+
+/** A domain that is a registry's or a shared host's suffix names everybody's sites, so it names none. */
+function isRegistrySuffix(domain) {
+  if (COUNTRY_SECOND_LEVELS.has(domain) || SHARED_HOSTING.has(domain)) return true
+  const labels = domain.split('.')
+  return labels.length === 2 && labels[1].length === 2 && REGISTRY_WORDS.has(labels[0])
+}
+
+/** An IPv4 or IPv6 address: matched exactly, never by its parts. */
+function isAddress(host) {
+  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.includes(':') || host.startsWith('[')
+}
+
 /**
  * Does a service named in a recorded yes name this host?
  *
  * A service with a dot is a domain and matches itself and its subdomains,
- * unless it is a registry's or a host's suffix (co.uk, github.io), which would
- * name everybody's sites. One without a dot is the site's own name: it matches
- * the host's registrable domain, `<name>.<top-level domain>` or
- * `<name>.<a country's second level>`, and that domain's subdomains. So
- * "ledgerly" matches accounts.ledgerly.example and ledgerly.co.uk, and never
- * ledgerly.login-check.example, ledgerly.co.de or a site on ledgerly's shared
- * hosting. It cannot tell ledgerly.example from a lookalike registered under
- * another top-level domain; a recorded yes that must be exact writes the domain.
+ * unless it is a registry's or a shared host's suffix (co.uk, gov.au,
+ * github.io), which would name everybody's sites. One without a dot is a
+ * brand, and matches only its `.com` and that domain's subdomains: "ledgerly"
+ * matches accounts.ledgerly.com, and never ledgerly.xyz, ledgerly.co.uk, a
+ * developer port on ledgerly.dev or a customer site on ledgerly's hosting,
+ * because who holds those cannot be told from the name. A recorded yes for a
+ * site elsewhere writes its domain. An address matches only itself.
  */
 export function serviceNamesHost(service, host) {
   const s = String(service || '').toLowerCase().replace(/\.+$/, '')
   const h = String(host || '').toLowerCase().replace(/\.+$/, '')
   if (!s || !h) return false
+  if (isAddress(h) || isAddress(s)) return h === s
   if (s.includes('.')) {
-    if (COUNTRY_SECOND_LEVELS.has(s) || SHARED_HOSTING.has(s)) return false
+    if (isRegistrySuffix(s)) return false
     return h === s || h.endsWith(`.${s}`)
   }
-  const labels = h.split('.')
-  const tail = labels.length >= 3 && COUNTRY_SECOND_LEVELS.has(labels.slice(-2).join('.')) ? 2 : 1
-  if (labels.length <= tail) return false
-  const site = labels.slice(-(tail + 1))
-  if (site[0] !== s) return false
-  const registrable = site.join('.')
-  return SHARED_HOSTING.has(registrable) ? h === registrable : true
+  const own = `${s}.com`
+  if (SHARED_HOSTING.has(own)) return h === own
+  return h === own || h.endsWith(`.${own}`)
 }
 
 function hostOf(url) {

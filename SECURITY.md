@@ -176,11 +176,18 @@ therefore refused with `E_SECRET_FIELD` unless the agent session carries a
   another site's frame is read by asking that frame, and judged by that
   frame's own site. A frame that cannot be read (a sandbox, a browser page),
   an `<embed>` other than a PDF viewer, or a nesting deeper than the walk goes
-  counts as a secret field and is refused even with a recorded yes. A page the
-  last key sent navigating is waited for (about two seconds), never typed into
-  unseen; a refusal mid-sequence says how many keys were already sent, never
-  which. Untrusted key events cannot type at all, so they are checked where
-  they are sent: the selected element or the top document's focused one.
+  counts as a secret field and is refused even with a recorded yes. Two frames
+  that report the same field are one field. After an Enter the check waits for
+  the navigation to finish, and a page that cannot be read is waited for
+  (about two seconds), never typed into unseen. Once a sequence has typed into
+  a password field, the rest of its keys stay on that site: focus that moves
+  to another site's frame stops it. A sequence also stops at its deadline, so
+  it never types on after the caller was told it timed out. A refusal
+  mid-sequence says how many keys were already sent, never which, and never
+  quotes the browser's error. Untrusted key events cannot type at all, so they
+  are checked where they are sent: the selected element or the top document's
+  focused one. The browser reports no focus inside a window that is not in
+  front, so a field in another site's frame there is refused, not typed into.
 - **The receipt.** The session's own configuration, never a tool argument:
   the MCP server reads it from `BRIDGE_ACCOUNT_WORD` (or the variable
   `BRIDGE_ACCOUNT_WORD_ENV` names) and forwards it on `browser_fill` and
@@ -194,16 +201,16 @@ therefore refused with `E_SECRET_FIELD` unless the agent session carries a
   forwards only the file name and the services it names. The extension lets a
   secret field through only when a service names the site of the page it
   probed: a service with a dot is a domain and matches itself and its
-  subdomains (a registry or shared-hosting suffix such as `co.uk` or
-  `github.io` matches nothing); one without is the site's own name and matches
-  the host's registrable domain, `<name>.<top-level domain>` or
-  `<name>.<a listed country second level>`, with its subdomains. So `ledgerly`
-  covers `accounts.ledgerly.example` and `ledgerly.co.uk`, never
-  `ledgerly.login-check.example`, `ledgerly.co.de` or a site on a shared host.
-  A name cannot tell a site from a lookalike registered under another
-  top-level domain; a recorded yes that must be exact writes the domain
-  (`ACCOUNT WORD: ledgerly.example`). The audit line records the receipt's
-  file name, never its path or contents.
+  subdomains (a registry or shared-hosting suffix such as `co.uk`, `gov.au` or
+  `github.io` matches nothing); one without is a brand and matches only its
+  `.com` and that domain's subdomains. So `ledgerly` covers
+  `accounts.ledgerly.com`, never `ledgerly.xyz`, `ledgerly.co.uk`,
+  `ledgerly.login-check.example`, a developer port on somebody's `.dev` or a
+  customer site on a shared host, because who holds those cannot be told from
+  the name. A site anywhere else is written as its domain
+  (`ACCOUNT WORD: ledgerly.co.uk`). An address (`10.0.0.1`) matches only
+  itself. The audit line records the receipt's file name, never its path or
+  contents.
 
 What it does not defend, stated plainly:
 
@@ -217,6 +224,10 @@ What it does not defend, stated plainly:
   without this bridge). The guard binds an agent that has only the bridge's
   tools; keep the drop folder out of reach of the sessions it governs, and
   remove a drop file once its account exists.
+- **A brand that hosts its customers on its own `.com`.** A bare name covers
+  every subdomain of the brand's `.com`. Where the brand gives customers pages
+  there and is not on the list of shared hosts, write the exact sign-in domain
+  instead of the name.
 - **A field that hides what it is.** A page that collects a password in a
   field with no password type, no matching autocomplete and no label words is
   not recognized. Most sign-in and sign-up forms say what their fields are,

@@ -170,7 +170,10 @@ async function handleRequest(msg) {
   const started = Date.now()
 
   try {
-    const result = await withDeadline(runOp(msg.op, msg.args || {}), timeoutMs, msg.op)
+    // The deadline goes in with the arguments, so an operation that types key by
+    // key stops at it rather than typing on after the caller was told it timed out.
+    const args = { ...(msg.args || {}), deadlineAt: started + timeoutMs }
+    const result = await withDeadline(runOp(msg.op, args), timeoutMs, msg.op)
     return ok(id, result)
   } catch (err) {
     if (err instanceof OpError) return fail(id, err.code, err.message, err.data)

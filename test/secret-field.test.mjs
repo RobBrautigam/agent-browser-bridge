@@ -117,7 +117,7 @@ test('a receipt the broker could not accept is refused, with its reason', () => 
 
 test('a recorded yes covers the site it names and no other', () => {
   const grant = { file: 'drop-7.md', services: ['ledgerly'] }
-  const yes = secretFieldVerdict({ field: { type: 'password' }, grant, url: 'https://accounts.ledgerly.example/signin' })
+  const yes = secretFieldVerdict({ field: { type: 'password' }, grant, url: 'https://accounts.ledgerly.com/signin' })
   assert.deepEqual(yes, { allowed: true, secret: true, receipt: 'drop-7.md' })
   for (const url of ['https://ledgerlyish.example/', 'https://ledgerly.evil.example.co/x'.replace('ledgerly.', 'ledgerly-'), 'not a url', '']) {
     const no = secretFieldVerdict({ field: { type: 'password' }, grant, url })

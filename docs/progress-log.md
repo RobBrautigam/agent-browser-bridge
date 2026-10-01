@@ -34,6 +34,17 @@ names, machine names or private paths.
   place instead of refused, PDF viewers and untrusted keys no longer refused,
   deep nesting, and site matching by registrable domain with listed country
   second levels and shared hosts.
+- A third pass found ten more. Nine were fixed, each with a test seen red and
+  a mutation of the fix turning it red again: a bare name now means the
+  brand's `.com` only (lookalikes under other top-level domains, developer
+  ports and shared hosts the list missed), a registry-word backstop for
+  suffixes the list misses, addresses matched exactly, the same field
+  reported by two frames, a wait for the navigation after an Enter, the keys
+  after a password pinned to its site, the operation's deadline honored
+  inside a key sequence, and refusals that no longer quote the browser's
+  error. The tenth is documented: a window not in front reports no focus, so
+  a field in another site's frame there is refused until the window is in
+  front.
 
 ## 2026-09-27
 

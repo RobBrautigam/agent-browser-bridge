@@ -22,7 +22,8 @@
  * The service is the line's first word once markup, an article and a possessive
  * are set aside ("ACCOUNT WORD: the Paywell account" names paywell), and a word
  * too general to name a service ("account", "new") names none. A service with a
- * dot is a domain; one without matches a whole label of the site's host name.
+ * dot is a domain and covers its subdomains; one without is a brand and covers
+ * only its .com (the contract's serviceNamesHost is the rule).
  *
  * Only files inside ONE folder are read, named in `account-word.json` beside the
  * broker's state:

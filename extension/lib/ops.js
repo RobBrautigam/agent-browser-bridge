@@ -1051,18 +1051,40 @@ async function click(args) {
  *
  * @returns {{receipt?: string}} the receipt's file name when it let a secret field through
  */
-async function guardSecretField(tabId, tab, selector, args, { shallow = false } = {}) {
+async function guardSecretField(tabId, tab, selector, args, { shallow = false, seq = null } = {}) {
   const probe =
     selector || shallow
       ? assertPageOk(await runInPage(tabId, inject.pageFieldKind, { selector, shallow }), 'field check')
       : await probeFocusedField(tabId)
+  const url = typeof probe.url === 'string' && probe.url ? probe.url : tab.url || tab.pendingUrl || ''
   const verdict = secretFieldVerdict({
     field: probe.field,
     grant: args && args.accountWordGrant ? args.accountWordGrant : null,
-    url: typeof probe.url === 'string' && probe.url ? probe.url : tab.url || tab.pendingUrl || '',
+    url,
   })
   if (!verdict.allowed) throw new OpError(ERR.SECRET_FIELD, verdict.message)
+  if (seq) {
+    // Once a sequence has typed into a granted secret field, the rest of it
+    // stays on that site: a frame or a page script that takes focus elsewhere
+    // would otherwise receive the rest of the password as ordinary text.
+    const host = hostOf(url)
+    if (seq.site && host !== seq.site) {
+      throw new OpError(
+        ERR.SECRET_FIELD,
+        `The keys after a password stay on the site its recorded yes names (${seq.site}); focus moved to ${host || 'a page with no host'}, so the bridge stopped.`
+      )
+    }
+    if (verdict.secret && !seq.site) seq.site = host
+  }
   return verdict.secret ? { receipt: verdict.receipt } : {}
+}
+
+function hostOf(url) {
+  try {
+    return new URL(String(url)).hostname
+  } catch (_err) {
+    return ''
+  }
 }
 
 /**
@@ -1086,16 +1108,45 @@ async function probeFocusedField(tabId) {
   } catch (_err) {
     frames = []
   }
-  const inner = (Array.isArray(frames) ? frames : [])
-    .filter((f) => f && f.frameId !== 0)
-    .map((f) => f.result)
-    .filter((r) => r && r.ok === true && r.focused === true && r.field && r.field.frame !== true)
-  return inner.length === 1 ? inner[0] : top
+  // A same-site frame nested in the focused one is walked into by its parent
+  // too, so the same field can come back twice: it is one field.
+  const inner = new Map()
+  for (const f of Array.isArray(frames) ? frames : []) {
+    const r = f && f.frameId !== 0 ? f.result : null
+    if (r && r.ok === true && r.focused === true && r.field && r.field.frame !== true) {
+      inner.set(JSON.stringify([r.url, r.field]), r)
+    }
+  }
+  return inner.size === 1 ? [...inner.values()][0] : top
 }
 
 /** How long a check waits for a page the previous key sent navigating. */
 const FOCUS_CHECK_TRIES = 8
 const FOCUS_CHECK_WAIT_MS = 250
+/** After an Enter, how long before the tab is asked whether it started loading. */
+const ENTER_SETTLE_MS = 150
+/** A key-by-key operation stops this long before its deadline. */
+const DEADLINE_MARGIN_MS = 500
+
+/**
+ * After an Enter the page being left is still readable, with its old field
+ * focused, until the navigation commits: wait for the tab to stop loading, so
+ * the check judges the page the next key will reach. A tab still loading after
+ * the wait stops the sequence rather than type into a page nobody has seen.
+ */
+async function settleAfterEnter(tabId, seq) {
+  await sleep(ENTER_SETTLE_MS)
+  for (let attempt = 0; attempt < FOCUS_CHECK_TRIES; attempt++) {
+    const now = await getTab(tabId)
+    if (!now || now.status !== 'loading') return
+    await sleep(FOCUS_CHECK_WAIT_MS)
+  }
+  throw new OpError(
+    ERR.TIMEOUT,
+    `Stopped after ${seq.sent} key(s): the page was still loading after an Enter, so the field the next key would land in could not be checked.`,
+    { sent: seq.sent }
+  )
+}
 
 /**
  * Check the FOCUSED element, where the next trusted key lands, and fold a
@@ -1105,31 +1156,46 @@ const FOCUS_CHECK_WAIT_MS = 250
  * plain character (auto-advance) or a moment after an Enter. One probe a key
  * is the price; a key list is short and a typed value is capped.
  *
- * A page the last key sent navigating cannot be read for a moment: the check
- * waits for it (about two seconds) rather than type into a field it has not
- * seen, and a page that never answers stops the sequence. Either refusal says
- * how many keys were already sent, never which ones: a typed value is not
- * repeated into an error.
+ * After an Enter it waits for the navigation (settleAfterEnter); a page that
+ * cannot be read for a moment is retried (about two seconds) rather than typed
+ * into unseen, and a page that never answers stops the sequence. The sequence
+ * also stops at its deadline, so it never types on after the caller was told it
+ * timed out. Every refusal says how many keys were already sent, never which
+ * ones, and never quotes the browser's error, which can carry the page address:
+ * a typed value is not repeated into an error.
+ *
+ * `seq` is the sequence's state: `sent` (keys sent so far), `enter` (the last
+ * key was an Enter), `site` (the site of a granted secret field, once typed into).
  */
-async function guardFocus(tabId, tab, args, secret, sent = 0) {
+async function guardFocus(tabId, tab, args, secret, seq) {
+  const stamp = (err) => {
+    if (err instanceof OpError && seq.sent > 0) err.data = { ...(err.data || {}), sent: seq.sent }
+    return err
+  }
+  if (args && Number.isFinite(args.deadlineAt) && Date.now() >= args.deadlineAt - DEADLINE_MARGIN_MS) {
+    throw new OpError(ERR.TIMEOUT, `Stopped after ${seq.sent} key(s): the operation's time ran out before the next key.`, {
+      sent: seq.sent,
+    })
+  }
+  if (seq.enter) {
+    seq.enter = false
+    await settleAfterEnter(tabId, seq)
+  }
   let last = null
   for (let attempt = 0; attempt < FOCUS_CHECK_TRIES; attempt++) {
-    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, FOCUS_CHECK_WAIT_MS))
+    if (attempt > 0) await sleep(FOCUS_CHECK_WAIT_MS)
     try {
-      Object.assign(secret, await guardSecretField(tabId, tab, null, args))
+      Object.assign(secret, await guardSecretField(tabId, tab, null, args, { seq }))
       return
     } catch (err) {
-      if (!(err instanceof OpError) || err.code === ERR.SECRET_FIELD || err.code === ERR.TAB_GONE) {
-        if (err instanceof OpError && sent > 0) err.data = { ...(err.data || {}), sent }
-        throw err
-      }
+      if (!(err instanceof OpError) || err.code === ERR.SECRET_FIELD || err.code === ERR.TAB_GONE) throw stamp(err)
       last = err
     }
   }
   throw new OpError(
     last.code,
-    `Stopped after ${sent} key(s): the page changed and the field the next key would land in could not be checked (${last.message}).`,
-    { sent }
+    `Stopped after ${seq.sent} key(s): the page changed and the field the next key would land in could not be checked (${last.code}).`,
+    { sent: seq.sent }
   )
 }
 
@@ -1140,7 +1206,8 @@ async function fill(args) {
   const selector = await requireSelector(tabId, args)
   const value = args && args.value !== undefined ? args.value : ''
   const mode = String((args && args.mode) || 'set').toLowerCase()
-  const secret = await guardSecretField(tabId, tab, selector, args)
+  const seq = { sent: 0, enter: false, site: null }
+  const secret = await guardSecretField(tabId, tab, selector, args, { seq })
 
   if (mode === 'set') {
     const result = await runInPage(tabId, inject.pageFill, {
@@ -1165,13 +1232,13 @@ async function fill(args) {
   if (!debuggerAvailable()) throw unsupported('Mode "type" was requested.')
 
   const focus = assertPageOk(await runInPage(tabId, inject.pageFocusSelect, { selector, select: true }), 'fill focus')
-  await guardFocus(tabId, tab, args, secret)
+  await guardFocus(tabId, tab, args, secret, seq)
 
   await withDebugger(tabId, async () => {
-    let sent = 0
     for (const ch of Array.from(text)) {
-      if (sent > 0) await guardFocus(tabId, tab, args, secret, sent)
-      sent += 1
+      if (seq.sent > 0) await guardFocus(tabId, tab, args, secret, seq)
+      seq.sent += 1
+      seq.enter = ch === '\n'
       if (ch === '\n') {
         await cdp(tabId, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
         await cdp(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
@@ -1201,7 +1268,8 @@ async function pressKeys(args) {
   let selector = null
   if (args && (args.ref || args.selector)) selector = await requireSelector(tabId, args)
   const trusted = Boolean(args && args.trusted === true)
-  const secret = await guardSecretField(tabId, tab, selector, args, { shallow: !trusted })
+  const seq = { sent: 0, enter: false, site: null }
+  const secret = await guardSecretField(tabId, tab, selector, args, { shallow: !trusted, seq })
 
   if (!trusted) {
     const result = await runInPage(tabId, inject.pagePressKeys, { selector, keys: list })
@@ -1211,7 +1279,7 @@ async function pressKeys(args) {
   if (!debuggerAvailable()) throw unsupported('Trusted key events were requested.')
   if (selector) {
     await runInPage(tabId, inject.pageFocusSelect, { selector, select: false })
-    await guardFocus(tabId, tab, args, secret)
+    await guardFocus(tabId, tab, args, secret, seq)
   }
 
   const VK = {
@@ -1236,8 +1304,8 @@ async function pressKeys(args) {
 
   const dispatched = []
   await withDebugger(tabId, async () => {
-    for (const [i, spec] of list.entries()) {
-      if (i > 0) await guardFocus(tabId, tab, args, secret, i)
+    for (const spec of list) {
+      if (seq.sent > 0) await guardFocus(tabId, tab, args, secret, seq)
       let modifiers = 0
       let base = ''
       for (const part of String(spec).split('+').map((s) => s.trim()).filter(Boolean)) {
@@ -1256,6 +1324,8 @@ async function pressKeys(args) {
       await cdp(tabId, 'Input.dispatchKeyEvent', down)
       await cdp(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: vk, modifiers })
       dispatched.push(spec)
+      seq.sent += 1
+      seq.enter = key === 'Enter'
     }
   })
 

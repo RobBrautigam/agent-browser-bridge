@@ -36,6 +36,13 @@ function fakeBrowser({
   // Focus inside another site's frame: its address, the field it holds, and
   // whether the extension can read it.
   frame = null,
+  // The frame is nested: its parent (same site) walks into it, so two frames
+  // report the same focused field.
+  frameTwice = false,
+  // A page script that moves focus after this many characters, to this field.
+  moveTo = null,
+  // What a failing probe says (a browser error can quote the page's address).
+  failMessage = 'Frame with ID 0 was removed.',
 } = {}) {
   const fields = {
     user: { tag: 'INPUT', type: 'text', name: 'username', focusable: true, typed: '' },
@@ -47,7 +54,7 @@ function fakeBrowser({
     fpw: { tag: 'INPUT', type: 'password', name: 'password', focusable: true, typed: '' },
   }
   const tabOrder = ['user', 'pw']
-  const state = { fields, focused, probes: 0, pending: null, failing: 0 }
+  const state = { fields, focused, probes: 0, pending: null, failing: 0, loading: 0, gets: 0 }
   const select = (selector) => String(selector || '').replace(/^[#.]/, '')
   const describe = (key) => {
     const f = fields[key]
@@ -70,7 +77,15 @@ function fakeBrowser({
     runtime: { lastError: null },
     tabs: {
       async get(id) {
-        return { id, windowId: 1, url: tabUrl }
+        state.gets += 1
+        // A navigation: the tab reads loading for a while, and the new page
+        // (the password step) has focus once it reads complete.
+        if (state.loading > 0) {
+          state.loading -= 1
+          if (state.loading === 0) state.focused = 'pw'
+          return { id, windowId: 1, url: tabUrl, status: 'loading' }
+        }
+        return { id, windowId: 1, url: tabUrl, status: 'complete' }
       },
       async query() {
         return [{ id: 1, windowId: 1, url: tabUrl, active: true }]
@@ -95,12 +110,13 @@ function fakeBrowser({
           }
           if (state.failing > 0) {
             state.failing -= 1
-            throw new Error('Frame with ID 0 was removed.')
+            throw new Error(failMessage)
           }
           if (target.allFrames) {
             const results = [{ frameId: 0, result: topProbe(arg) }]
             if (frame && frame.readable && state.focused === 'frame') {
               results.push({ frameId: 7, result: { ok: true, url: frame.url, focused: true, field: describe(frame.field) } })
+              if (frameTwice) results.push({ frameId: 8, result: { ok: true, url: frame.url, focused: true, field: describe(frame.field) } })
             }
             return results
           }
@@ -131,12 +147,16 @@ function fakeBrowser({
           // and focuses it, the way many sign-in pages do.
           if (params.key === 'Enter' && state.focused === 'user' && enter === 'async') {
             state.pending = 'pw'
+          } else if (params.key === 'Enter' && state.focused === 'user' && enter === 'navigate') {
+            // The old page stays readable, username focused, until the new one commits.
+            state.loading = 3
           } else if (params.key === 'Tab' || (params.key === 'Enter' && state.focused === 'user' && enter === 'now')) {
             const at = tabOrder.indexOf(state.focused)
             state.focused = tabOrder[(at + 1) % tabOrder.length]
           } else if (typeof params.text === 'string' && params.key !== 'Enter') {
             fields[landing()].typed += params.text
             if (advanceAfter && state.focused === 'user' && fields.user.typed.length >= advanceAfter) state.focused = 'pw'
+            if (moveTo && fields[moveTo.from].typed.length >= moveTo.after && state.focused === moveTo.from) state.focused = moveTo.to
           }
         }
         cb({})
@@ -245,12 +265,16 @@ test('focus inside another site\'s frame is refused even with a recorded yes', (
 
 test('a name in the recorded yes is the site\'s own name, never a subdomain of somebody else\'s', async () => {
   const { serviceNamesHost } = await import('../shared/protocol.mjs')
-  // The site itself, its subdomains, and a country's second level.
-  for (const host of ['ledgerly.example', 'accounts.ledgerly.example', 'ledgerly.co.uk', 'login.ledgerly.com.au']) {
+  // A bare name is the brand's .com and its subdomains; a country's site is written out.
+  for (const host of ['ledgerly.com', 'accounts.ledgerly.com']) {
     assert.equal(serviceNamesHost('ledgerly', host), true, host)
   }
+  for (const host of ['ledgerly.example', 'ledgerly.co.uk', 'login.ledgerly.com.au']) {
+    assert.equal(serviceNamesHost('ledgerly', host), false, host)
+  }
+  assert.equal(serviceNamesHost('ledgerly.com.au', 'login.ledgerly.com.au'), true)
   // The name as a subdomain of a site anyone can register: the phishing shape.
-  for (const host of ['ledgerly.login-check.example', 'ledgerly.pages.example', 'www.ledgerly.attacker.co', 'ledgerly.co.com']) {
+  for (const host of ['ledgerly.login-check.example', 'ledgerly.pages.example', 'www.ledgerly.attacker.co', 'ledgerly.co.com', 'ledgerly.com.evil.example']) {
     assert.equal(serviceNamesHost('ledgerly', host), false, host)
   }
   // A registry suffix names every site under it, so it names none.
@@ -426,4 +450,78 @@ test('the probe follows deep nesting, and what it cannot reach in time it does n
     globalThis.document = saved.document
     globalThis.location = saved.location
   }
+})
+
+test('a bare name covers its .com and nothing a stranger can host; a written domain is exact', async () => {
+  const { serviceNamesHost } = await import('../shared/protocol.mjs')
+  for (const host of ['ledgerly.com', 'accounts.ledgerly.com', 'login.id.ledgerly.com']) {
+    assert.equal(serviceNamesHost('ledgerly', host), true, host)
+  }
+  // Another top-level domain, a developer port anyone can open, a shared host: write the domain.
+  for (const [service, host] of [
+    ['ledgerly', 'ledgerly.xyz'],
+    ['github', 'abc-3000.app.github.dev'],
+    ['replit', 'x.picard.replit.dev'],
+    ['supabase', 'evil.supabase.co'],
+    ['co', 'co.uk'],
+    ['herokuapp', 'evil.herokuapp.com'],
+  ]) {
+    assert.equal(serviceNamesHost(service, host), false, `${service} on ${host}`)
+  }
+  assert.equal(serviceNamesHost('ledgerly.co.uk', 'login.ledgerly.co.uk'), true)
+  assert.equal(serviceNamesHost('x.ai', 'accounts.x.ai'), true, 'a short domain is still a domain')
+  // A registry suffix written as a service names nobody, listed or not.
+  for (const [service, host] of [['gov.au', 'evil.gov.au'], ['com.pl', 'evil.com.pl'], ['co.uk', 'a.co.uk']]) {
+    assert.equal(serviceNamesHost(service, host), false, `${service} on ${host}`)
+  }
+  // An address is matched exactly or not at all.
+  assert.equal(serviceNamesHost('0.1', '10.0.0.1'), false)
+  assert.equal(serviceNamesHost('10', '1.2.10.5'), false)
+  assert.equal(serviceNamesHost('10.0.0.1', '10.0.0.1'), true)
+})
+
+test('two frames that report the same focused field are one field, not an ambiguity', async () => {
+  const pay = { url: 'https://pay.example/frame', field: 'card', readable: true }
+  await withBrowser({ focused: 'frame', frame: pay, frameTwice: true }, async (ops, state) => {
+    const result = await ops.runOp('pressKeys', { tab: 1, keys: '4 2', trusted: true })
+    assert.deepEqual(result.dispatched, ['4', '2'])
+    assert.equal(state.fields.card.typed, '42')
+  })
+})
+
+test('after an Enter the check waits for the navigation, so the new page\'s field is the one judged', async () => {
+  await withBrowser({ focused: 'user', enter: 'navigate' }, async (ops, state) => {
+    const err = await refused(ops.runOp('fill', { tab: 1, selector: '#user', value: 'me\nabc', mode: 'type' }))
+    assert.equal(err && err.code, ERR.SECRET_FIELD, 'the key after the Enter was judged on the page being left')
+    assert.equal(state.fields.pw.typed, '')
+    assert.equal(state.fields.user.typed, 'me')
+  })
+})
+
+test('the keys after a password stay on the site the recorded yes names', async () => {
+  const chat = { url: 'https://chat.other.example/widget', field: 'card', readable: true }
+  await withBrowser({ focused: 'pw', frame: chat, moveTo: { from: 'pw', after: 2, to: 'frame' } }, async (ops, state) => {
+    const err = await refused(ops.runOp('pressKeys', { tab: 1, keys: 'a b c d', trusted: true, accountWordGrant: GRANT }))
+    assert.equal(err && err.code, ERR.SECRET_FIELD, 'the rest of the password went into another site\'s field')
+    assert.equal(state.fields.pw.typed, 'ab')
+    assert.equal(state.fields.card.typed, '')
+  })
+})
+
+test('a sequence stops at its deadline instead of typing on after the caller was told it timed out', async () => {
+  await withBrowser({ focused: 'user' }, async (ops, state) => {
+    const err = await refused(ops.runOp('pressKeys', { tab: 1, keys: 'a b c', trusted: true, deadlineAt: Date.now() - 1 }))
+    assert.equal(err && err.code, ERR.TIMEOUT)
+    assert.deepEqual(err.data, { sent: 1 })
+    assert.equal(state.fields.user.typed, 'a')
+  })
+})
+
+test('a page that never answers stops the sequence without quoting the browser\'s error', async () => {
+  const leaky = 'Cannot access contents of url "https://site.example/next?pw=hunter2".'
+  await withBrowser({ focused: 'user', enter: 'none', failAfterEnter: Infinity, failMessage: leaky }, async (ops) => {
+    const err = await refused(ops.runOp('pressKeys', { tab: 1, keys: ['Enter', 'x'], trusted: true }))
+    assert.ok(err)
+    assert.equal(err.message.includes('hunter2'), false, err.message)
+  })
 })

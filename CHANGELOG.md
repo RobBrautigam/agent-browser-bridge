@@ -71,10 +71,13 @@ extension older than 1.1.0 cannot resume from panic, and a broker older than
   shadow roots and nesting to any practical depth, and reads another site's
   frame by asking that frame, judged by that frame's own site; a frame it
   cannot read is refused even with a recorded yes. The site is the probed
-  page's, not the tab address read before it. A bare name matches only a
-  site's registrable domain, never a subdomain of somebody else's site or a
-  shared host's customer. Untrusted key events are checked where they are
-  sent. A registration that was waiting when panic tripped is held instead of
+  page's, not the tab address read before it. After an Enter the check waits
+  for the navigation; once keys have gone into a password field the rest stay
+  on that site; a sequence stops at its deadline; and a refusal never quotes
+  the browser's error. A bare name in the recorded yes matches only the
+  brand's `.com` and its subdomains (any other site is written as its domain),
+  a registry suffix matches nothing, and an address matches only itself.
+  Untrusted key events are checked where they are sent. A registration that was waiting when panic tripped is held instead of
   routed, and the extension's held flag never outlives its connection. A tab
   restored by the browser is no longer stamped as newly opened, and the
   ledger's re-key no longer delays the profile's registration.
