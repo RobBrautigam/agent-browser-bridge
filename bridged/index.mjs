@@ -568,6 +568,34 @@ function readRegister(msg) {
   }
 }
 
+/**
+ * During panic a profile is answered and HELD: a typed E_PANIC, no route, the
+ * connection kept open. The extension keeps its port on this code, so its popup
+ * can read the board and ask for RESUME over it. Panic still drops every route
+ * and keeps it dropped; a held connection is not one, and every request on it
+ * that is not panic-exempt is refused like any other.
+ *
+ * @returns {boolean} true when the registration was held and must go no further
+ */
+function holdThroughPanic(conn, installId) {
+  if (!panic.check()) return false
+  conn.panicHeld = true
+  conn.send(
+    registerAck({
+      ok: false,
+      error: {
+        code: ERR.PANIC,
+        message:
+          'Panic is active, so this profile is not on the bridge. Hold Resume in the extension popup, ' +
+          `or delete ${panic.file}.`,
+      },
+      version: VERSION,
+    })
+  )
+  log('info', 'Held a profile registration while panic is active', { conn: conn.id, installId })
+  return true
+}
+
 async function handleRegister(conn, msg) {
   const incoming = readRegister(msg)
   const installId = incoming.installId
@@ -585,28 +613,7 @@ async function handleRegister(conn, msg) {
 
   clearTimeout(conn.registerTimer)
 
-  // During panic the profile is answered and HELD: a typed E_PANIC, no route,
-  // the connection kept open. The extension keeps its port on this code, so
-  // its popup can read the board and ask for RESUME over it. Panic still drops
-  // every route and keeps it dropped; a held connection is not one, and every
-  // request on it that is not panic-exempt is refused like any other.
-  if (panic.check()) {
-    conn.panicHeld = true
-    conn.send(
-      registerAck({
-        ok: false,
-        error: {
-          code: ERR.PANIC,
-          message:
-            'Panic is active, so this profile is not on the bridge. Hold Resume in the extension popup, ' +
-            `or delete ${panic.file}.`,
-        },
-        version: VERSION,
-      })
-    )
-    log('info', 'Held a profile registration while panic is active', { conn: conn.id, installId })
-    return
-  }
+  if (holdThroughPanic(conn, installId)) return
 
   // The probe was started at HELLO; give it a moment to land but never let it
   // hold the acknowledgement open. An unverified vendor is a warning on the
@@ -626,6 +633,10 @@ async function handleRegister(conn, msg) {
   })
 
   if (conn.closed) return
+  // Panic may have tripped while the probe and the identity were awaited, after
+  // enterPanic dropped every route; attaching one now would put a live profile
+  // on the board during panic, on a connection the popup could not resume.
+  if (holdThroughPanic(conn, installId)) return
 
   const saved = store.get(installId)
   // Sticky until it is actually resolved. A drop detected in a previous session

@@ -65,6 +65,17 @@ extension older than 1.1.0 cannot resume from panic, and a broker older than
   strips any grant a caller tried to send itself, and the extension refuses a
   secret field the grant does not cover. The audit line records the receipt's
   file name, never its path or contents.
+- **Hardened in review before release.** The check follows focus where trusted
+  keys land (after a selector is focused, and before any key that follows a
+  Tab, an Enter or another focus-moving key), reads closed shadow roots, and
+  treats `<object>` and `<embed>` like frames; a frame from another site is
+  refused even with a recorded yes; the site is the probed page's, not the tab
+  address read before it; a bare name matches only the site's own registered
+  name, never a subdomain of somebody else's. A registration that was waiting
+  when panic tripped is held instead of routed, and the extension's held flag
+  never outlives its connection. A tab restored by the browser is no longer
+  stamped as newly opened, and the ledger's re-key no longer delays the
+  profile's registration.
 
 ### Changed
 

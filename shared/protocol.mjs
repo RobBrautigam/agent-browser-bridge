@@ -1092,19 +1092,37 @@ export function isSecretField(field) {
   return false
 }
 
+/** The second level a country's registry sells names under: ledgerly.co.uk, ledgerly.com.au. */
+const COUNTRY_SECOND_LEVEL = new Set(['ac', 'co', 'com', 'edu', 'go', 'gob', 'gov', 'ne', 'net', 'or', 'org'])
+
+/** The labels after a site's own name: one top-level domain, or a country's second level and its code. */
+function isRegistryTail(labels) {
+  if (labels.length === 1) return true
+  return labels.length === 2 && COUNTRY_SECOND_LEVEL.has(labels[0]) && labels[1].length === 2
+}
+
 /**
  * Does a service named in a recorded yes name this host?
  *
- * A service with a dot is a domain and matches itself and its subdomains. One
- * without is a name and matches a whole label of the host: "ledgerly" matches
- * accounts.ledgerly.example and never ledgerlyish.example.
+ * A service with a dot is a domain and matches itself and its subdomains; a
+ * bare registry suffix (co.uk) names every site under it, so it names none. One
+ * without a dot is the site's own name, and matches only the label just before
+ * the top-level domain or a country's second level: "ledgerly" matches
+ * accounts.ledgerly.example and ledgerly.co.uk, and never ledgerlyish.example
+ * or ledgerly.login-check.example, where the name is a subdomain of somebody
+ * else's site.
  */
 export function serviceNamesHost(service, host) {
   const s = String(service || '').toLowerCase().replace(/\.+$/, '')
   const h = String(host || '').toLowerCase().replace(/\.+$/, '')
   if (!s || !h) return false
-  if (s.includes('.')) return h === s || h.endsWith(`.${s}`)
-  return h.split('.').includes(s)
+  if (s.includes('.')) {
+    if (isRegistryTail(s.split('.'))) return false
+    return h === s || h.endsWith(`.${s}`)
+  }
+  const labels = h.split('.')
+  const at = labels.lastIndexOf(s)
+  return at >= 0 && isRegistryTail(labels.slice(at + 1))
 }
 
 function hostOf(url) {
@@ -1139,6 +1157,16 @@ const SECRET_REFUSED =
  */
 export function secretFieldVerdict({ field, grant = null, url = '' } = {}) {
   if (!isSecretField(field)) return { allowed: true, secret: false, receipt: null }
+  if (field.opaque === true) {
+    // The site a recorded yes names is the page's; a frame from another site
+    // inside it is not, and which site it is cannot be read from here.
+    return {
+      allowed: false,
+      secret: true,
+      receipt: null,
+      message: `${SECRET_REFUSED} Focus is inside another site's frame, which no recorded yes can cover.`,
+    }
+  }
   if (!grant || typeof grant !== 'object') {
     return { allowed: false, secret: true, receipt: null, message: `${SECRET_REFUSED} This call carried none.` }
   }

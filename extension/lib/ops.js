@@ -1041,6 +1041,11 @@ async function click(args) {
  * password or one-time-code field with no grant for this site is refused with
  * E_SECRET_FIELD. A probe that cannot find the element fails the call here, so
  * the guard can never be skipped by an element that appears a moment later.
+ * The site is the document the probe ran in, not the tab address read before
+ * it, so a redirect in between is judged as the page it landed on.
+ *
+ * A trusted key types into whatever has focus when it lands, and focus moves,
+ * so the typing paths check again where it matters (guardFocus, keyMayMoveFocus).
  *
  * @returns {{receipt?: string}} the receipt's file name when it let a secret field through
  */
@@ -1049,10 +1054,25 @@ async function guardSecretField(tabId, tab, selector, args) {
   const verdict = secretFieldVerdict({
     field: probe.field,
     grant: args && args.accountWordGrant ? args.accountWordGrant : null,
-    url: tab.url || tab.pendingUrl || '',
+    url: typeof probe.url === 'string' && probe.url ? probe.url : tab.url || tab.pendingUrl || '',
   })
   if (!verdict.allowed) throw new OpError(ERR.SECRET_FIELD, verdict.message)
   return verdict.secret ? { receipt: verdict.receipt } : {}
+}
+
+/**
+ * Check the FOCUSED element, where the next trusted key lands, and fold a
+ * receipt it needed into `secret`. Called after focusing a selector (an element
+ * that cannot take focus leaves it on the field that had it) and before any key
+ * that follows one able to move focus.
+ */
+async function guardFocus(tabId, tab, args, secret) {
+  Object.assign(secret, await guardSecretField(tabId, tab, null, args))
+}
+
+/** A plain character types and stays put; Tab, Enter, a modifier chord or a named key can move focus. */
+function keyMayMoveFocus(spec) {
+  return !/^[^+\s]$/.test(String(spec))
 }
 
 async function fill(args) {
@@ -1087,9 +1107,15 @@ async function fill(args) {
   if (!debuggerAvailable()) throw unsupported('Mode "type" was requested.')
 
   const focus = assertPageOk(await runInPage(tabId, inject.pageFocusSelect, { selector, select: true }), 'fill focus')
+  await guardFocus(tabId, tab, args, secret)
 
   await withDebugger(tabId, async () => {
+    let recheck = false
     for (const ch of Array.from(text)) {
+      if (recheck) await guardFocus(tabId, tab, args, secret)
+      // A newline is an Enter and a control character is no character at all:
+      // either may move focus, so the key after it is checked again.
+      recheck = ch < ' '
       if (ch === '\n') {
         await cdp(tabId, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
         await cdp(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
@@ -1126,7 +1152,10 @@ async function pressKeys(args) {
   }
 
   if (!debuggerAvailable()) throw unsupported('Trusted key events were requested.')
-  if (selector) await runInPage(tabId, inject.pageFocusSelect, { selector, select: false })
+  if (selector) {
+    await runInPage(tabId, inject.pageFocusSelect, { selector, select: false })
+    await guardFocus(tabId, tab, args, secret)
+  }
 
   const VK = {
     enter: { key: 'Enter', code: 'Enter', vk: 13, text: '\r' },
@@ -1150,7 +1179,8 @@ async function pressKeys(args) {
 
   const dispatched = []
   await withDebugger(tabId, async () => {
-    for (const spec of list) {
+    for (const [i, spec] of list.entries()) {
+      if (i > 0 && keyMayMoveFocus(list[i - 1])) await guardFocus(tabId, tab, args, secret)
       let modifiers = 0
       let base = ''
       for (const part of String(spec).split('+').map((s) => s.trim()).filter(Boolean)) {

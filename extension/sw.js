@@ -129,11 +129,14 @@ async function boot(reason) {
     await ensureAlarm()
     await getInstallId() // mint it before the first REGISTER needs it
     await sweepDebuggees() // clean up anything a terminated worker left attached
-    await ensureAgesSession() // a new browser session re-keys the tab age ledger
   } catch (err) {
     console.error('[bridge] boot housekeeping failed:', err)
   }
   await ensureConnected(reason)
+  // A new browser session re-keys the tab age ledger: after the profile is on
+  // the bridge, never in front of it, because the re-key waits for a starting
+  // browser's tabs to settle.
+  ensureAgesSession().catch((err) => console.error('[bridge] tab age re-key failed:', err))
 }
 
 async function ensureAlarm() {

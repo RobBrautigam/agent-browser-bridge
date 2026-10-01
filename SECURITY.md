@@ -166,10 +166,15 @@ therefore refused with `E_SECRET_FIELD` unless the agent session carries a
 - **Which fields.** Judged from what the page says about the field:
   `type="password"`, an `autocomplete` of `new-password`, `current-password`
   or `one-time-code`, or a name, id or label that says password, passcode,
-  PIN, OTP, 2FA, MFA, one-time, verification code or security code. A key
-  press with no target checks the focused element, into open shadow roots and
-  same-origin frames; focus inside another site's frame cannot be seen and
-  counts as a secret field.
+  PIN, OTP, 2FA, MFA, one-time, verification code or security code.
+- **Where the keys land.** A trusted key types into whatever has focus when it
+  lands, so the check follows focus: the focused element, into shadow roots
+  (closed ones too) and same-origin frames; again after a selector is focused
+  (an element that cannot take focus leaves it where it was); and again before
+  any key that follows one able to move focus (Tab, Enter, a chord, a named
+  key, a newline in a typed value). Focus inside another site's frame or an
+  `<embed>` cannot be seen, counts as a secret field, and is refused even with
+  a recorded yes, because which site that frame belongs to cannot be read.
 - **The receipt.** The session's own configuration, never a tool argument:
   the MCP server reads it from `BRIDGE_ACCOUNT_WORD` (or the variable
   `BRIDGE_ACCOUNT_WORD_ENV` names) and forwards it on `browser_fill` and
@@ -181,19 +186,27 @@ therefore refused with `E_SECRET_FIELD` unless the agent session carries a
 - **The grant.** The broker reads the file (inside the folder on its real
   path, a regular file, at most 256 KB), strips any grant the caller sent, and
   forwards only the file name and the services it names. The extension lets a
-  secret field through only when a service names the tab's site: a service
-  with a dot is a domain and matches itself and its subdomains; one without
-  matches a whole label of the host name. The audit line records the receipt's
-  file name, never its path or contents.
+  secret field through only when a service names the site of the page it
+  probed: a service with a dot is a domain and matches itself and its
+  subdomains (a bare registry suffix such as `co.uk` matches nothing); one
+  without is the site's own name and matches only the label just before the
+  top-level domain or a country's second level, so `ledgerly` covers
+  `accounts.ledgerly.example` and `ledgerly.co.uk`, never
+  `ledgerly.login-check.example`. The audit line records the receipt's file
+  name, never its path or contents.
 
 What it does not defend, stated plainly:
 
 - **An armed profile.** `browser_eval_js` runs arbitrary JavaScript, which can
   set any field. Arming is its own human-gated step; keep `bridge_arm` off
   every auto-approve list.
-- **Code running as your user.** It can write a drop file into the folder, set
-  the environment variable, or drive the browser without this bridge. The
-  guard binds the agent's tool path, not the machine.
+- **An agent that can write files.** The broker believes any `.md` file in the
+  folder that carries the line, and a receipt never expires. An agent with
+  shell or file access can write one, or point its own session at an old one,
+  as can any code running as your user (which can also drive the browser
+  without this bridge). The guard binds an agent that has only the bridge's
+  tools; keep the drop folder out of reach of the sessions it governs, and
+  remove a drop file once its account exists.
 - **A field that hides what it is.** A page that collects a password in a
   field with no password type, no matching autocomplete and no label words is
   not recognized. Most sign-in and sign-up forms say what their fields are,

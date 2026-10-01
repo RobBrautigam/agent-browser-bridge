@@ -800,18 +800,35 @@ export function pageRect(payload) {
   }
 }
 
-/** Focus and select an element so a CDP keystroke sequence replaces its contents. */
 /**
  * What the page says about one field, for the password guard: its tag, type,
  * autocomplete, name, id and the words labeling it. Never its value.
  *
  * With no selector it reads the FOCUSED element, which is where a key press
- * lands: into open shadow roots and same-origin frames. Focus inside another
- * site's frame cannot be seen from here, so it is reported as `opaque`, and the
- * contract treats a field it cannot see as one that may take a password.
+ * lands: into shadow roots (closed ones too, through chrome.dom in the
+ * extension's world) and same-origin frames. Focus inside another site's frame,
+ * or inside an <embed>, cannot be seen from here, so it is reported as
+ * `opaque`, and the contract treats a field it cannot see as one that may take
+ * a password. The page's address goes back with the answer, so the site is
+ * judged as the document actually probed.
  */
 export function pageFieldKind(payload) {
   const { selector = null } = payload || {}
+  const shadowOf = (node) => {
+    try {
+      const api = globalThis.chrome && globalThis.chrome.dom
+      if (api && typeof api.openOrClosedShadowRoot === 'function') return api.openOrClosedShadowRoot(node) || null
+    } catch (_e) {
+      /* not an element chrome.dom can read; the open root is all there is */
+    }
+    return node.shadowRoot || null
+  }
+  let url = ''
+  try {
+    url = String(location.href)
+  } catch (_e) {
+    url = ''
+  }
   let el = null
   let opaque = false
   try {
@@ -820,12 +837,17 @@ export function pageFieldKind(payload) {
     } else {
       el = document.activeElement || null
       for (let depth = 0; el && depth < 8; depth++) {
-        if (el.shadowRoot && el.shadowRoot.activeElement) {
-          el = el.shadowRoot.activeElement
+        const root = shadowOf(el)
+        if (root && root.activeElement) {
+          el = root.activeElement
           continue
         }
         const tag = String(el.tagName || '').toUpperCase()
-        if (tag === 'IFRAME' || tag === 'FRAME') {
+        if (tag === 'EMBED') {
+          opaque = true
+          break
+        }
+        if (tag === 'IFRAME' || tag === 'FRAME' || tag === 'OBJECT') {
           let inner = null
           try {
             inner = el.contentDocument
@@ -845,7 +867,7 @@ export function pageFieldKind(payload) {
   } catch (_e) {
     return { ok: false, reason: 'bad_selector', selector }
   }
-  if (!el) return selector ? { ok: false, reason: 'not_found', selector } : { ok: true, field: null }
+  if (!el) return selector ? { ok: false, reason: 'not_found', selector } : { ok: true, url, field: null }
 
   const attr = (name) => {
     try {
@@ -872,6 +894,7 @@ export function pageFieldKind(payload) {
   }
   return {
     ok: true,
+    url,
     field: {
       tag: String(el.tagName || '').toLowerCase(),
       type: String(attr('type') || el.type || '').toLowerCase(),
@@ -884,6 +907,7 @@ export function pageFieldKind(payload) {
   }
 }
 
+/** Focus and select an element so a CDP keystroke sequence replaces its contents. */
 export function pageFocusSelect(payload) {
   const { selector, select = true } = payload || {}
   let el = null

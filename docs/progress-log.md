@@ -21,6 +21,13 @@ names, machine names or private paths.
   filter).
 - During panic the broker now holds the extension's link instead of refusing
   it; that is what lets the popup see the panic and resume.
+- An adversarial review before release found ten issues; nine were fixed with
+  a test seen red first (keys following focus into a password field, a
+  selector that cannot take focus, closed shadow roots and embeds, a frame
+  under the top page's yes, the probed page's address, lookalike subdomains, a
+  registration racing panic, a held flag outliving its connection, restored
+  tabs stamped as new, the re-key delaying registration), and the tenth (a
+  receipt an agent with file access could write) is documented in SECURITY.md.
 
 ## 2026-09-27
 

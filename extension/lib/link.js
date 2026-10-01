@@ -266,6 +266,10 @@ export async function countTabs() {
 
 async function connect(reason) {
   await setState(LINK.CONNECTING, { reason })
+  // A new port is not held until its own REGISTER_ACK says so. A worker that
+  // was terminated while held leaves the flag in session storage, and carried
+  // onto this connection it would switch off the heartbeat check for good.
+  await clearPanicHeld()
 
   let p = null
   try {
@@ -515,6 +519,7 @@ async function onRegisterAck(msg) {
   }
 
   await setAttempt(0)
+  await clearPanicHeld()
   await chrome.storage.session.set({
     [K_ACK]: {
       at: Date.now(),

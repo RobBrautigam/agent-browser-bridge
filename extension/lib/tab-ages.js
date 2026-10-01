@@ -28,6 +28,8 @@ export const LEDGER_KEY = 'ages.opened'
 
 /** chrome.storage.session: set once the ledger has been re-keyed in this browser session. */
 export const SESSION_KEY = 'ages.sessionKeyed'
+/** How long before its created event a tab may have been last shown and still count as new. */
+export const RESTORED_SLACK_MS = 60_000
 
 /** A ledger past this size drops entries for tabs that are not open. */
 const LEDGER_SOFT_CAP = 5_000
@@ -62,6 +64,11 @@ export function recordOpened(ledger, tab, now) {
   if (!tab || !Number.isInteger(tab.id)) return ledger
   const key = String(tab.id)
   if (ledger[key]) return ledger
+  // A tab last shown well before its created event is a restored one (a
+  // browser restart the re-key could not match, a closed window reopened), not
+  // a new one: stamping it "now" would sort an old tab as the newest. Left
+  // out, it is aged by lastAccessed, which is what the popup says it falls back to.
+  if (Number.isFinite(tab.lastAccessed) && now - tab.lastAccessed > RESTORED_SLACK_MS) return ledger
   return { ...ledger, [key]: { at: now, w: tab.windowId, i: tab.index, u: tabUrl(tab) } }
 }
 
