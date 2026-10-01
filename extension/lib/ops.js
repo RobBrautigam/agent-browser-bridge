@@ -37,6 +37,7 @@ import {
 } from './protocol.js'
 import { buildSnapshot, clearSnapshot, resolveRef, snapshotMeta } from './snapshot.js'
 import * as inject from './inject.js'
+import { sortWindowsByAge } from './tab-ages.js'
 
 /** CDP version pinned for chrome.debugger.attach. */
 const DEBUGGER_PROTOCOL_VERSION = '1.3'
@@ -403,6 +404,10 @@ async function listTabs() {
       audible: !!t.audible,
       discarded: !!t.discarded,
       status: t.status || 'unknown',
+      // When the tab was last shown, epoch ms (Chrome 121 and later). The
+      // stand-in for its age when the open-time ledger has no entry for it.
+      lastAccessed: Number.isFinite(t.lastAccessed) ? Math.round(t.lastAccessed) : null,
+      groupId: Number.isInteger(t.groupId) ? t.groupId : -1,
     })),
   }
 }
@@ -1504,6 +1509,47 @@ async function setLabel(args) {
 /* Dispatch                                                                    */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Sort one window, or every window, oldest tab on the left.
+ *
+ * The planning rule is planWindowSort in the contract; lib/tab-ages.js reads the
+ * ages and makes the moves. This only checks the request. `ages` arrives as raw
+ * tab id -> epoch ms: the broker turned the caller's handles into ids for this
+ * profile and refused any handle that is not this profile's.
+ */
+async function sortWindow(args) {
+  const all = Boolean(args && args.all === true)
+  const hasWindow = args && args.window !== undefined && args.window !== null
+  if (all && hasWindow) {
+    throw new OpError(ERR.BAD_REQUEST, 'Name one window, or ask for all of them, not both.')
+  }
+  if (!all && !hasWindow) {
+    throw new OpError(
+      ERR.BAD_REQUEST,
+      'Name the window to sort ("window": the windowId browser_list_tabs reports) or sort every window ("all": true).'
+    )
+  }
+  const ages = {}
+  const given = args && args.ages && typeof args.ages === 'object' ? args.ages : {}
+  for (const [id, at] of Object.entries(given)) {
+    const tabId = Number(id)
+    const time = Number(at)
+    if (Number.isInteger(tabId) && Number.isFinite(time) && time > 0) ages[tabId] = time
+  }
+  if (all) return sortWindowsByAge({ all: true, ages })
+
+  const windowId = Number(args.window)
+  let win = null
+  try {
+    win = Number.isInteger(windowId) ? await chrome.windows.get(windowId) : null
+  } catch (_err) {
+    win = null
+  }
+  if (!win) throw new OpError(ERR.BAD_REQUEST, `There is no window ${args.window} in this profile. browser_list_tabs lists each tab's windowId.`)
+  if (win.type !== 'normal') throw new OpError(ERR.BAD_REQUEST, `Window ${windowId} is a ${win.type} window; only normal windows are sorted.`)
+  return sortWindowsByAge({ windowId, ages })
+}
+
 const HANDLERS = Object.freeze({
   [OPS.LIST_TABS]: listTabs,
   [OPS.READ_PAGE]: readPage,
@@ -1520,6 +1566,7 @@ const HANDLERS = Object.freeze({
   [OPS.WAIT_FOR]: waitFor,
   [OPS.EVAL_JS]: evalJs,
   [OPS.RELOAD_EXTENSION]: reloadExtension,
+  [OPS.SORT_WINDOW]: sortWindow,
   [OPS.SET_LABEL]: setLabel,
 })
 

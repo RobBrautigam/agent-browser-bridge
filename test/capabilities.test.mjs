@@ -38,6 +38,7 @@ import {
   OP_TIER,
   BROWSER_OPS,
   BROKER_OPS,
+  HOST_ONLY_OPS,
   HOST_REQ_ALLOWED_OPS,
   MAX_ARM_MINUTES,
 } from '../shared/protocol.mjs'
@@ -165,14 +166,28 @@ test('a host may originate exactly the broker-local ops and nothing else', async
   )
 })
 
-test('an mcp connection may originate anything', async () => {
+test('an mcp connection may originate anything except the host-only ops', async () => {
   // The mcp role is the model's side of the wire and is the only role meant to
   // drive browsers. Narrowing it here would just move the tool surface into a
-  // second, undocumented allowlist.
+  // second, undocumented allowlist. The one carve-out is HOST_ONLY_OPS, and it
+  // is a contract value, not a second list hidden in the policy module.
   const { canOriginate } = await import(POLICY_MODULE)
   for (const op of Object.values(OPS)) {
-    assert.equal(canOriginate(ROLE.MCP, op), true, `an mcp connection was refused ${op}`)
+    const expected = !HOST_ONLY_OPS.includes(op)
+    assert.equal(canOriginate(ROLE.MCP, op), expected, `an mcp connection ${expected ? 'was refused' : 'may originate'} ${op}`)
   }
+})
+
+test('an mcp connection may NOT originate resume: the model cannot clear the panic switch', async () => {
+  const { canOriginate } = await import(POLICY_MODULE)
+  assert.deepEqual([...HOST_ONLY_OPS], [OPS.RESUME])
+  assert.ok(Object.isFrozen(HOST_ONLY_OPS))
+  assert.equal(canOriginate(ROLE.MCP, OPS.RESUME), false)
+  // The popup's way out is a host request, so the host allowlist carries it.
+  assert.equal(canOriginate(ROLE.HOST, OPS.RESUME), true)
+  // And the ways panic is SEEN and TRIPPED stay open to the model.
+  assert.equal(canOriginate(ROLE.MCP, OPS.PANIC), true)
+  assert.equal(canOriginate(ROLE.MCP, OPS.GET_BOARD), true)
 })
 
 test('canOriginate fails closed on an unknown role or an unknown op', async () => {
@@ -300,6 +315,9 @@ test('the WRITE tier is exactly the ops that change something and need no arm', 
     // must not need an arm; what bounds it is the broker's refusal to send it
     // unless the folder on disk holds a different version.
     OPS.RELOAD_EXTENSION,
+    // Rearranges a window's tab strip by age. It touches no page, and it is
+    // WRITE so it is audited and refused while the panic switch is on.
+    OPS.SORT_WINDOW,
   ]
   for (const op of expectedWrite) {
     assert.equal(OP_TIER[op], TIER.WRITE, `${op} must be a write op`)
@@ -319,6 +337,7 @@ test('control and housekeeping ops are META and never reach a page', () => {
     OPS.ARM,
     OPS.DISARM,
     OPS.PANIC,
+    OPS.RESUME,
     OPS.STATUS,
   ]
   for (const op of expectedMeta) {
@@ -335,7 +354,7 @@ test('control and housekeeping ops are META and never reach a page', () => {
 /* 5. The routing partition: who EXECUTES an op                                */
 /* -------------------------------------------------------------------------- */
 
-test('BROWSER_OPS is exactly the fifteen ops that cross into the extension', () => {
+test('BROWSER_OPS is exactly the sixteen ops that cross into the extension', () => {
   // Pinned as a literal list rather than derived from OP_TIER. The first build
   // derived it as "not META, plus SET_LABEL", which quietly made the META tier
   // mean two different things. Tier answers "what policy applies"; this answers
@@ -356,23 +375,25 @@ test('BROWSER_OPS is exactly the fifteen ops that cross into the extension', () 
     OPS.RELOAD_EXTENSION,
     OPS.SCREENSHOT,
     OPS.SCROLL,
+    OPS.SORT_WINDOW,
     OPS.WAIT_FOR,
   ].sort())
-  assert.equal(BROWSER_OPS.length, 15)
+  assert.equal(BROWSER_OPS.length, 16)
   assert.ok(Object.isFrozen(BROWSER_OPS))
 })
 
-test('BROKER_OPS is exactly the seven ops the broker answers itself', () => {
+test('BROKER_OPS is exactly the eight ops the broker answers itself', () => {
   assert.deepEqual([...BROKER_OPS].sort(), [
     OPS.ARM,
     OPS.CLAIM_PROFILE,
     OPS.DISARM,
     OPS.GET_BOARD,
     OPS.PANIC,
+    OPS.RESUME,
     OPS.SET_LABEL,
     OPS.STATUS,
   ].sort())
-  assert.equal(BROKER_OPS.length, 7)
+  assert.equal(BROKER_OPS.length, 8)
   assert.ok(Object.isFrozen(BROKER_OPS))
 })
 

@@ -67,6 +67,22 @@
         </div>
       </section>
 
+      <!-- Panic: the one place a person turns it off from the browser -->
+      <section class="pop-panic" id="panic-callout" hidden>
+        <p class="pop-panic__title">
+          <span data-icon="power" data-icon-size="14"></span>
+          <span>Panic is on</span>
+        </p>
+        <p class="pop-panic__body">
+          Every agent action on every profile is refused until you resume. Agents cannot turn
+          this off; only you can, here.
+        </p>
+        <button class="sb-btn sb-btn--sm sb-hold pop-panic__resume" id="resume-hold" type="button" title="Press and hold for one and a half seconds">
+          <span data-icon="power" data-icon-size="13"></span>
+          <span>Hold to resume</span>
+        </button>
+      </section>
+
       <!-- Broker down -->
       <section class="pop-down" id="broker-down" hidden>
         <p class="pop-down__title">
@@ -102,6 +118,29 @@
             <span>Disarm</span>
           </button>
         </div>
+      </section>
+
+      <!-- Sort by age -->
+      <section class="pop-sort" id="sort-block" aria-labelledby="sort-heading">
+        <h2 class="sb-eyebrow" id="sort-heading">Tabs</h2>
+        <p class="pop-sort__copy">
+          Oldest on the left, newest on the right. Pinned tabs stay put and a tab group moves
+          as one block. Each window is sorted on its own.
+        </p>
+        <div class="pop-sort__actions">
+          <button class="sb-btn sb-btn--sm pop-sort__btn" id="sort-window" type="button">
+            <span data-icon="clock" data-icon-size="13"></span>
+            <span>Sort this window by age</span>
+          </button>
+          <button class="sb-btn sb-btn--sm pop-sort__btn" id="sort-all" type="button">
+            <span data-icon="layers" data-icon-size="13"></span>
+            <span>Sort every window by age</span>
+          </button>
+        </div>
+        <p class="pop-sort__note">
+          A tab opened before this version has no recorded open time, so its age is the last
+          time it was shown. A tab you revisited recently sorts as newer than it is.
+        </p>
       </section>
     </main>
 

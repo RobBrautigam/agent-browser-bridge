@@ -15,6 +15,7 @@
     "storage",
     "alarms",
     "debugger",
+    "tabGroups",
     "identity.email"
   ],
   "host_permissions": [

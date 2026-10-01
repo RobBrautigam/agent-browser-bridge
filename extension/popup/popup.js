@@ -69,6 +69,10 @@ const el = {
   openBoard: $('open-board'),
   panicHold: $('panic-hold'),
   panicLabel: $('panic-label'),
+  panicCallout: $('panic-callout'),
+  resumeHold: $('resume-hold'),
+  sortWindow: $('sort-window'),
+  sortAll: $('sort-all'),
   toast: $('toast'),
 }
 
@@ -285,7 +289,8 @@ function renderStatus() {
 
   const panic = !!(state.board && state.board.panic)
   patchAttr(el.body, 'data-panic', panic ? 'on' : 'off')
-  patchText(el.panicLabel, panic ? 'Hold to clear' : 'Hold for panic')
+  patchText(el.panicLabel, panic ? 'Hold to resume' : 'Hold for panic')
+  el.panicCallout.hidden = !panic
 }
 
 function renderLine() {
@@ -553,16 +558,55 @@ function wireActions() {
     window.close()
   })
 
-  attachHold(el.panicHold, PANIC_HOLD_MS, async () => {
-    const on = !(state.board && state.board.panic)
-    try {
-      await send({ kind: 'panic', on })
-      toast(on ? 'Panic tripped' : 'Panic cleared')
-      await refresh({ immediate: true })
-    } catch (err) {
-      toast(err.message, 'error')
-    }
-  })
+  // The footer hold trips panic, and while panic is on it resumes, so the
+  // control a person reached for to stop everything is the one that starts it
+  // again. The callout's hold does the same thing with the words beside it.
+  attachHold(el.panicHold, PANIC_HOLD_MS, () => (state.board && state.board.panic ? resume() : tripPanic()))
+  attachHold(el.resumeHold, PANIC_HOLD_MS, resume)
+
+  el.sortWindow.addEventListener('click', () =>
+    withBusy(el.sortWindow, async () => {
+      const current = await chrome.windows.getCurrent()
+      const res = await send({ kind: 'sortWindow', windowId: current.id })
+      toast(sortToast(res.result))
+    })
+  )
+  el.sortAll.addEventListener('click', () =>
+    withBusy(el.sortAll, async () => {
+      const res = await send({ kind: 'sortAll' })
+      toast(sortToast(res.result))
+    })
+  )
+}
+
+async function tripPanic() {
+  try {
+    await send({ kind: 'panic', on: true })
+    toast('Panic tripped')
+    await refresh({ immediate: true })
+  } catch (err) {
+    toast(err.message, 'error')
+  }
+}
+
+async function resume() {
+  try {
+    await send({ kind: 'resume' })
+    toast('Resumed. Profiles are reconnecting.')
+    await refresh({ immediate: true })
+  } catch (err) {
+    toast(err.message, 'error')
+  }
+}
+
+/** One short line: the whole sentence is for the MCP tool, a toast has a second. */
+function sortToast(result) {
+  const windows = result && Array.isArray(result.windows) ? result.windows : []
+  const moved = windows.reduce((n, w) => n + (Number(w.moved) || 0), 0)
+  const failed = windows.reduce((n, w) => n + (Number(w.failed) || 0), 0)
+  const where = windows.length === 1 ? 'This window' : `${windows.length} windows`
+  if (failed > 0) return `${where} sorted, ${failed} could not be moved`
+  return moved === 0 ? `${where} already in age order` : `${where} sorted by age`
 }
 
 /* -------------------------------------------------------------------------- */

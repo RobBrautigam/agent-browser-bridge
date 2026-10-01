@@ -48,3 +48,28 @@ export function isOwnExtensionPage(sender, extensionId) {
 
   return true
 }
+
+/**
+ * The one page that may ask the broker to clear the panic switch: this
+ * extension's popup, where Resume sits behind a press-and-hold.
+ *
+ * Narrower than isOwnExtensionPage on purpose. The Board can trip panic and
+ * show it, and it opens in an ordinary tab; clearing an emergency stop belongs
+ * on exactly one surface, the one a person opens by clicking the toolbar icon.
+ * A content script is refused by the first check already, since the browser
+ * stamps the PAGE's url on its messages.
+ *
+ * @param {chrome.runtime.MessageSender|undefined} sender
+ * @param {string} extensionId  chrome.runtime.id
+ * @returns {boolean}
+ */
+export function mayResume(sender, extensionId) {
+  if (!isOwnExtensionPage(sender, extensionId)) return false
+  let pathname = ''
+  try {
+    pathname = new URL(sender.url).pathname
+  } catch (_err) {
+    return false
+  }
+  return pathname === '/popup/index.html'
+}
