@@ -118,12 +118,14 @@ export const OPS = Object.freeze({
   WAIT_FOR: 'waitFor',
   EVAL_JS: 'evalJs',
   RELOAD_EXTENSION: 'reloadExtension',
+  SORT_WINDOW: 'sortWindow',
   SET_LABEL: 'setLabel',
   CLAIM_PROFILE: 'claimProfile',
   GET_BOARD: 'getBoard',
   ARM: 'arm',
   DISARM: 'disarm',
   PANIC: 'panic',
+  RESUME: 'resume',
   STATUS: 'status',
 })
 
@@ -164,6 +166,10 @@ export const OP_TIER = Object.freeze({
   // which tabs it opened.
   [OPS.RELOAD_EXTENSION]: TIER.WRITE,
 
+  // Moves tabs and never touches a page, so WRITE: the human's tab strip is
+  // theirs, and the panic switch refuses it like every other write.
+  [OPS.SORT_WINDOW]: TIER.WRITE,
+
   [OPS.EVAL_JS]: TIER.ARMED,
 
   [OPS.SET_LABEL]: TIER.META,
@@ -172,6 +178,7 @@ export const OP_TIER = Object.freeze({
   [OPS.ARM]: TIER.META,
   [OPS.DISARM]: TIER.META,
   [OPS.PANIC]: TIER.META,
+  [OPS.RESUME]: TIER.META,
   [OPS.STATUS]: TIER.META,
 })
 
@@ -200,6 +207,7 @@ export const BROWSER_OPS = Object.freeze([
   OPS.WAIT_FOR,
   OPS.EVAL_JS,
   OPS.RELOAD_EXTENSION,
+  OPS.SORT_WINDOW,
 ])
 
 /** Operations the broker answers itself, without touching a browser. */
@@ -210,8 +218,20 @@ export const BROKER_OPS = Object.freeze([
   OPS.ARM,
   OPS.DISARM,
   OPS.PANIC,
+  OPS.RESUME,
   OPS.STATUS,
 ])
+
+/**
+ * Operations ONLY a host-role connection may originate, never an MCP one.
+ *
+ * RESUME clears the panic switch. A panic switch the model could clear is not
+ * an emergency stop, so the only way to ask for it is the extension's own
+ * popup, behind a press-and-hold, through the host. There is no MCP tool for it
+ * and an MCP connection that sends it anyway is dropped as a capability
+ * violation (bridged/policy.mjs canOriginate).
+ */
+export const HOST_ONLY_OPS = Object.freeze([OPS.RESUME])
 
 /**
  * Operations a HOST-role connection is allowed to originate.
@@ -237,6 +257,7 @@ export const HOST_REQ_ALLOWED_OPS = Object.freeze([
   OPS.ARM,
   OPS.DISARM,
   OPS.PANIC,
+  OPS.RESUME,
   OPS.STATUS,
 ])
 
@@ -268,6 +289,9 @@ export const ERR = Object.freeze({
   EXT_ERROR: 'E_EXT_ERROR',
   UNSUPPORTED: 'E_UNSUPPORTED',
   RESTRICTED_URL: 'E_RESTRICTED_URL',
+  // A fill or key press aimed at a password or one-time-code field without a
+  // recorded yes for that site. See secretFieldVerdict below.
+  SECRET_FIELD: 'E_SECRET_FIELD',
 
   // Extension-page-local. These describe an options page or popup failing to
   // reach its OWN service worker, so they never cross the wire - but a human
@@ -849,6 +873,351 @@ export function describeExtensionReload({
     `${who}asked the extension to reload itself, ${was} to ${now}. It drops off the bridge for a ` +
     'moment and comes back on the new code; the profile list is what confirms it.'
   )
+}
+
+/* -------------------------------------------------------------------------- */
+/* sortWindow: oldest on the left, newest on the right                         */
+/* -------------------------------------------------------------------------- */
+
+/** Where a tab's age came from, best first. */
+export const AGE_SOURCE = Object.freeze({
+  GIVEN: 'given',
+  LEDGER: 'ledger',
+  LAST_ACCESSED: 'lastAccessed',
+  NONE: 'none',
+})
+
+/** Chrome's id for "not in a group" and for "not in a split view". */
+const NONE_ID = -1
+
+function positiveTime(value) {
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+function inGroup(tab) {
+  return Number.isInteger(tab.groupId) && tab.groupId !== NONE_ID
+}
+
+function inSplit(tab) {
+  return Number.isInteger(tab.splitViewId) && tab.splitViewId !== NONE_ID
+}
+
+/** The unit a tab moves with: its group, else its split view, else itself. */
+function unitKeyOf(tab) {
+  if (inGroup(tab)) return `g${tab.groupId}`
+  if (inSplit(tab)) return `s${tab.splitViewId}`
+  return `t${tab.tabId}`
+}
+
+/** A tab's age and where it came from, best first. */
+function tabAge(tab, ages, opened) {
+  const given = positiveTime(ages[tab.tabId])
+  if (given !== null) return { age: given, source: AGE_SOURCE.GIVEN }
+  const ledger = positiveTime(opened[tab.tabId])
+  if (ledger !== null) return { age: ledger, source: AGE_SOURCE.LEDGER }
+  const shown = positiveTime(tab.lastAccessed)
+  if (shown !== null) return { age: shown, source: AGE_SOURCE.LAST_ACCESSED }
+  return { age: null, source: AGE_SOURCE.NONE }
+}
+
+function compareUnits(a, b) {
+  const x = a.age === null ? Infinity : a.age
+  const y = b.age === null ? Infinity : b.age
+  if (x !== y) return x < y ? -1 : 1
+  return a.minTabId - b.minTabId
+}
+
+/**
+ * Plan one window's sort by age, with no browser anywhere near it.
+ *
+ * Kept pure and in the contract for the reason planOpenOrFocus is: the rule
+ * that rearranges a person's tab strip is checked by tests, not by driving a
+ * browser.
+ *
+ * The strip is cut into UNITS that move as one: a tab group (all its tabs, in
+ * their own order), a split view outside a group, or a single tab. Pinned tabs
+ * are not units. They stay where they are, which is the left edge, because the
+ * browser keeps every pinned tab ahead of every unpinned one anyway. A unit's
+ * age is its OLDEST tab's age, so a group sits where its oldest tab belongs.
+ *
+ * A tab's age, best first: a time the caller gave for it (an agent that knows
+ * when the tab was really opened), the open time the extension recorded when
+ * the tab was created, or the last time the tab was shown (`lastAccessed`,
+ * Chrome 121 and later). That last one equals the open time for a tab opened
+ * and never revisited, and is later than it for any other, so an old tab looked
+ * at recently sorts as newer than it is. A unit with no age at all sorts to the
+ * right, in tab id order.
+ *
+ * The moves: every unit after the longest leading run already in place goes to
+ * the end of the window, in order. A sorted window is zero moves, and the
+ * result never depends on index arithmetic, which is where tab sorters go wrong
+ * as tabs shift underneath them.
+ *
+ * @param {object} spec
+ * @param {Array<{tabId:number,index:number,pinned?:boolean,groupId?:number,splitViewId?:number,lastAccessed?:number}>} spec.tabs  one window's tabs
+ * @param {Object<string,number>} [spec.ages]    tab id to epoch ms, given by the caller
+ * @param {Object<string,number>} [spec.opened]  tab id to epoch ms, from the open-time ledger
+ * @returns {{units:object[], moves:object[], pinned:number, sources:Object<string,number>}}
+ */
+export function planWindowSort({ tabs = [], ages = {}, opened = {} } = {}) {
+  const given = ages && typeof ages === 'object' ? ages : {}
+  const ledger = opened && typeof opened === 'object' ? opened : {}
+  const rows = (Array.isArray(tabs) ? tabs : [])
+    .filter((t) => t && Number.isInteger(t.tabId))
+    .slice()
+    .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+
+  const sources = {
+    [AGE_SOURCE.GIVEN]: 0,
+    [AGE_SOURCE.LEDGER]: 0,
+    [AGE_SOURCE.LAST_ACCESSED]: 0,
+    [AGE_SOURCE.NONE]: 0,
+  }
+  const byKey = new Map()
+  const current = []
+  let pinned = 0
+
+  for (const tab of rows) {
+    if (tab.pinned) {
+      pinned += 1
+      continue
+    }
+    const { age, source } = tabAge(tab, given, ledger)
+    sources[source] += 1
+    const key = unitKeyOf(tab)
+    let unit = byKey.get(key)
+    if (!unit) {
+      unit = {
+        key,
+        kind: key[0] === 'g' ? 'group' : key[0] === 's' ? 'split' : 'tab',
+        groupId: inGroup(tab) ? tab.groupId : null,
+        tabIds: [],
+        age: null,
+        minTabId: tab.tabId,
+      }
+      byKey.set(key, unit)
+      current.push(unit)
+    }
+    unit.tabIds.push(tab.tabId)
+    if (age !== null && (unit.age === null || age < unit.age)) unit.age = age
+    if (tab.tabId < unit.minTabId) unit.minTabId = tab.tabId
+  }
+
+  const units = current.slice().sort(compareUnits)
+  let inPlace = 0
+  while (inPlace < units.length && units[inPlace] === current[inPlace]) inPlace += 1
+  return { units, moves: units.slice(inPlace), pinned, sources }
+}
+
+/**
+ * The one line a sort answers with, so the MCP tool and the popup say the same
+ * sentence about the same result.
+ *
+ * @param {{windows?: Array<{tabs:number,moved:number,pinned:number,failed?:number,sources?:object}>}} result
+ */
+export function describeWindowSort(result) {
+  const windows = result && Array.isArray(result.windows) ? result.windows : []
+  if (windows.length === 0) return 'There was no window to sort.'
+  const sum = (pick) => windows.reduce((n, w) => n + (Number(pick(w)) || 0), 0)
+  const tabs = sum((w) => w.tabs)
+  const moved = sum((w) => w.moved)
+  const pinned = sum((w) => w.pinned)
+  const failed = sum((w) => w.failed)
+  const from = (key) => sum((w) => (w.sources ? w.sources[key] : 0))
+
+  const where = windows.length === 1 ? 'the window' : `${windows.length} windows, each on its own,`
+  const parts = [
+    `Sorted ${where} oldest on the left to newest on the right: ${plural(tabs, 'tab')}, ${moved === 0 ? 'nothing needed moving' : `${plural(moved, 'block')} moved`}`,
+  ]
+  if (pinned > 0) parts.push(`${plural(pinned, 'pinned tab')} left where ${pinned === 1 ? 'it was' : 'they were'}`)
+  if (failed > 0) parts.push(`${plural(failed, 'block')} could not be moved (closed or changed mid-sort)`)
+  const ages = []
+  if (from(AGE_SOURCE.GIVEN) > 0) ages.push(`${from(AGE_SOURCE.GIVEN)} given by the caller`)
+  if (from(AGE_SOURCE.LEDGER) > 0) ages.push(`${from(AGE_SOURCE.LEDGER)} from the recorded open time`)
+  if (from(AGE_SOURCE.LAST_ACCESSED) > 0) ages.push(`${from(AGE_SOURCE.LAST_ACCESSED)} from when the tab was last shown`)
+  if (from(AGE_SOURCE.NONE) > 0) ages.push(`${from(AGE_SOURCE.NONE)} with no age, placed at the right`)
+  const tail = ages.length > 0 ? ` Ages: ${ages.join(', ')}.` : ''
+  return `${parts.join(', ')}.${tail}`
+}
+
+/* -------------------------------------------------------------------------- */
+/* Password and one-time-code fields                                           */
+/* -------------------------------------------------------------------------- */
+
+const SECRET_AUTOCOMPLETE = Object.freeze(['new-password', 'current-password', 'one-time-code'])
+const SECRET_WORDS = new Set(['password', 'passwd', 'pwd', 'passcode', 'passphrase', 'pin', 'otp', 'totp', 'hotp', 'mfa', '2fa', 'onetime'])
+const SECRET_PHRASES = Object.freeze([
+  /\bone time\b/,
+  /\bverification code\b/,
+  /\bsecurity code\b/,
+  /\bauth(?:entication)? code\b/,
+])
+
+/** "newPassword", "user_pwd" and "One-time code" become lowercase words. */
+function fieldWords(text) {
+  return String(text || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+}
+
+/**
+ * Does this field take a password or a one-time code?
+ *
+ * Judged from what the page says about the field, which only the page knows:
+ * `type="password"`, an `autocomplete` of new-password, current-password or
+ * one-time-code, or a name, id or label that says password, passcode, PIN, OTP,
+ * 2FA, MFA, one-time, verification code or security code. A custom field that
+ * draws its own dots is a text input with a label, which is why the label
+ * counts as much as the type. Focus inside another site's frame cannot be read
+ * at all (`opaque`), and a field the bridge cannot see counts as one that may
+ * take a password.
+ *
+ * @param {{type?:string, autocomplete?:string, name?:string, id?:string, label?:string}} field
+ */
+export function isSecretField(field) {
+  if (!field || typeof field !== 'object') return false
+  if (field.opaque === true) return true
+  if (String(field.type || '').toLowerCase() === 'password') return true
+  const auto = String(field.autocomplete || '').toLowerCase().split(/\s+/)
+  if (auto.some((token) => SECRET_AUTOCOMPLETE.includes(token))) return true
+  for (const text of [field.name, field.id, field.label]) {
+    const words = fieldWords(text)
+    if (words.some((w) => SECRET_WORDS.has(w) || w.startsWith('password'))) return true
+    const spaced = words.join(' ')
+    if (SECRET_PHRASES.some((rx) => rx.test(spaced))) return true
+  }
+  return false
+}
+
+/**
+ * The second levels countries' registries sell names under: ledgerly.co.uk is
+ * a site, co.uk is not. Written as a service, one of these names nobody; the
+ * rule in isRegistrySuffix backs the list for the ones it misses.
+ */
+const COUNTRY_SECOND_LEVELS = new Set([
+  'ac.uk', 'co.uk', 'gov.uk', 'ltd.uk', 'me.uk', 'org.uk', 'plc.uk',
+  'com.au', 'net.au', 'org.au', 'co.nz', 'org.nz', 'co.jp', 'ne.jp', 'or.jp',
+  'com.br', 'com.mx', 'co.in', 'co.za', 'com.sg', 'com.hk', 'co.kr', 'com.tr',
+  'com.cn', 'com.tw', 'co.il', 'com.ar', 'com.co',
+])
+
+/**
+ * Shared hosting: every customer gets a subdomain of the provider's domain, so
+ * the provider's name names none of their sites, and the domain itself, as a
+ * service, would name all of them.
+ */
+const SHARED_HOSTING = new Set([
+  'amplifyapp.com', 'appspot.com', 'azurewebsites.net', 'blogspot.com', 'cloudfront.net', 'deno.dev',
+  'firebaseapp.com', 'fly.dev', 'framer.app', 'github.io', 'gitlab.io', 'glitch.me', 'herokuapp.com',
+  'myshopify.com', 'netlify.app', 'ngrok-free.app', 'ngrok.io', 'notion.site', 'onrender.com',
+  'pages.dev', 'railway.app', 'repl.co', 'replit.app', 's3.amazonaws.com', 'sharepoint.com', 'surge.sh',
+  'trycloudflare.com', 'vercel.app', 'web.app', 'webflow.io', 'wixsite.com', 'wordpress.com', 'workers.dev',
+])
+
+/** The words registries sell second-level names under (gov.au, com.pl). */
+const REGISTRY_WORDS = new Set(['ac', 'co', 'com', 'edu', 'gen', 'go', 'gob', 'gov', 'ltd', 'me', 'mil', 'ne', 'net', 'nic', 'nom', 'or', 'org', 'plc', 'sch'])
+
+/** A domain that is a registry's or a shared host's suffix names everybody's sites, so it names none. */
+function isRegistrySuffix(domain) {
+  if (COUNTRY_SECOND_LEVELS.has(domain) || SHARED_HOSTING.has(domain)) return true
+  const labels = domain.split('.')
+  return labels.length === 2 && labels[1].length === 2 && REGISTRY_WORDS.has(labels[0])
+}
+
+/** An IPv4 or IPv6 address: matched exactly, never by its parts. */
+function isAddress(host) {
+  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.includes(':') || host.startsWith('[')
+}
+
+/**
+ * Does a service named in a recorded yes name this host?
+ *
+ * A service with a dot is a domain and matches itself and its subdomains,
+ * unless it is a registry's or a shared host's suffix (co.uk, gov.au,
+ * github.io), which would name everybody's sites. One without a dot is a
+ * brand, and matches only its `.com` and that domain's subdomains: "ledgerly"
+ * matches accounts.ledgerly.com, and never ledgerly.xyz, ledgerly.co.uk, a
+ * developer port on ledgerly.dev or a customer site on ledgerly's hosting,
+ * because who holds those cannot be told from the name. A recorded yes for a
+ * site elsewhere writes its domain. An address matches only itself.
+ */
+export function serviceNamesHost(service, host) {
+  const s = String(service || '').toLowerCase().replace(/\.+$/, '')
+  const h = String(host || '').toLowerCase().replace(/\.+$/, '')
+  if (!s || !h) return false
+  if (isAddress(h) || isAddress(s)) return h === s
+  if (s.includes('.')) {
+    if (isRegistrySuffix(s)) return false
+    return h === s || h.endsWith(`.${s}`)
+  }
+  const own = `${s}.com`
+  if (SHARED_HOSTING.has(own)) return h === own
+  return h === own || h.endsWith(`.${own}`)
+}
+
+function hostOf(url) {
+  try {
+    return new URL(String(url)).hostname
+  } catch {
+    return ''
+  }
+}
+
+const SECRET_REFUSED =
+  'This field takes a password or a one-time code (or sits inside another site\'s frame, where the bridge ' +
+  'cannot tell), so the bridge refused to type into it. ' +
+  'A password is typed by a person, or by an agent session that carries a recorded yes for this site ' +
+  '(the account-word receipt described in SECURITY.md).'
+
+/**
+ * The guard on a fill or key press into a password or one-time-code field.
+ *
+ * `grant` is what the BROKER read from the receipt the caller named: the
+ * receipt's file name, the services its recorded yes names, or the problem
+ * that stopped it. The broker writes it and strips any copy the caller sent, so
+ * the only way to hold one is a receipt file the broker could read. The
+ * extension decides with it here, because only the page knows what the field
+ * is.
+ *
+ * @param {object} spec
+ * @param {object} spec.field   what the page said about the field (isSecretField)
+ * @param {{file?:string, services?:string[], problem?:string}|null} [spec.grant]
+ * @param {string} [spec.url]   the tab's address, judged by its host only
+ * @returns {{allowed:boolean, secret:boolean, receipt:string|null, message?:string}}
+ */
+export function secretFieldVerdict({ field, grant = null, url = '' } = {}) {
+  if (!isSecretField(field)) return { allowed: true, secret: false, receipt: null }
+  if (field.opaque === true) {
+    // The site a recorded yes names is the page's; a frame from another site
+    // inside it is not, and which site it is cannot be read from here.
+    return {
+      allowed: false,
+      secret: true,
+      receipt: null,
+      message: `${SECRET_REFUSED} Focus is inside another site's frame, which no recorded yes can cover.`,
+    }
+  }
+  if (!grant || typeof grant !== 'object') {
+    return { allowed: false, secret: true, receipt: null, message: `${SECRET_REFUSED} This call carried none.` }
+  }
+  const file = typeof grant.file === 'string' && grant.file ? grant.file : 'the receipt'
+  if (grant.problem) {
+    return { allowed: false, secret: true, receipt: null, message: `${SECRET_REFUSED} ${file} does not count: ${grant.problem}` }
+  }
+  const host = hostOf(url)
+  const services = (Array.isArray(grant.services) ? grant.services : []).filter((s) => typeof s === 'string' && s)
+  if (services.some((s) => serviceNamesHost(s, host))) return { allowed: true, secret: true, receipt: file }
+  return {
+    allowed: false,
+    secret: true,
+    receipt: null,
+    message:
+      `${SECRET_REFUSED} The recorded yes in ${file} names ${services.length > 0 ? services.join(', ') : 'no service'}, ` +
+      `not this site (${host || 'an address with no host'}).`,
+  }
 }
 
 /**

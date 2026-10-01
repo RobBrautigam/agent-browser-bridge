@@ -23,6 +23,7 @@ import {
   BROWSER_OPS,
   BROKER_OPS,
   HOST_REQ_ALLOWED_OPS,
+  HOST_ONLY_OPS,
   MAX_ARM_MINUTES,
 } from '../shared/protocol.mjs'
 import { PANIC_FILE } from '../shared/paths.mjs'
@@ -93,7 +94,10 @@ export function canSend(role, msgType) {
  * @returns {boolean}
  */
 export function canOriginate(role, op) {
-  if (role === ROLE.MCP) return BROWSER_OPS.includes(op) || BROKER_OPS.includes(op)
+  // HOST_ONLY_OPS is the one carve-out from "an mcp connection may ask for
+  // anything": RESUME clears the panic switch, and a switch the model could
+  // clear is not an emergency stop. Only the extension's popup asks for it.
+  if (role === ROLE.MCP) return (BROWSER_OPS.includes(op) || BROKER_OPS.includes(op)) && !HOST_ONLY_OPS.includes(op)
   // The `!BROWSER_OPS.includes(op)` half is deliberately redundant TODAY, and
   // deliberately kept. Without it this boundary would enforce nothing itself -
   // it would merely trust that a list in another module stays disjoint from
@@ -156,29 +160,30 @@ export function tierFor(op) {
  * one, with no default ever - acting on the wrong browser is the worst failure
  * this system can produce, and a default is precisely how that happens.
  */
-const NO_PROFILE_OPS = new Set([OPS.GET_BOARD, OPS.STATUS, OPS.PANIC])
+const NO_PROFILE_OPS = new Set([OPS.GET_BOARD, OPS.STATUS, OPS.PANIC, OPS.RESUME])
 
 export function requiresProfile(op) {
   return !NO_PROFILE_OPS.has(op)
 }
 
 /**
- * The three operations that still answer while panic is active.
+ * The four operations that still answer while panic is active.
  *
- * Panic refuses everything that touches a browser or changes state. These three
+ * Panic refuses everything that touches a browser or changes state. These four
  * are the exception on purpose: PANIC must stay idempotent, and GET_BOARD and
  * STATUS are how panic becomes VISIBLE. A panic mode that also blinds the
  * status panel would leave the model reporting "the bridge is broken" instead
- * of "the operator pulled the plug, here is the file to delete".
+ * of "the operator pulled the plug, here is the file to delete". RESUME is the
+ * way out, and only a host connection can originate it (canOriginate above).
  */
-const PANIC_EXEMPT = new Set([OPS.GET_BOARD, OPS.STATUS, OPS.PANIC])
+const PANIC_EXEMPT = new Set([OPS.GET_BOARD, OPS.STATUS, OPS.PANIC, OPS.RESUME])
 
 export function isPanicExempt(op) {
   return PANIC_EXEMPT.has(op)
 }
 
 /** Meta operations worth a permanent record even though they never touch a page. */
-const AUDITED_META = new Set([OPS.ARM, OPS.DISARM, OPS.PANIC, OPS.CLAIM_PROFILE])
+const AUDITED_META = new Set([OPS.ARM, OPS.DISARM, OPS.PANIC, OPS.RESUME, OPS.CLAIM_PROFILE])
 
 /**
  * Every operation that crosses into a browser, plus the state changes that
@@ -362,7 +367,22 @@ export class PanicSwitch {
     this.#watcher = null
   }
 
-  /** Create the file. Never removes it: clearing panic is a human action. */
+  /**
+   * Remove the file. Called for exactly one request: RESUME, which only a host
+   * connection can originate, which only the extension's own popup sends, after
+   * a press-and-hold. Deleting the file by hand stays the other way out.
+   */
+  clear() {
+    try {
+      fs.rmSync(this.#file, { force: true })
+    } catch {
+      // A file that cannot be removed is still panic; the re-stat below says so.
+    }
+    this.#active = exists(this.#file)
+    return !this.#active
+  }
+
+  /** Create the file. Never removes it: clearing panic is a human action (clear() above). */
   trip() {
     try {
       fs.mkdirSync(path.dirname(this.#file), { recursive: true })

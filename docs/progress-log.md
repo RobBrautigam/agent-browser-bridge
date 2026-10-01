@@ -5,6 +5,47 @@ The user-facing record is [CHANGELOG.md](../CHANGELOG.md); this file holds the
 working notes behind it. This repository is public: entries carry no account
 names, machine names or private paths.
 
+## 2026-10-01
+
+- Version 1.1.0: sort by age per window, resume from the popup, and the
+  password-field guard. Every new test was seen to fail before its code, or
+  under a mutation of the code it guards when the code came first: the
+  planner (group placed by its newest tab, pinned tabs sorted, the age
+  sources reordered), the ledger (no restart re-key, an open time
+  overwritten, a window closing forgetting its tabs, an ambiguous address
+  guessed), the resume path (an MCP connection allowed, a host that never
+  registered allowed, the popup check removed in the worker or in the
+  sender rule), and the guard (each field rule, a grant with a problem or
+  none, substring and suffix host matching, a forged grant kept, the folder
+  containment on the lexical and the real path, the audit's file-name
+  filter).
+- During panic the broker now holds the extension's link instead of refusing
+  it; that is what lets the popup see the panic and resume.
+- An adversarial review before release found ten issues; nine were fixed with
+  a test seen red first (keys following focus into a password field, a
+  selector that cannot take focus, closed shadow roots and embeds, a frame
+  under the top page's yes, the probed page's address, lookalike subdomains, a
+  registration racing panic, a held flag outliving its connection, restored
+  tabs stamped as new, the re-key delaying registration), and the tenth (a
+  receipt an agent with file access could write) is documented in SECURITY.md.
+- A second pass on those fixes found eight more, all fixed the same way: a
+  check before every trusted key (page scripts move focus on plain keys too),
+  a wait through navigation instead of a mid-sequence failure, frames read in
+  place instead of refused, PDF viewers and untrusted keys no longer refused,
+  deep nesting, and site matching by registrable domain with listed country
+  second levels and shared hosts.
+- A third pass found ten more. Nine were fixed, each with a test seen red and
+  a mutation of the fix turning it red again: a bare name now means the
+  brand's `.com` only (lookalikes under other top-level domains, developer
+  ports and shared hosts the list missed), a registry-word backstop for
+  suffixes the list misses, addresses matched exactly, the same field
+  reported by two frames, a wait for the navigation after an Enter, the keys
+  after a password pinned to its site, the operation's deadline honored
+  inside a key sequence, and refusals that no longer quote the browser's
+  error. The tenth is documented: a window not in front reports no focus, so
+  a field in another site's frame there is refused until the window is in
+  front.
+
 ## 2026-09-27
 
 - Version 1.0.1: an adversarial review of the handshake, run against a local

@@ -129,6 +129,110 @@ the profile coming back on a different version proves it landed. And it is not
 originable by a host connection, so an extension cannot ask the broker to reload
 that same extension and bypass the gate a normal request is held to.
 
+## Resuming from panic
+
+Panic stops everything: every route dropped, everything disarmed, every call
+refused. Until 1.1.0 the only way out was deleting the panic file by hand, and
+the extension's popup could not even show the panic, because the broker
+refused the extension's link while it was on. Now a person can resume from the
+popup, with a press-and-hold, and nothing else can:
+
+- **No agent can.** `resume` is a host-only operation in the contract. An MCP
+  connection that sends it is dropped as a capability violation, there is no
+  MCP tool for it, and `bridge_panic` refuses `on: false`. An emergency stop
+  the agent could clear is not an emergency stop.
+- **Only the popup page can ask.** The extension's worker takes the request
+  only from its own `popup/index.html`. A content script carries the
+  extension's id but the browser stamps the page's address on its messages, so
+  it is refused, and so is the Board, which can trip panic but not clear it.
+- **Only a held extension link can carry it.** During panic the broker answers
+  an extension's registration with `E_PANIC` and holds the connection with no
+  route: it can read the board and ask to resume, and nothing on it can reach
+  a browser. A connection that never registered is refused.
+
+What this does not change: the panic file is still the control that works
+without anybody's cooperation, and code running as your user can delete it
+(or speak the host's role, having read the token) exactly as before. The
+property kept is that the bridge's own request paths have one way to clear
+panic, and it is a person holding a button in the popup.
+
+## Password and one-time-code fields
+
+An agent that can type into a logged-in browser can type a password into a
+signup form. A fill or key press into a password or one-time-code field is
+therefore refused with `E_SECRET_FIELD` unless the agent session carries a
+**receipt** pointing at a recorded yes for that site.
+
+- **Which fields.** Judged from what the page says about the field:
+  `type="password"`, an `autocomplete` of `new-password`, `current-password`
+  or `one-time-code`, or a name, id or label that says password, passcode,
+  PIN, OTP, 2FA, MFA, one-time, verification code or security code.
+- **Where the keys land.** A trusted key types into whatever has focus when it
+  lands, so the check follows focus: the focused element, into shadow roots
+  (closed ones too) and frames; again after a selector is focused (an element
+  that cannot take focus leaves it where it was); and again before every key
+  after the first, because Tab and Enter move focus and so do page scripts, on
+  a plain character (auto-advance) or a moment after an Enter. Focus inside
+  another site's frame is read by asking that frame, and judged by that
+  frame's own site. A frame that cannot be read (a sandbox, a browser page),
+  an `<embed>` other than a PDF viewer, or a nesting deeper than the walk goes
+  counts as a secret field and is refused even with a recorded yes. Two frames
+  that report the same field are one field. After an Enter the check waits for
+  the navigation to finish, and a page that cannot be read is waited for
+  (about two seconds), never typed into unseen. Once a sequence has typed into
+  a password field, the rest of its keys stay on that site: focus that moves
+  to another site's frame stops it. A sequence also stops at its deadline, so
+  it never types on after the caller was told it timed out. A refusal
+  mid-sequence says how many keys were already sent, never which, and never
+  quotes the browser's error. Untrusted key events cannot type at all, so they
+  are checked where they are sent: the selected element or the top document's
+  focused one. The browser reports no focus inside a window that is not in
+  front, so a field in another site's frame there is refused, not typed into.
+- **The receipt.** The session's own configuration, never a tool argument:
+  the MCP server reads it from `BRIDGE_ACCOUNT_WORD` (or the variable
+  `BRIDGE_ACCOUNT_WORD_ENV` names) and forwards it on `browser_fill` and
+  `browser_press_keys` only. It is the path of a Markdown drop file inside the
+  one folder named in `account-word.json` in the state directory
+  (`{"folder": "...", "ignoreWords": [...]}`), and the file must carry a line
+  `ACCOUNT WORD: <service> ...`. No folder configured means no receipt is
+  accepted, which is the default.
+- **The grant.** The broker reads the file (inside the folder on its real
+  path, a regular file, at most 256 KB), strips any grant the caller sent, and
+  forwards only the file name and the services it names. The extension lets a
+  secret field through only when a service names the site of the page it
+  probed: a service with a dot is a domain and matches itself and its
+  subdomains (a registry or shared-hosting suffix such as `co.uk`, `gov.au` or
+  `github.io` matches nothing); one without is a brand and matches only its
+  `.com` and that domain's subdomains. So `ledgerly` covers
+  `accounts.ledgerly.com`, never `ledgerly.xyz`, `ledgerly.co.uk`,
+  `ledgerly.login-check.example`, a developer port on somebody's `.dev` or a
+  customer site on a shared host, because who holds those cannot be told from
+  the name. A site anywhere else is written as its domain
+  (`ACCOUNT WORD: ledgerly.co.uk`). An address (`10.0.0.1`) matches only
+  itself. The audit line records the receipt's file name, never its path or
+  contents.
+
+What it does not defend, stated plainly:
+
+- **An armed profile.** `browser_eval_js` runs arbitrary JavaScript, which can
+  set any field. Arming is its own human-gated step; keep `bridge_arm` off
+  every auto-approve list.
+- **An agent that can write files.** The broker believes any `.md` file in the
+  folder that carries the line, and a receipt never expires. An agent with
+  shell or file access can write one, or point its own session at an old one,
+  as can any code running as your user (which can also drive the browser
+  without this bridge). The guard binds an agent that has only the bridge's
+  tools; keep the drop folder out of reach of the sessions it governs, and
+  remove a drop file once its account exists.
+- **A brand that hosts its customers on its own `.com`.** A bare name covers
+  every subdomain of the brand's `.com`. Where the brand gives customers pages
+  there and is not on the list of shared hosts, write the exact sign-in domain
+  instead of the name.
+- **A field that hides what it is.** A page that collects a password in a
+  field with no password type, no matching autocomplete and no label words is
+  not recognized. Most sign-in and sign-up forms say what their fields are,
+  because password managers depend on it.
+
 ## Reporting a vulnerability
 
 Open a private security advisory on the GitHub repository (Security tab,

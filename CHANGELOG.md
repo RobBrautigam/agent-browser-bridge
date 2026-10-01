@@ -9,6 +9,101 @@ from an earlier history; those versions have no tags here. Every clone made
 before 1.0.0 takes the one-time step in the 1.0.0 Upgrading section, which
 replaces the one-time steps in the earlier entries.
 
+## [1.1.0] - 2026-10-01
+
+Three features: sort a window's tabs by age, resume from panic in the
+extension popup, and a guard on password and one-time-code fields. A 1.1.0
+broker talks to 1.0.x clients and the reverse, with one exception: an
+extension older than 1.1.0 cannot resume from panic, and a broker older than
+1.1.0 still refuses the extension's link during panic.
+
+### Added
+
+- **Sort by age, per window.** The popup's "Sort this window by age" and
+  "Sort every window by age" put the oldest tab on the left and the newest on
+  the right. Pinned tabs stay where they are; a tab group moves as one block,
+  placed by its oldest tab, with its own order kept; each window is sorted on
+  its own and no tab changes window. Agents get the same through
+  `browser_sort_window` (one window, or `all`), a write-tier tool that is
+  audited and refused while panic is on, with an optional map of tab handle to
+  the time that tab was really opened.
+- **An open-time ledger.** The extension records when each tab is created and
+  keeps it across browser restarts: on the first run of a new browser session
+  it re-keys the ledger onto the tabs that came back, matching windows and
+  then tabs by position and address, and dropping anything ambiguous rather
+  than guessing. A tab with no recorded time (every tab opened before 1.1.0)
+  is aged by when it was last shown, which the popup says, so an old tab
+  revisited recently sorts as newer than it is.
+- **Resume from the popup.** While panic is on, the popup shows it and offers
+  "Hold to resume", a press-and-hold that asks the broker to remove the panic
+  file. The footer's panic hold resumes too while panic is on.
+- **The password-field guard.** A fill or key press into a password or
+  one-time-code field is refused with the new `E_SECRET_FIELD` unless the
+  agent session carries a receipt pointing at a recorded yes for that site.
+  See SECURITY.md, "Password and one-time-code fields".
+- `browser_list_tabs` rows carry `lastAccessed` and `groupId`.
+- `shared/account-word.mjs`: the receipt reader, configured by
+  `account-word.json` in the state directory.
+
+### Security
+
+- **Only the popup can resume, and only for a profile the broker is holding.**
+  `resume` is a host-only operation: an MCP connection that sends it is
+  dropped as a capability violation, there is no MCP tool for it, and
+  `bridge_panic` still cannot turn panic off. The extension's worker accepts
+  the request only from its own popup page, never from the Board or a content
+  script, and the broker accepts it only on a connection that registered as an
+  extension during the panic.
+- **During panic the broker now accepts the extension's link and holds it.**
+  It used to refuse the host's HELLO, which left the popup saying the broker
+  was not answering. The extension's registration is answered with `E_PANIC`
+  and held with no route, so nothing on it can reach a browser; it can read
+  the board and ask to resume. Removing the panic file, from the popup or by
+  hand, releases every held link and each profile registers again.
+- **A password needs the recorded yes.** The broker reads the receipt (a drop
+  file in one configured folder, carrying an `ACCOUNT WORD: <service>` line),
+  strips any grant a caller tried to send itself, and the extension refuses a
+  secret field the grant does not cover. The audit line records the receipt's
+  file name, never its path or contents.
+- **Hardened in review before release.** The check follows focus where trusted
+  keys land: after a selector is focused and before every later key, waiting
+  through a navigation rather than typing into an unseen page. It reads closed
+  shadow roots and nesting to any practical depth, and reads another site's
+  frame by asking that frame, judged by that frame's own site; a frame it
+  cannot read is refused even with a recorded yes. The site is the probed
+  page's, not the tab address read before it. After an Enter the check waits
+  for the navigation; once keys have gone into a password field the rest stay
+  on that site; a sequence stops at its deadline; and a refusal never quotes
+  the browser's error. A bare name in the recorded yes matches only the
+  brand's `.com` and its subdomains (any other site is written as its domain),
+  a registry suffix matches nothing, and an address matches only itself.
+  Untrusted key events are checked where they are sent. A registration that was waiting when panic tripped is held instead of
+  routed, and the extension's held flag never outlives its connection. A tab
+  restored by the browser is no longer stamped as newly opened, and the
+  ledger's re-key no longer delays the profile's registration.
+
+### Changed
+
+- The version is 1.1.0 in `package.json`, `package-lock.json` and
+  `extension/manifest.json`.
+- The extension requests the `tabGroups` permission, to move a tab group as
+  one block. It shows no install warning.
+- `bridge_panic`'s description, the refusal of `panic` with `on: false`, and
+  doctor's panic line name the popup's Resume as the way out.
+
+### Upgrading
+
+1. `git pull`, then `npm ci`.
+2. Restart the broker as in the 1.0.0 Upgrading section, so doctor's
+   `runtime` line reads `version 1.1.0`.
+3. Reload the extension in every profile (`npm run reload`, or the Reload
+   arrow on the browser's extensions page). The new permission is granted on
+   reload with no prompt for an unpacked extension.
+4. Optional, for agents that may type passwords with a recorded yes: write
+   `account-word.json` in the state directory with the drop folder, and launch
+   those sessions with `BRIDGE_ACCOUNT_WORD` (or the variable
+   `BRIDGE_ACCOUNT_WORD_ENV` names) set to the receipt's path.
+
 ## [1.0.1] - 2026-09-27
 
 Three fixes to what the clients do around the broker's proof, found by two

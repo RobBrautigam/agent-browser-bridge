@@ -800,6 +800,133 @@ export function pageRect(payload) {
   }
 }
 
+/**
+ * What the page says about one field, for the password guard: its tag, type,
+ * autocomplete, name, id and the words labeling it. Never its value.
+ *
+ * With no selector it reads the FOCUSED element, which is where a trusted key
+ * lands: into shadow roots (closed ones too, through chrome.dom in the
+ * extension's world) and same-origin frames. Focus inside another site's frame
+ * cannot be seen from here: it is reported as `opaque` and `frame`, and the
+ * extension then asks that frame itself (ops.js). An <embed> other than a PDF
+ * viewer is opaque too, and so is a nesting deeper than the walk goes. The
+ * contract treats a field it cannot see as one that may take a password. The
+ * document's address and whether it holds focus go back with the answer, so
+ * the site is judged as the document actually probed.
+ *
+ * `shallow` stops at the top document's focused element: where an untrusted
+ * key event is sent, which can never reach inside it.
+ */
+export function pageFieldKind(payload) {
+  const { selector = null, shallow = false } = payload || {}
+  const MAX_DEPTH = 32
+  const shadowOf = (node) => {
+    try {
+      const api = globalThis.chrome && globalThis.chrome.dom
+      if (api && typeof api.openOrClosedShadowRoot === 'function') return api.openOrClosedShadowRoot(node) || null
+    } catch (_e) {
+      /* not an element chrome.dom can read; the open root is all there is */
+    }
+    return node.shadowRoot || null
+  }
+  let url = ''
+  try {
+    url = String(location.href)
+  } catch (_e) {
+    url = ''
+  }
+  let focused = false
+  try {
+    focused = typeof document.hasFocus === 'function' ? Boolean(document.hasFocus()) : false
+  } catch (_e) {
+    focused = false
+  }
+  let el = null
+  let opaque = false
+  let frame = false
+  try {
+    if (selector) {
+      el = document.querySelector(selector)
+    } else {
+      el = document.activeElement || null
+      let depth = 0
+      for (; el && !shallow && depth < MAX_DEPTH; depth++) {
+        const root = shadowOf(el)
+        if (root && root.activeElement) {
+          el = root.activeElement
+          continue
+        }
+        const tag = String(el.tagName || '').toUpperCase()
+        if (tag === 'EMBED') {
+          const kind = String((el.getAttribute && el.getAttribute('type')) || el.type || '').toLowerCase()
+          if (kind !== 'application/pdf') opaque = true // a PDF viewer holds no field to type into
+          break
+        }
+        if (tag === 'IFRAME' || tag === 'FRAME' || tag === 'OBJECT') {
+          let inner = null
+          try {
+            inner = el.contentDocument
+          } catch (_e) {
+            inner = null
+          }
+          if (!inner) {
+            opaque = true
+            frame = true
+            break
+          }
+          el = inner.activeElement || null
+          continue
+        }
+        break
+      }
+      // Still descending when the walk ran out: what has focus was never reached.
+      if (el && depth >= MAX_DEPTH) opaque = true
+    }
+  } catch (_e) {
+    return { ok: false, reason: 'bad_selector', selector }
+  }
+  if (!el) return selector ? { ok: false, reason: 'not_found', selector } : { ok: true, url, focused, field: null }
+
+  const attr = (name) => {
+    try {
+      const v = el.getAttribute(name)
+      return typeof v === 'string' ? v : ''
+    } catch (_e) {
+      return ''
+    }
+  }
+  const words = []
+  try {
+    for (const label of el.labels || []) words.push(label.textContent || '')
+  } catch (_e) {
+    /* an element with no labels collection */
+  }
+  words.push(attr('aria-label'), attr('placeholder'), attr('title'))
+  for (const id of attr('aria-labelledby').split(/\s+/).filter(Boolean)) {
+    try {
+      const node = document.getElementById(id)
+      if (node) words.push(node.textContent || '')
+    } catch (_e) {
+      /* a missing label is no label */
+    }
+  }
+  return {
+    ok: true,
+    url,
+    focused,
+    field: {
+      tag: String(el.tagName || '').toLowerCase(),
+      type: String(attr('type') || el.type || '').toLowerCase(),
+      autocomplete: attr('autocomplete'),
+      name: attr('name'),
+      id: attr('id'),
+      label: words.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim().slice(0, 300),
+      opaque,
+      frame,
+    },
+  }
+}
+
 /** Focus and select an element so a CDP keystroke sequence replaces its contents. */
 export function pageFocusSelect(payload) {
   const { selector, select = true } = payload || {}

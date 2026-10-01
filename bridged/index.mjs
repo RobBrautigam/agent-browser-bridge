@@ -86,6 +86,7 @@ import {
   tierFor,
 } from './policy.mjs'
 import { installedExtensionVersion } from '../shared/config.mjs'
+import { loadAccountWordSettings, readAccountWord } from '../shared/account-word.mjs'
 import { NonceLedger, authenticateHello } from '../shared/auth.mjs'
 import {
   RouteTable,
@@ -227,6 +228,7 @@ const panic = new PanicSwitch({
   onChange: (active) => {
     log(active ? 'error' : 'info', active ? 'PANIC tripped' : 'PANIC cleared', { file: panic.file })
     if (active) enterPanic('panic file appeared')
+    else leavePanic('panic file removed')
   },
 })
 
@@ -456,19 +458,14 @@ function handleHello(conn, msg) {
     return
   }
 
-  // Panic drops routes and keeps them dropped. MCP clients are still accepted
-  // so the model gets a typed E_PANIC and can tell the operator which file to delete,
-  // instead of seeing the bridge as merely broken.
-  if (panic.check() && msg.role === ROLE.HOST) {
-    conn.sendAndClose(
-      helloAck({
-        ok: false,
-        error: { code: ERR.PANIC, message: `Panic is active. Delete ${panic.file} to resume.` },
-      }),
-      'panic active'
-    )
-    return
-  }
+  // Panic drops routes and keeps them dropped. Both roles are still accepted:
+  // an MCP client so the model gets a typed E_PANIC and can tell the operator
+  // what happened, and a host so the extension's popup can SEE the panic and
+  // offer its Resume. A host's REGISTER is then held without a route (see
+  // handleRegister), so nothing on that connection can reach a browser. This
+  // used to refuse the host's HELLO, which left the popup saying "broker not
+  // answering" with no way to act on the one state a person most needs to.
+  panic.check()
 
   clearTimeout(conn.helloTimer)
   conn.role = msg.role
@@ -571,6 +568,34 @@ function readRegister(msg) {
   }
 }
 
+/**
+ * During panic a profile is answered and HELD: a typed E_PANIC, no route, the
+ * connection kept open. The extension keeps its port on this code, so its popup
+ * can read the board and ask for RESUME over it. Panic still drops every route
+ * and keeps it dropped; a held connection is not one, and every request on it
+ * that is not panic-exempt is refused like any other.
+ *
+ * @returns {boolean} true when the registration was held and must go no further
+ */
+function holdThroughPanic(conn, installId) {
+  if (!panic.check()) return false
+  conn.panicHeld = true
+  conn.send(
+    registerAck({
+      ok: false,
+      error: {
+        code: ERR.PANIC,
+        message:
+          'Panic is active, so this profile is not on the bridge. Hold Resume in the extension popup, ' +
+          `or delete ${panic.file}.`,
+      },
+      version: VERSION,
+    })
+  )
+  log('info', 'Held a profile registration while panic is active', { conn: conn.id, installId })
+  return true
+}
+
 async function handleRegister(conn, msg) {
   const incoming = readRegister(msg)
   const installId = incoming.installId
@@ -587,6 +612,8 @@ async function handleRegister(conn, msg) {
   }
 
   clearTimeout(conn.registerTimer)
+
+  if (holdThroughPanic(conn, installId)) return
 
   // The probe was started at HELLO; give it a moment to land but never let it
   // hold the acknowledgement open. An unverified vendor is a warning on the
@@ -606,6 +633,10 @@ async function handleRegister(conn, msg) {
   })
 
   if (conn.closed) return
+  // Panic may have tripped while the probe and the identity were awaited, after
+  // enterPanic dropped every route; attaching one now would put a live profile
+  // on the board during panic, on a connection the popup could not resume.
+  if (holdThroughPanic(conn, installId)) return
 
   const saved = store.get(installId)
   // Sticky until it is actually resolved. A drop detected in a previous session
@@ -1065,8 +1096,9 @@ function handleGlobalOp(conn, msg) {
           fail(
             id,
             ERR.UNSUPPORTED,
-            `Panic cannot be cleared through the bridge by design, because a bridge that can clear ` +
-              `its own emergency stop is not an emergency stop. Delete ${panic.file} to resume.`
+            `Panic cannot be cleared by an agent, by design, because a bridge whose agent can clear ` +
+              `its own emergency stop is not an emergency stop. A person resumes it: hold Resume in the ` +
+              `extension popup, or delete ${panic.file}.`
           )
         )
         return
@@ -1088,6 +1120,45 @@ function handleGlobalOp(conn, msg) {
       audit.record({ profile: null, op: OPS.PANIC, url: null, ok: true, ms: null, err: null })
       conn.sendAndClose(ok(id, { panic: true, dropped, clearBy: panic.file }), 'panic')
       enterPanic('bridge_panic', conn)
+      return
+    }
+
+    case OPS.RESUME: {
+      // Only a host connection gets here (canOriginate refuses it to an mcp
+      // one), and only a host connection the broker is HOLDING: one that sent
+      // REGISTER as an extension does, during panic. A process that read the
+      // token and speaks the host role by hand without registering is refused.
+      // It could delete the file anyway, as anything running as this user can;
+      // what this keeps is that the bridge's own request paths have exactly
+      // one way to clear panic, and it is the extension popup's hold.
+      if (!panic.check()) {
+        reply(conn, msg, ok(id, { panic: false, resumed: false }))
+        return
+      }
+      if (!conn.panicHeld) {
+        reply(
+          conn,
+          msg,
+          fail(
+            id,
+            ERR.BAD_REQUEST,
+            'Resume is asked for by an extension popup on a profile the broker is holding during panic, ' +
+              'and this connection never registered one.'
+          )
+        )
+        return
+      }
+      const cleared = panic.clear()
+      if (!cleared) {
+        reply(conn, msg, fail(id, ERR.EXT_ERROR, `The panic file could not be removed. Delete ${panic.file} by hand.`))
+        return
+      }
+      // Written by hand for the reason PANIC's is: the answer goes out through
+      // write-then-close, which bypasses reply().
+      audit.record({ profile: null, op: OPS.RESUME, url: null, ok: true, ms: null, err: null })
+      log('info', 'PANIC cleared from an extension popup', { conn: conn.id, file: panic.file })
+      conn.sendAndClose(ok(id, { panic: false, resumed: true }), 'resumed')
+      leavePanic('popup resume', conn)
       return
     }
 
@@ -1596,6 +1667,38 @@ function forwardToBrowser(conn, msg, route, op) {
     return
   }
 
+  // The password guard's receipt. A grant is only ever written HERE, from a
+  // receipt file this broker read itself, so whatever the caller put under the
+  // grant's name is thrown away first. The receipt's path never travels on: the
+  // extension gets the file name and the services, or the problem.
+  delete args.accountWordGrant
+  let receipt = null
+  if ((op === OPS.FILL || op === OPS.PRESS_KEYS) && typeof args.accountWord === 'string' && args.accountWord) {
+    args.accountWordGrant = readAccountWord(args.accountWord, loadAccountWordSettings())
+    if (!args.accountWordGrant.problem) receipt = args.accountWordGrant.file
+  }
+  delete args.accountWord
+
+  // A sort's ages arrive keyed by tab handle and leave keyed by raw tab id, by
+  // the same rule as `tab`: a handle that is not this profile's is refused.
+  if (op === OPS.SORT_WINDOW && args.ages !== undefined && args.ages !== null) {
+    if (typeof args.ages !== 'object' || Array.isArray(args.ages)) {
+      reply(conn, msg, fail(id, ERR.BAD_REQUEST, '"ages" maps tab handles to times.'), { route })
+      return
+    }
+    const ages = {}
+    for (const [handle, at] of Object.entries(args.ages)) {
+      const check = routes.validateHandle(route, handle)
+      if (!check.ok) {
+        reply(conn, msg, fail(id, check.code, check.message), { route })
+        return
+      }
+      const time = Number(at)
+      if (Number.isFinite(time) && time > 0) ages[check.tabId] = time
+    }
+    args.ages = ages
+  }
+
   if (typeof args.url === 'string' && !urlAllowedFor(op, args.url)) {
     // An empty url reaches here too: isRestrictedUrl treats it as restricted
     // rather than as "no url", because a caller that passes an empty string is
@@ -1650,6 +1753,7 @@ function forwardToBrowser(conn, msg, route, op) {
     route,
     op,
     url: typeof args.url === 'string' ? args.url : null,
+    receipt,
     startedAt: Date.now(),
     timer: setTimeout(() => {
       pendings.delete(brokerId)
@@ -1725,6 +1829,7 @@ function finish(pending, response, result) {
       ok: response.ok === true,
       ms: Date.now() - pending.startedAt,
       err: response.ok ? null : response.error?.code,
+      receipt: pending.receipt,
     })
   }
   pending.mcpConn?.send(response)
@@ -1815,6 +1920,26 @@ function enterPanic(reason, exceptConn = null) {
   }
   log('error', 'Panic: every route dropped and everything disarmed', { reason, dropped })
   return dropped
+}
+
+/**
+ * Let go of every connection held through a panic, so each profile registers
+ * afresh. The host tells its extension the registration is void, and the
+ * extension reconnects with a new REGISTER, which now gets a route. Nothing is
+ * re-armed: arming was cleared when panic was entered and stays cleared.
+ *
+ * `exceptConn` is the connection that asked to resume, already closing itself
+ * through sendAndClose so its answer is delivered.
+ */
+function leavePanic(reason, exceptConn = null) {
+  let released = 0
+  for (const conn of connections.values()) {
+    if (!conn.panicHeld || conn === exceptConn) continue
+    conn.destroy('panic cleared')
+    released += 1
+  }
+  log('info', 'Panic cleared: held profiles released to register again', { reason, released })
+  return released
 }
 
 /* -------------------------------------------------------------------------- */

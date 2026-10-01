@@ -50,6 +50,10 @@ const K_ACK = 'link.ack'
  * See the staleness check in ensureConnected for why a live port is not that
  * proof and never was. */
 const K_HEARTBEAT = 'link.heartbeatAt'
+/* True while the broker is HOLDING this profile through a panic: the port is
+ * up, the broker answered REGISTER with E_PANIC, and no route exists. The popup
+ * reads the board and asks for Resume over it; nothing else is routed to us. */
+const K_PANIC_HELD = 'link.panicHeld'
 
 /* Local-scoped keys: must survive browser restart and extension reload. */
 const K_INSTALL_ID = 'installId'
@@ -102,6 +106,11 @@ export async function ensureConnected(reason = 'unknown') {
   // route on TIMING.HEARTBEAT_INTERVAL, so silence past the same staleness
   // window the broker uses on us means the link is dead however healthy the
   // port looks.
+  // Held through a panic: the broker has the port and pings nothing on it, so
+  // the heartbeat clock does not apply. The hold ends from the far side (the
+  // host voids the registration when the broker lets go) or with the port.
+  if (port && (await isPanicHeld())) return state
+
   if (port && state === LINK.READY) {
     if (!(await heartbeatIsStale())) return state
     // Drop the port and fall through to a fresh REGISTER on this same tick.
@@ -257,6 +266,10 @@ export async function countTabs() {
 
 async function connect(reason) {
   await setState(LINK.CONNECTING, { reason })
+  // A new port is not held until its own REGISTER_ACK says so. A worker that
+  // was terminated while held leaves the flag in session storage, and carried
+  // onto this connection it would switch off the heartbeat check for good.
+  await clearPanicHeld()
 
   let p = null
   try {
@@ -488,12 +501,25 @@ async function onRegisterAck(msg) {
   if (msg.ok === false) {
     const code = msg.error && msg.error.code ? msg.error.code : ERR.NO_BROKER
     const detail = msg.error ? msg.error.message || JSON.stringify(msg.error) : 'the broker refused REGISTER'
+
+    // Panic is the one refusal that keeps the port. The broker holds this
+    // connection with no route, so the popup can still show the panic and
+    // offer Resume; tearing down here would redial into the same answer on a
+    // loop and leave the popup saying the broker is not answering.
+    if (code === ERR.PANIC && port) {
+      await setAttempt(0)
+      await chrome.storage.session.set({ [K_PANIC_HELD]: true })
+      await setState(LINK.DOWN, { reason: 'held through panic', error: `${code}: ${detail}` })
+      return
+    }
+
     await teardown(`${code}: ${detail}`)
     await scheduleReconnect()
     return
   }
 
   await setAttempt(0)
+  await clearPanicHeld()
   await chrome.storage.session.set({
     [K_ACK]: {
       at: Date.now(),
@@ -642,6 +668,7 @@ function handleDisconnect() {
   const err = chrome.runtime.lastError
   const message = err && err.message ? err.message : 'host disconnected'
   port = null
+  void clearPanicHeld()
   clearTimeout(ackTimer)
   ackTimer = null
   rejectPending(message)
@@ -651,6 +678,7 @@ function handleDisconnect() {
 async function teardown(message) {
   clearTimeout(ackTimer)
   ackTimer = null
+  await clearPanicHeld()
   if (port) {
     const dying = port
     port = null
@@ -752,6 +780,23 @@ async function heartbeatIsStale() {
   }
   if (!at) return true
   return Date.now() - at > TIMING.HEARTBEAT_INTERVAL * TIMING.STALE_AFTER_MISSED
+}
+
+async function isPanicHeld() {
+  try {
+    const bag = await chrome.storage.session.get(K_PANIC_HELD)
+    return Boolean(bag && bag[K_PANIC_HELD])
+  } catch (_err) {
+    return false
+  }
+}
+
+async function clearPanicHeld() {
+  try {
+    await chrome.storage.session.set({ [K_PANIC_HELD]: false })
+  } catch (_err) {
+    /* the flag only short-circuits ensureConnected; a stale one ends with the port */
+  }
 }
 
 async function bumpAttempt() {

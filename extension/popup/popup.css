@@ -255,6 +255,66 @@ body.popup-surface {
   align-self: flex-start;
 }
 
+/* ---- Panic: resume ---------------------------------------------------------- */
+
+.pop-panic {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sb-sp-2);
+  padding: var(--sb-sp-3) var(--sb-sp-4);
+  border-bottom: var(--sb-hairline) solid var(--sb-danger-line);
+}
+
+.pop-panic__title {
+  display: flex;
+  align-items: center;
+  gap: var(--sb-sp-m);
+  font-size: var(--sb-fs-sm);
+  font-weight: var(--sb-fw-semibold);
+  color: var(--sb-danger-ink);
+}
+
+.pop-panic__body {
+  font-size: var(--sb-fs-xs);
+  color: var(--sb-text-muted);
+}
+
+.pop-panic__resume {
+  align-self: flex-start;
+  user-select: none;
+  touch-action: none;
+}
+
+/* ---- Sort by age ----------------------------------------------------------- */
+
+.pop-sort {
+  padding: var(--sb-sp-3) var(--sb-sp-4) var(--sb-sp-4);
+  border-top: var(--sb-hairline) solid var(--sb-border);
+}
+
+.pop-sort__copy,
+.pop-sort__note {
+  margin-top: var(--sb-sp-1);
+  font-size: var(--sb-fs-xs);
+  color: var(--sb-text-muted);
+}
+
+.pop-sort__note {
+  font-size: var(--sb-fs-2xs);
+  color: var(--sb-text-faint);
+}
+
+.pop-sort__actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sb-sp-2);
+  margin-top: var(--sb-sp-2);
+}
+
+.pop-sort__btn {
+  justify-content: center;
+}
+
 /* ---- Arming ---------------------------------------------------------------- */
 
 .pop-arm {

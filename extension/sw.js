@@ -28,7 +28,14 @@ import {
 } from './lib/link.js'
 import { OpError, noteDebuggerDetached, runOp, sweepDebuggees } from './lib/ops.js'
 import { clearSnapshot } from './lib/snapshot.js'
-import { isOwnExtensionPage } from './lib/ui-sender.js'
+import {
+  ensureAgesSession,
+  onTabCreated,
+  onTabRemoved,
+  schedulePositionRefresh,
+  sortWindowsByAge,
+} from './lib/tab-ages.js'
+import { isOwnExtensionPage, mayResume } from './lib/ui-sender.js'
 
 const KEEPALIVE_ALARM = 'bridge.keepalive'
 
@@ -74,15 +81,32 @@ if (chrome.debugger && chrome.debugger.onDetach) {
   })
 }
 
-/** A closed tab's refs can never resolve again. */
-chrome.tabs.onRemoved.addListener((tabId) => {
+/** A closed tab's refs can never resolve again, and its open time is forgotten. */
+chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
   void clearSnapshot(tabId)
+  void onTabRemoved(tabId, removeInfo)
 })
 
 /** So can a tab that navigated: same tab id, entirely different document. */
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo && changeInfo.url) void clearSnapshot(tabId)
+  if (changeInfo && changeInfo.url) {
+    void clearSnapshot(tabId)
+    schedulePositionRefresh()
+  }
 })
+
+/**
+ * The open-time ledger behind "sort by age" (lib/tab-ages.js). A tab's open
+ * time is written when it is created; where it sits is refreshed after it
+ * moves, so the next browser session can carry the time over to the tab's new
+ * id.
+ */
+chrome.tabs.onCreated.addListener((tab) => {
+  void onTabCreated(tab)
+})
+chrome.tabs.onMoved.addListener(() => schedulePositionRefresh())
+chrome.tabs.onAttached.addListener(() => schedulePositionRefresh())
+chrome.tabs.onDetached.addListener(() => schedulePositionRefresh())
 
 /**
  * The options page and popup talk to the worker through here, and nothing else
@@ -96,7 +120,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse(uiError(new Error(`${ERR.UNAUTHORIZED}: only this extension's own pages may use the board API.`)))
     return false
   }
-  handleUiMessage(message).then(sendResponse, (err) => sendResponse(uiError(err)))
+  handleUiMessage(message, sender).then(sendResponse, (err) => sendResponse(uiError(err)))
   return true // keeps the channel open for the async reply
 })
 
@@ -109,6 +133,10 @@ async function boot(reason) {
     console.error('[bridge] boot housekeeping failed:', err)
   }
   await ensureConnected(reason)
+  // A new browser session re-keys the tab age ledger: after the profile is on
+  // the bridge, never in front of it, because the re-key waits for a starting
+  // browser's tabs to settle.
+  ensureAgesSession().catch((err) => console.error('[bridge] tab age re-key failed:', err))
 }
 
 async function ensureAlarm() {
@@ -142,7 +170,10 @@ async function handleRequest(msg) {
   const started = Date.now()
 
   try {
-    const result = await withDeadline(runOp(msg.op, msg.args || {}), timeoutMs, msg.op)
+    // The deadline goes in with the arguments, so an operation that types key by
+    // key stops at it rather than typing on after the caller was told it timed out.
+    const args = { ...(msg.args || {}), deadlineAt: started + timeoutMs }
+    const result = await withDeadline(runOp(msg.op, args), timeoutMs, msg.op)
     return ok(id, result)
   } catch (err) {
     if (err instanceof OpError) return fail(id, err.code, err.message, err.data)
@@ -190,6 +221,9 @@ function withDeadline(promise, timeoutMs, op) {
  *   { kind: 'arm', label, minutes } -> { ok, armedUntil, minutes }
  *   { kind: 'disarm', label }       -> { ok }
  *   { kind: 'panic', on }           -> { ok, panic }
+ *   { kind: 'resume' }              -> { ok, panic }   the popup ONLY (mayResume)
+ *   { kind: 'sortWindow', windowId } -> { ok, result } this window, by age
+ *   { kind: 'sortAll' }             -> { ok, result }  every window, each on its own
  *
  * getSelf is answered from local storage, so it works while the broker is down,
  * which is exactly when the UI most needs to say something useful. `claimed` is
@@ -261,7 +295,7 @@ async function ownLabel() {
   return self && self.label ? self.label : null
 }
 
-async function handleUiMessage(message) {
+async function handleUiMessage(message, sender) {
   const kind = message && message.kind ? String(message.kind) : ''
 
   switch (kind) {
@@ -338,6 +372,33 @@ async function handleUiMessage(message) {
       const result = await askBroker(OPS.PANIC, { args: { on } })
       return { ok: true, panic: result && typeof result.panic === 'boolean' ? result.panic : on }
     }
+
+    case 'resume': {
+      // The popup's press-and-hold, and nothing else. The broker also refuses
+      // RESUME to every MCP connection and to any host connection it is not
+      // holding through the panic, so this check is the extension's half of a
+      // rule both ends enforce.
+      if (!mayResume(sender, chrome.runtime.id)) {
+        return uiError(new Error(`${ERR.UNAUTHORIZED}: only this extension's popup may resume from panic.`))
+      }
+      const result = await requestBroker(OPS.RESUME)
+      // The broker drops every held link as it clears the switch. Reconnect now
+      // rather than on the backoff, so the popup that asked sees the profile
+      // come back while the person is still looking at it.
+      void forceReconnect('resumed from panic')
+      return { ok: true, panic: result && typeof result.panic === 'boolean' ? result.panic : false }
+    }
+
+    case 'sortWindow': {
+      const windowId = Number(message.windowId)
+      if (!Number.isInteger(windowId)) {
+        return uiError(new Error(`${ERR.BAD_REQUEST}: sorting needs the window to sort.`))
+      }
+      return { ok: true, result: await sortWindowsByAge({ windowId }) }
+    }
+
+    case 'sortAll':
+      return { ok: true, result: await sortWindowsByAge({ all: true }) }
 
     default:
       return uiError(new Error(`${ERR.BAD_REQUEST}: unknown request "${kind}".`))
