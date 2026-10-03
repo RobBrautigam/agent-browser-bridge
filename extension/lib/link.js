@@ -17,6 +17,16 @@
  *      left it dead for five minutes. Here: jittered exponential backoff,
  *      capped, unlimited attempts, NO cooldown, ever.
  *
+ * And one this build got wrong itself: ONE PORT PER WORKER. The listeners used
+ * to act on whichever port was current rather than the port they were attached
+ * to, and connect() replaced the port without closing it. A wake source that
+ * landed while a REGISTER_ACK was being recorded opened a second port; the
+ * first stayed open, so its host outlived its own route, and once the broker
+ * replaced that route the old host's refusals came up the OLD port and tore
+ * down the CURRENT link, every ten seconds, for hours. Now every listener is
+ * bound to its own port, a port this worker let go of is closed and ignored,
+ * and the ack timer runs until the answer is fully recorded.
+ *
  * Nothing that matters lives in a module global. The service worker can be
  * terminated between any two lines in this file, so state lives in
  * chrome.storage.session (per browser session) and identity in
@@ -69,6 +79,14 @@ let ackTimer = null
 let retryTimer = null
 let connectInFlight = null
 
+/**
+ * Moves whenever the link changes hands or settles: a port opened, answered,
+ * held or let go of. ensureConnected reads the link across several storage
+ * calls, so it compares this before and after: a link that moved underneath
+ * it is read again, never acted on.
+ */
+let linkEpoch = 0
+
 /** Set by sw.js. Receives a REQ envelope, returns a RES envelope. */
 let requestHandler = null
 
@@ -92,7 +110,17 @@ export function setRequestHandler(fn) {
  * onStartup, onInstalled, worker cold start, and the backoff timer.
  */
 export async function ensureConnected(reason = 'unknown') {
+  const epoch = linkEpoch
   const state = await getState()
+  const held = port ? await isPanicHeld() : false
+  const stale = port && !held && state === LINK.READY ? await heartbeatIsStale() : false
+
+  // Every read above took a turn of the event loop, and a REGISTER_ACK, a
+  // disconnect or another wake source may have moved the link in between. A
+  // decision on that out-of-date picture is how one worker opened a second
+  // port at browser start, so a moved link is read again instead. Everything
+  // below runs in one turn, up to the moment connectInFlight is set.
+  if (epoch !== linkEpoch) return ensureConnected(reason)
 
   // The two-sided check. A port with a non-ready state is the half-open case
   // that hung the incumbent. A ready state with no port is a worker that was
@@ -106,23 +134,33 @@ export async function ensureConnected(reason = 'unknown') {
   // route on TIMING.HEARTBEAT_INTERVAL, so silence past the same staleness
   // window the broker uses on us means the link is dead however healthy the
   // port looks.
+  if (connectInFlight) return connectInFlight
+  // A port still waiting on its answer, or still writing it down. The ack
+  // timer runs until the answer is fully recorded and is the only deadline
+  // this needs; the persisted state cannot say this, because it reads
+  // CONNECTING both while the answer is awaited and while it is being recorded.
+  if (port && ackTimer) return LINK.CONNECTING
   // Held through a panic: the broker has the port and pings nothing on it, so
   // the heartbeat clock does not apply. The hold ends from the far side (the
   // host voids the registration when the broker lets go) or with the port.
-  if (port && (await isPanicHeld())) return state
+  if (port && held) return state
+  if (port && state === LINK.READY && !stale) return state
 
-  if (port && state === LINK.READY) {
-    if (!(await heartbeatIsStale())) return state
-    // Drop the port and fall through to a fresh REGISTER on this same tick.
-    // Waiting out a backoff here would leave a profile the broker cannot see
-    // for longer than it takes to simply reintroduce ourselves.
-    await teardown('no broker heartbeat within the stale window')
-  } else if (port && state === LINK.CONNECTING && ackTimer) {
-    return state
-  }
-
-  if (connectInFlight) return connectInFlight
-  connectInFlight = connect(reason).finally(() => {
+  // Anything else holding a port is a link to drop before dialing again: a
+  // READY with no broker heartbeat in the stale window, or a port with no
+  // answer pending and no READY (the half-open case). Dropped on this same
+  // tick rather than after a backoff, because a profile the broker cannot see
+  // is worse than one reintroduction. The drop happens inside the claimed
+  // connect, so no other wake source can dial in between.
+  const drop = port
+    ? state === LINK.READY
+      ? 'no broker heartbeat within the stale window'
+      : `half-open port (the link is ${state})`
+    : null
+  connectInFlight = (async () => {
+    if (drop) await teardown(drop)
+    return connect(reason)
+  })().finally(() => {
     connectInFlight = null
   })
   return connectInFlight
@@ -279,39 +317,58 @@ async function connect(reason) {
   }
   if (!p) return failConnect('connectNative returned no port.')
 
+  // One port per worker. The browser keeps a native host running until its
+  // port is destroyed, so a port that is merely forgotten keeps a host alive
+  // with nobody listening for what it says. Close any port still held first.
+  if (port) {
+    const old = port
+    port = null
+    closePort(old)
+    rejectPending('replaced by a new connection')
+  }
   port = p
-  p.onMessage.addListener(handleMessage)
-  p.onDisconnect.addListener(handleDisconnect)
+  linkEpoch += 1
+  // Bound to THIS port. A frame or a disconnect from any other port is about a
+  // link this worker already let go of and must never act on the current one.
+  p.onMessage.addListener((raw) => handleMessage(p, raw))
+  p.onDisconnect.addListener(() => handleDisconnect(p))
 
   let identity
   try {
     identity = await collectIdentity()
   } catch (err) {
-    return failConnect(`identity collection failed: ${err && err.message ? err.message : String(err)}`)
+    return failConnect(`identity collection failed: ${err && err.message ? err.message : String(err)}`, p)
   }
+  // Let go of while the identity was collected: whatever did that owns the link now.
+  if (p !== port) return LINK.DOWN
 
   try {
     p.postMessage(identity)
   } catch (err) {
-    return failConnect(`REGISTER post failed: ${err && err.message ? err.message : String(err)}`)
+    return failConnect(`REGISTER post failed: ${err && err.message ? err.message : String(err)}`, p)
   }
 
   // A Port is not a link. Nothing is connected until the broker says so.
   clearTimeout(ackTimer)
   ackTimer = setTimeout(() => {
     ackTimer = null
-    void onAckTimeout()
+    void onAckTimeout(p)
   }, TIMING.HELLO_ACK_TIMEOUT)
 
   return LINK.CONNECTING
 }
 
-async function onAckTimeout() {
-  await teardown(`no REGISTER_ACK within ${TIMING.HELLO_ACK_TIMEOUT}ms`)
+async function onAckTimeout(p) {
+  if (p !== port) return
+  await teardown(`no REGISTER_ACK within ${TIMING.HELLO_ACK_TIMEOUT}ms`, p)
   await scheduleReconnect()
 }
 
-async function failConnect(message) {
+async function failConnect(message, p = null) {
+  if (p && p !== port) {
+    closePort(p)
+    return LINK.DOWN
+  }
   await teardown(message)
   await scheduleReconnect()
   return LINK.DOWN
@@ -444,13 +501,20 @@ async function profileEmail() {
 /* Inbound                                                                     */
 /* -------------------------------------------------------------------------- */
 
-function handleMessage(raw) {
-  void routeMessage(raw).catch((err) => {
+function handleMessage(from, raw) {
+  // A frame from a port this worker already let go of. Its host can still be
+  // talking: a refusal it relays is about ITS registration, and acting on it
+  // tore down the current link in a loop. Close it, so its host exits.
+  if (from !== port) {
+    closePort(from)
+    return
+  }
+  void routeMessage(from, raw).catch((err) => {
     console.error('[bridge] message handling failed:', err)
   })
 }
 
-async function routeMessage(raw) {
+async function routeMessage(from, raw) {
   if (!raw || typeof raw !== 'object') return
 
   const msg = raw.type === MSG.CHUNK ? absorbChunk(raw) : raw
@@ -458,18 +522,18 @@ async function routeMessage(raw) {
 
   switch (msg.type) {
     case MSG.REGISTER_ACK:
-      return onRegisterAck(msg)
+      return onRegisterAck(from, msg)
     case MSG.HELLO_ACK:
       // The host speaks HELLO to the broker on its own hop, so a hello_ack that
       // reaches US is the host relaying its own refusal - which is exactly how
       // a dead broker announces itself. Treating it as a register_ack means an
       // ok:false lands on the refusal path below instead of timing out, and an
       // ok:true degrades a naming mismatch to a working link.
-      return onRegisterAck(msg)
+      return onRegisterAck(from, msg)
     case MSG.PING:
-      return onPing(msg)
+      return onPing(from, msg)
     case MSG.REQ:
-      return onReq(msg)
+      return onReq(from, msg)
     case MSG.RES:
       return onRes(msg)
     case MSG.EVENT:
@@ -487,11 +551,14 @@ async function routeMessage(raw) {
  * Reading anything else gets undefined, silently, which is how profileDir,
  * profileName, vendor and warning went missing from the options page in the
  * first build.
+ *
+ * The ack timer is NOT cleared on arrival. Recording the answer takes several
+ * storage calls, and until READY is written the persisted state still says
+ * CONNECTING: with the timer already gone, a wake source landing in between
+ * read a port with nothing pending and dialed a second one. The timer stops
+ * when the answer has settled, in settle() below or in teardown.
  */
-async function onRegisterAck(msg) {
-  clearTimeout(ackTimer)
-  ackTimer = null
-
+async function onRegisterAck(from, msg) {
   // A typed refusal, which is what a host relays the instant it knows the
   // broker is gone (as a register_ack or a hello_ack, both ok:false). Tearing
   // down here is what makes a broker restart recoverable: the port stays alive
@@ -506,14 +573,16 @@ async function onRegisterAck(msg) {
     // connection with no route, so the popup can still show the panic and
     // offer Resume; tearing down here would redial into the same answer on a
     // loop and leave the popup saying the broker is not answering.
-    if (code === ERR.PANIC && port) {
+    if (code === ERR.PANIC && from === port) {
       await setAttempt(0)
       await chrome.storage.session.set({ [K_PANIC_HELD]: true })
+      if (from !== port) return
       await setState(LINK.DOWN, { reason: 'held through panic', error: `${code}: ${detail}` })
+      settle(from)
       return
     }
 
-    await teardown(`${code}: ${detail}`)
+    await teardown(`${code}: ${detail}`, from)
     await scheduleReconnect()
     return
   }
@@ -545,33 +614,51 @@ async function onRegisterAck(msg) {
   if (typeof msg.vendor === 'string' && msg.vendor) patch[K_VENDOR] = msg.vendor
   if (Object.keys(patch).length > 0) await chrome.storage.local.set(patch)
 
+  // Let go of while the answer was written down: the port that replaced it
+  // records its own answer, and READY here would describe a dead link.
+  if (from !== port) return
   await noteHeartbeat()
   await setState(LINK.READY, { reason: 'register_ack' })
+  settle(from)
 }
 
-async function onPing(msg) {
-  if (!port) return
+/**
+ * The answer to REGISTER is fully recorded: stop its deadline, cancel a retry
+ * an earlier failure left behind, and tell any ensureConnected reading the link
+ * right now that it moved.
+ */
+function settle(from) {
+  if (from !== port) return
+  clearTimeout(ackTimer)
+  ackTimer = null
+  clearTimeout(retryTimer)
+  retryTimer = null
+  linkEpoch += 1
+}
+
+async function onPing(from, msg) {
+  if (from !== port) return
   // A ping is the only proof this worker gets that the broker on the far side
   // of the host is the one that knows about us. ensureConnected reads it.
   await noteHeartbeat()
+  const reply = pong(msg.seq, {
+    tabCount: await countTabs(),
+    linkState: LINK.READY,
+    installId: await getInstallId(),
+    at: Date.now(),
+  })
+  if (from !== port) return
   try {
-    port.postMessage(
-      pong(msg.seq, {
-        tabCount: await countTabs(),
-        linkState: LINK.READY,
-        installId: await getInstallId(),
-        at: Date.now(),
-      })
-    )
+    from.postMessage(reply)
   } catch (err) {
-    await teardown(`pong failed: ${err && err.message ? err.message : String(err)}`)
+    await teardown(`pong failed: ${err && err.message ? err.message : String(err)}`, from)
     await scheduleReconnect()
   }
 }
 
-async function onReq(msg) {
+async function onReq(from, msg) {
   if (!requestHandler) {
-    post(fail(msg.id, ERR.EXT_ERROR, 'The service worker has no request handler installed.'))
+    post(fail(msg.id, ERR.EXT_ERROR, 'The service worker has no request handler installed.'), from)
     return
   }
   let response
@@ -580,7 +667,9 @@ async function onReq(msg) {
   } catch (err) {
     response = fail(msg.id, ERR.EXT_ERROR, err && err.message ? err.message : String(err))
   }
-  if (response) post(response)
+  // Answered on the port that asked, or not at all: a request from a link
+  // that has since been replaced belongs to a route the broker already failed.
+  if (response) post(response, from)
 }
 
 function onRes(msg) {
@@ -648,14 +737,14 @@ function absorbChunk(frame) {
   }
 }
 
-function post(msg) {
-  if (!port) return false
+function post(msg, to = port) {
+  if (!to || to !== port) return false
   try {
-    port.postMessage(msg)
+    to.postMessage(msg)
     return true
   } catch (err) {
     console.error('[bridge] post failed:', err)
-    void teardown(`post failed: ${err && err.message ? err.message : String(err)}`).then(scheduleReconnect)
+    void teardown(`post failed: ${err && err.message ? err.message : String(err)}`, to).then(scheduleReconnect)
     return false
   }
 }
@@ -664,10 +753,15 @@ function post(msg) {
 /* Disconnect and retry                                                        */
 /* -------------------------------------------------------------------------- */
 
-function handleDisconnect() {
+function handleDisconnect(from) {
   const err = chrome.runtime.lastError
   const message = err && err.message ? err.message : 'host disconnected'
+  // A port this worker already let go of. Its host going away is all that was
+  // wanted of it; nulling `port` here used to forget the CURRENT port, which
+  // left that one open too and dialed a third.
+  if (from !== port) return
   port = null
+  linkEpoch += 1
   void clearPanicHeld()
   clearTimeout(ackTimer)
   ackTimer = null
@@ -675,21 +769,40 @@ function handleDisconnect() {
   void setState(LINK.DOWN, { error: message }).then(scheduleReconnect)
 }
 
-async function teardown(message) {
+/**
+ * Drop a link. `which` defaults to the current port; a port this worker
+ * already let go of is only closed, and the current link is left alone.
+ *
+ * The port is dropped before the first await, so no other caller can see it
+ * half torn down, and the DOWN is not written over a newer port that opened
+ * while the panic flag was cleared.
+ */
+async function teardown(message, which = port) {
+  if (which && which !== port) {
+    closePort(which)
+    return
+  }
   clearTimeout(ackTimer)
   ackTimer = null
-  await clearPanicHeld()
   if (port) {
     const dying = port
     port = null
-    try {
-      dying.disconnect()
-    } catch (_err) {
-      /* already gone */
-    }
+    linkEpoch += 1
+    closePort(dying)
   }
   rejectPending(message)
+  await clearPanicHeld()
+  if (port) return
   await setState(LINK.DOWN, { error: message })
+}
+
+/** Close a port quietly. The browser fires nothing on our own side for this. */
+function closePort(p) {
+  try {
+    p.disconnect()
+  } catch (_err) {
+    /* already gone */
+  }
 }
 
 function rejectPending(message) {

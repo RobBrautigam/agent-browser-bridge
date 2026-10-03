@@ -36,7 +36,7 @@ test('a held-through-panic flag never outlives the connection it was set on', ()
   assert.notEqual(cleared, -1, 'connect() clears the held flag')
   assert.ok(cleared < connect.indexOf('connectNative'), 'connect() clears the flag before it dials')
   // And a registration that succeeded is not held, whatever storage says.
-  const ack = body(link, 'async function onRegisterAck(msg)')
+  const ack = body(link, 'async function onRegisterAck(from, msg)')
   const okPath = ack.slice(ack.indexOf('await setAttempt(0)', ack.indexOf('await teardown(')))
   assert.match(okPath, /clearPanicHeld\(\)/, 'a successful REGISTER_ACK clears the held flag')
 })
