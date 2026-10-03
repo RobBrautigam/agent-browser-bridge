@@ -41,6 +41,7 @@ import {
   OPS,
   TIER,
   ERR,
+  HOST_NOTICE,
   LABEL_PATTERN,
   LINK,
   TIMING,
@@ -721,7 +722,16 @@ async function handleRegister(conn, msg) {
       ERR.PROFILE_STALE,
       `Profile "${route.label}" reconnected while this operation was in flight.`
     )
-    replaced.conn?.destroy('replaced by a newer registration')
+    // Said before the close, so the host knows this is not a broker restart.
+    // A host that redialed here sent HELLO, never REGISTER (its extension had
+    // moved on to the newer port), and was refused at the deadline below; the
+    // refusal it relayed tore down the profile's live link, every ten seconds.
+    replaced.conn?.sendAndClose(
+      event(HOST_NOTICE.REPLACED, {
+        message: 'A newer registration of this profile replaced this connection. Do not redial.',
+      }),
+      'replaced by a newer registration'
+    )
   }
 
   if (identityChanged) {

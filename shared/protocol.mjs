@@ -302,6 +302,21 @@ export const ERR = Object.freeze({
   UNKNOWN: 'E_UNKNOWN',
 })
 
+/**
+ * Notices the broker sends a HOST, as the name of an EVENT, for the host to act
+ * on and never relay.
+ *
+ * REPLACED: a newer registration of the same profile took this connection's
+ * route, and the socket closes right after. The host exits rather than
+ * redialing: its own browser port is one the extension has already let go of,
+ * and a redial there only produced a connection that never registered, which
+ * the broker refused at its deadline in a loop. A host that predates this
+ * relays the event, and an extension ignores an event name it does not know.
+ */
+export const HOST_NOTICE = Object.freeze({
+  REPLACED: 'replaced',
+})
+
 /** Route link states, computed from the heartbeat clock and never from socket existence. */
 export const LINK = Object.freeze({
   DOWN: 'down',

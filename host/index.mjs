@@ -42,6 +42,7 @@ import {
   MSG,
   ROLE,
   ERR,
+  HOST_NOTICE,
   LINK,
   TIMING,
   PIPE_NAME,
@@ -122,6 +123,13 @@ let shuttingDown = false
  * register_ack would only confuse its state machine.
  */
 let browserRegistered = false
+
+/**
+ * True once the broker has said a newer registration of this profile took this
+ * connection's route. The close that follows is then the end of this relay,
+ * not an outage to ride out: see onSocketClosed.
+ */
+let replaced = false
 
 const outbound = []
 const pendingReqIds = new Set()
@@ -236,6 +244,18 @@ function onSocketClosed() {
   link = LINK.DOWN
   process.stdin.resume()
 
+  // Replaced, not dropped. The extension has already registered again on a
+  // newer port, so this browser port is one it let go of: nothing goes up it
+  // (an extension before 1.1.1 acted on a refusal from such a port by tearing
+  // down its CURRENT link), and nothing redials, because a redial here only
+  // ever produced a connection that never registered and was refused at the
+  // broker's deadline, in a loop. Exiting closes the port's other end.
+  if (replaced) {
+    log('a newer registration of this profile replaced this relay; exiting')
+    shutdown(0)
+    return
+  }
+
   // Anything the browser asked for is now unanswerable. Say so, typed.
   failPendingRequests()
   refuseRegistration()
@@ -287,6 +307,13 @@ function handleFromBroker(msg) {
   // Only a proven link relays. Frames decoded from the same chunk as a refused
   // answer still arrive here while the socket is closing, and must go nowhere.
   if (link !== LINK.READY) return
+
+  // The broker's own word to this relay, never the browser's business. The
+  // socket closes right behind it, and onSocketClosed reads the flag.
+  if (msg?.type === MSG.EVENT && msg.name === HOST_NOTICE.REPLACED) {
+    replaced = true
+    return
+  }
 
   if (msg?.type === MSG.RES && msg.id != null) pendingReqIds.delete(msg.id)
   sendToBrowser(msg)
