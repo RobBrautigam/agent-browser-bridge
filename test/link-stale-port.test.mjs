@@ -19,6 +19,7 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 
 const { ERR, MSG, LINK, TIMING, registerAck, helloAck } = await import('../shared/protocol.mjs')
 
@@ -81,7 +82,7 @@ class FakePort {
  * A fake chrome whose storage answers one call per event-loop turn, in the
  * order the calls were made.
  */
-function fakeChrome() {
+function fakeChrome({ tabsTurns = 0 } = {}) {
   const session = new Map()
   const local = new Map()
   const queue = []
@@ -129,7 +130,13 @@ function fakeChrome() {
       },
     },
     storage: { session: area(session), local: area(local) },
-    tabs: { query: async () => [] },
+    tabs: {
+      // A browser call that takes longer than a storage call, when a test asks.
+      async query() {
+        for (let i = 0; i < tabsTurns; i++) await op(() => undefined)
+        return []
+      },
+    },
   }
 
   return {
@@ -162,8 +169,8 @@ function ackOk(generation = 1) {
 }
 
 /** One fresh link module and fake chrome, the timers mocked so no backoff fires on its own. */
-async function setup(t) {
-  const fake = fakeChrome()
+async function setup(t, options) {
+  const fake = fakeChrome(options)
   globalThis.chrome = fake.chrome
   t.mock.timers.enable({ apis: ['setTimeout'] })
   t.mock.method(console, 'info', () => {})
@@ -253,6 +260,11 @@ test('a half-open port is closed before the next one is opened', async (t) => {
 /* -------------------------------------------------------------------------- */
 /* A superseded port never acts on the current one                             */
 /* -------------------------------------------------------------------------- */
+
+// connect() now closes the port it replaces, and the browser dispatches nothing
+// to a closed port, so the frames below are ones already on their way when it
+// closed (`queued`). On 1.1.0 the replaced port was never closed and they were
+// simply live. Either way the guard is the second layer behind that close.
 
 test("a superseded port's REGISTER_ACK refusal does not tear down the current link", async (t) => {
   const { fake, link } = await setup(t)
@@ -361,4 +373,108 @@ test('a REGISTER_ACK that never comes still tears the port down at the deadline'
   await fake.settle()
   assert.equal(port.disconnected, true)
   assert.equal((await snapshot(fake, link)).hasPort, false)
+})
+
+/* -------------------------------------------------------------------------- */
+/* A forced reconnect, and every write that follows an await                   */
+/* -------------------------------------------------------------------------- */
+
+function openPorts(fake) {
+  return fake.ports.filter((p) => !p.disconnected)
+}
+
+test('a forced reconnect never strands a connect or throws away a port being introduced', async (t) => {
+  // The popup and options page force a reconnect on a failed poll, and one can
+  // land at any moment of a connect. Tearing the port down while connect() was
+  // collecting the identity left connect() to give up on it with nothing
+  // scheduled to try again; tearing it down while its answer was pending only
+  // dialed the same introduction again. The slow tab count stretches the
+  // identity collection past the forced reconnect's own reads, as a busy
+  // browser does.
+  for (const tabsTurns of [0, 8]) {
+    for (let k = 0; k <= 12; k++) {
+      await t.test(`forced after ${k} storage answers, tab count in ${tabsTurns} turns`, async (t) => {
+        const { fake, link } = await setup(t, { tabsTurns })
+        const done = link.ensureConnected('worker-start')
+        for (let i = 0; i < k; i++) await fake.step()
+        const forced = link.forceReconnect('ui getBoard hit E_TIMEOUT')
+        await fake.settle()
+        await done
+        await forced
+
+        // No timer is advanced: a link that needs one to come back was stranded.
+        assert.equal(openPorts(fake).length, 1, `no port is open and nothing is on its way (forced after ${k})`)
+        assert.equal(fake.ports.length, 1, `a port still being introduced was thrown away (forced after ${k})`)
+        fake.ports[0].deliver(ackOk())
+        await fake.settle()
+        assert.equal((await snapshot(fake, link)).linkState, LINK.READY)
+      })
+    }
+  }
+})
+
+test('a page polling through an outage does not redial ahead of the backoff', async (t) => {
+  const { fake, link } = await setup(t)
+  const port = await connectReady(fake, link)
+  port.drop('Native host has exited.')
+  await fake.settle()
+  assert.equal(fake.ports.length, 1)
+
+  // askBroker's forced reconnect, once per failed two-second poll.
+  for (let i = 0; i < 3; i++) {
+    const forced = link.forceReconnect('ui getBoard hit E_NO_BROKER', { unlessPending: true })
+    await fake.settle()
+    await forced
+  }
+  assert.equal(fake.ports.length, 1, 'a failed poll redialed ahead of the backoff')
+
+  t.mock.timers.tick(TIMING.EXT_RECONNECT_CAP)
+  await fake.settle()
+  assert.equal(fake.ports.length, 2, 'the backoff still redials')
+})
+
+test("the worker's failed-poll reconnect leaves a counted retry to run", async () => {
+  const src = await readFile(new URL('../extension/sw.js', import.meta.url), 'utf8')
+  const start = src.indexOf('async function askBroker')
+  assert.ok(start > 0, 'askBroker is in sw.js')
+  const body = src.slice(start, src.indexOf('\n}\n', start))
+  assert.match(body, /forceReconnect\(.*\{\s*unlessPending:\s*true\s*\}\)/)
+})
+
+test('READY is never written for a port that went away while its answer was recorded', async (t) => {
+  for (let k = 0; k <= 10; k++) {
+    await t.test(`dropped after ${k} storage answers`, async (t) => {
+      const { fake, link } = await setup(t)
+      const done = link.ensureConnected('test')
+      await fake.settle()
+      await done
+      const port = fake.ports[0]
+
+      port.deliver(ackOk())
+      for (let i = 0; i < k; i++) await fake.step()
+      port.drop('Native host has exited.')
+      await fake.settle()
+
+      assert.notEqual(fake.session.get('link.state'), LINK.READY, `READY outlived its port (dropped after ${k})`)
+    })
+  }
+})
+
+test('the panic hold never outlives the port it was for', async (t) => {
+  for (let k = 0; k <= 6; k++) {
+    await t.test(`dropped after ${k} storage answers`, async (t) => {
+      const { fake, link } = await setup(t)
+      const done = link.ensureConnected('test')
+      await fake.settle()
+      await done
+      const port = fake.ports[0]
+
+      port.deliver(registerAck({ ok: false, error: { code: ERR.PANIC, message: 'Panic is on.' } }))
+      for (let i = 0; i < k; i++) await fake.step()
+      port.drop('Native host has exited.')
+      await fake.settle()
+
+      assert.notEqual(fake.session.get('link.panicHeld'), true, `the hold outlived its port (dropped after ${k})`)
+    })
+  }
 })

@@ -307,11 +307,14 @@ export const ERR = Object.freeze({
  * on and never relay.
  *
  * REPLACED: a newer registration of the same profile took this connection's
- * route, and the socket closes right after. The host exits rather than
- * redialing: its own browser port is one the extension has already let go of,
+ * route, and the socket closes right after. The host relays nothing and never
+ * redials: its own browser port is one the extension has already let go of,
  * and a redial there only produced a connection that never registered, which
- * the broker refused at its deadline in a loop. A host that predates this
- * relays the event, and an extension ignores an event name it does not know.
+ * the broker refused at its deadline in a loop. It ends when the browser closes
+ * that port, never on its own, because an extension before 1.1.1 still holding
+ * the port reads the host going away as its live link dropping. A host that
+ * predates this relays the event, and an extension ignores an event name it
+ * does not know.
  */
 export const HOST_NOTICE = Object.freeze({
   REPLACED: 'replaced',

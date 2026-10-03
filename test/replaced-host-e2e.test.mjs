@@ -18,10 +18,16 @@
  * What has to hold:
  *
  * 1. The broker says REPLACED before it closes, and the host told so relays
- *    nothing to its browser and exits, without redialing.
+ *    nothing to its browser and never redials. It does not exit on its own
+ *    either: an extension before 1.1.1 that still holds the port reads the
+ *    host going away as its CURRENT link dropping, forgets the live port and
+ *    dials again, which replaces that route in turn. The host ends when the
+ *    browser closes the port, which a 1.1.1 extension has already done.
  * 2. A broker RESTART is still an outage to ride out: the host voids the
- *    registration so the extension re-introduces itself, redials the new broker
- *    and carries the fresh REGISTER through.
+ *    registration, stays up, redials the new broker and carries a REGISTER
+ *    sent on the same port. A 1.1.1 extension answers the void by closing the
+ *    port and dialing a new one (link-stale-port.test.mjs); this keeps the
+ *    host's half working for any client that keeps its port.
  */
 
 import test, { after } from 'node:test'
@@ -90,8 +96,8 @@ function exitOf(child) {
   return new Promise((resolve) => child.once('exit', (code) => resolve(code)))
 }
 
-function launch(script, args, stdio) {
-  const child = spawn(process.execPath, [script, ...args], { env: childEnv(), stdio, windowsHide: true })
+function launch(script, args, stdio, extraEnv = {}) {
+  const child = spawn(process.execPath, [script, ...args], { env: { ...childEnv(), ...extraEnv }, stdio, windowsHide: true })
   children.add(child)
   let stderr = ''
   child.stderr?.on('data', (d) => (stderr += d))
@@ -107,8 +113,9 @@ async function startBroker() {
   return broker
 }
 
-function startHost() {
-  const host = launch(HOST, [EXTENSION_ORIGIN], ['pipe', 'pipe', 'pipe'])
+/** `debug` turns on the host's own log, which says when it redials. */
+function startHost({ debug = false } = {}) {
+  const host = launch(HOST, [EXTENSION_ORIGIN], ['pipe', 'pipe', 'pipe'], debug ? { BRIDGE_DEBUG: '1' } : {})
   const decoder = new FrameDecoder()
   const frames = []
   host.child.stdout.on('data', (chunk) => frames.push(...decoder.push(chunk)))
@@ -156,9 +163,9 @@ test('the broker starts on a throwaway endpoint', async () => {
   broker = await startBroker()
 })
 
-test('a host whose route a newer registration took is told so, relays nothing, and exits', async () => {
+test('a host whose route a newer registration took relays nothing, never redials, and ends with its port', async () => {
   const installId = `rpl-${crypto.randomBytes(4).toString('hex')}`
-  const first = startHost()
+  const first = startHost({ debug: true })
   const second = startHost()
   try {
     first.send(registration(installId))
@@ -171,8 +178,16 @@ test('a host whose route a newer registration took is told so, relays nothing, a
     await waitFor('the second registration', () => acks(second).find((m) => m.ok === true))
     await waitFor('the broker to replace the first route', () => logMessages().includes('Replacing an existing route'))
 
-    const code = await Promise.race([exitOf(first.child), sleep(5_000).then(() => 'still running')])
-    assert.equal(code, 0, 'the replaced host kept running instead of exiting')
+    await waitFor('the replaced host to take the notice', () => /replaced this relay/.test(first.stderr()))
+
+    // Long enough for a redial: a host's first retry comes 250 ms after a drop.
+    await sleep(1_500)
+    assert.equal(
+      first.child.exitCode,
+      null,
+      'the replaced host exited on its own, which an extension before 1.1.1 still holding the port reads as its live link dropping'
+    )
+    assert.doesNotMatch(first.stderr(), /retrying/, 'the replaced host redialed')
 
     const after = first.frames.slice(before)
     assert.deepEqual(
@@ -185,6 +200,11 @@ test('a host whose route a newer registration took is told so, relays nothing, a
       [],
       'the notice is the host\'s, never relayed to the browser'
     )
+
+    // The browser closing the port is the end of the relay.
+    first.child.stdin.end()
+    const code = await Promise.race([exitOf(first.child), sleep(5_000).then(() => 'still running')])
+    assert.equal(code, 0, 'the replaced host outlived its port')
 
     // The newer route is untouched by all of it.
     assert.equal(second.child.exitCode, null, 'the current host went down with the old one')

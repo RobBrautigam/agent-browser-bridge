@@ -77,6 +77,8 @@ const K_EMAIL = 'email'
 let port = null
 let ackTimer = null
 let retryTimer = null
+/** scheduleReconnect between its check and its timer: a retry already claimed. */
+let retryArming = false
 let connectInFlight = null
 
 /**
@@ -110,6 +112,12 @@ export function setRequestHandler(fn) {
  * onStartup, onInstalled, worker cold start, and the backoff timer.
  */
 export async function ensureConnected(reason = 'unknown') {
+  // Answered from module state before any storage read: a connect on its way,
+  // or a port still waiting on (or writing down) its answer. Both are checked
+  // again below, because either can start during the reads.
+  if (connectInFlight) return connectInFlight
+  if (port && ackTimer) return LINK.CONNECTING
+
   const epoch = linkEpoch
   const state = await getState()
   const held = port ? await isPanicHeld() : false
@@ -166,8 +174,21 @@ export async function ensureConnected(reason = 'unknown') {
   return connectInFlight
 }
 
-/** Drop the link and reconnect now. The options page uses this. */
-export async function forceReconnect(reason = 'manual') {
+/**
+ * Drop the link and reconnect now. The options page and the popup use this
+ * when a request fails as an outage, and Resume uses it to come back at once.
+ *
+ * Never on top of a link already on its way. Tearing down a port connect() was
+ * still introducing left connect() to give up on it with nothing scheduled to
+ * try again, and tearing one down while its answer was pending only dialed the
+ * same introduction twice. With `unlessPending`, a retry the backoff has
+ * already counted is left to run, so a page polling every two seconds through
+ * an outage does not redial on every poll.
+ */
+export async function forceReconnect(reason = 'manual', { unlessPending = false } = {}) {
+  if (connectInFlight) return connectInFlight
+  if (port && ackTimer) return LINK.CONNECTING
+  if (unlessPending && (retryTimer || retryArming)) return getState()
   await teardown(`forced: ${reason}`)
   await setAttempt(0)
   return ensureConnected(reason)
@@ -557,6 +578,11 @@ async function routeMessage(from, raw) {
  * CONNECTING: with the timer already gone, a wake source landing in between
  * read a port with nothing pending and dialed a second one. The timer stops
  * when the answer has settled, in settle() below or in teardown.
+ *
+ * `from` is the current port on arrival (handleMessage checked it in the same
+ * turn), but any await can outlive it. So every write that follows an await is
+ * behind its own check: a port let go of in between must not write READY over
+ * the DOWN its drop wrote, or leave its panic hold on the next port.
  */
 async function onRegisterAck(from, msg) {
   // A typed refusal, which is what a host relays the instant it knows the
@@ -573,8 +599,9 @@ async function onRegisterAck(from, msg) {
     // connection with no route, so the popup can still show the panic and
     // offer Resume; tearing down here would redial into the same answer on a
     // loop and leave the popup saying the broker is not answering.
-    if (code === ERR.PANIC && from === port) {
+    if (code === ERR.PANIC) {
       await setAttempt(0)
+      if (from !== port) return
       await chrome.storage.session.set({ [K_PANIC_HELD]: true })
       if (from !== port) return
       await setState(LINK.DOWN, { reason: 'held through panic', error: `${code}: ${detail}` })
@@ -588,7 +615,9 @@ async function onRegisterAck(from, msg) {
   }
 
   await setAttempt(0)
+  if (from !== port) return
   await clearPanicHeld()
+  if (from !== port) return
   await chrome.storage.session.set({
     [K_ACK]: {
       at: Date.now(),
@@ -612,12 +641,16 @@ async function onRegisterAck(from, msg) {
   const patch = {}
   if (typeof msg.label === 'string' && msg.label) patch[K_LABEL] = msg.label
   if (typeof msg.vendor === 'string' && msg.vendor) patch[K_VENDOR] = msg.vendor
-  if (Object.keys(patch).length > 0) await chrome.storage.local.set(patch)
+  if (Object.keys(patch).length > 0) {
+    if (from !== port) return
+    await chrome.storage.local.set(patch)
+  }
 
   // Let go of while the answer was written down: the port that replaced it
   // records its own answer, and READY here would describe a dead link.
   if (from !== port) return
   await noteHeartbeat()
+  if (from !== port) return
   await setState(LINK.READY, { reason: 'register_ack' })
   settle(from)
 }
@@ -633,6 +666,7 @@ function settle(from) {
   ackTimer = null
   clearTimeout(retryTimer)
   retryTimer = null
+  retryArming = false
   linkEpoch += 1
 }
 
@@ -823,8 +857,19 @@ function rejectPending(message) {
  * the same idempotent ensureConnected().
  */
 async function scheduleReconnect() {
-  if (retryTimer) return
-  const attempt = await bumpAttempt()
+  if (retryTimer || retryArming) return
+  // Claimed before the first await, so a second caller in the meantime arms no
+  // second timer (the first would be overwritten and never cleared), and
+  // settle() taking the claim back means the link answered: no retry.
+  retryArming = true
+  let attempt = 1
+  try {
+    attempt = await bumpAttempt()
+  } catch (_err) {
+    /* the backoff starts over; the retry itself still matters */
+  }
+  if (!retryArming) return
+  retryArming = false
   const delay = backoffDelay(attempt, {
     base: TIMING.EXT_RECONNECT_BASE,
     factor: TIMING.EXT_RECONNECT_FACTOR,

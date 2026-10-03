@@ -23,8 +23,23 @@ names, machine names or private paths.
   host and broker (the host kept running), and the page checks against
   1.1.0's options page and popup. The broker-restart e2e test passes on
   both, which is its job.
-- The order of the upgrade matters and is in the changelog: reload every
-  profile first, then restart the broker.
+- An adversarial review before release found ten issues. Five were fixed with
+  a test seen red first: a replaced host that exited on its own (an extension
+  before 1.1.1 still holding its port read that as its live link dropping and
+  looped faster than before, so the host now goes quiet and ends with its
+  port), a forced reconnect that stranded a connect it landed in (seen only
+  once the fake's tab count was slower than a storage call) or threw away a
+  port being introduced, a page poll that redialed ahead of the backoff, READY
+  written after a dropped port's DOWN, and a panic hold left for the next
+  port. Three were taken without a test of their own: a retry claimed before
+  its first await (no current path reaches two at once), the storage reads in
+  `ensureConnected` moved behind the checks that need none, and a dead port
+  check in the panic path. The last two were about the tests: the
+  superseded-port tests now say they guard the second layer behind the close
+  (and the forced-reconnect test holds one open port across its sweep), and
+  the broker-restart test says which half of the restart it covers.
+- Reload every profile first, then restart the broker; the changelog says
+  why.
 
 ## 2026-10-01
 

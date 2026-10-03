@@ -249,10 +249,17 @@ function onSocketClosed() {
   // (an extension before 1.1.1 acted on a refusal from such a port by tearing
   // down its CURRENT link), and nothing redials, because a redial here only
   // ever produced a connection that never registered and was refused at the
-  // broker's deadline, in a loop. Exiting closes the port's other end.
+  // broker's deadline, in a loop.
+  //
+  // Nor does the relay exit on its own. An extension before 1.1.1 can still be
+  // holding this port, and it reads the host going away as its CURRENT link
+  // dropping: it forgets the live port and dials again, which replaces that
+  // route in turn, in a loop faster than the one this ends. A 1.1.1 extension
+  // closed this port before it registered again, so stdin's end (below) comes
+  // anyway; that is when the relay ends, whichever version holds the port.
   if (replaced) {
-    log('a newer registration of this profile replaced this relay; exiting')
-    shutdown(0)
+    log('a newer registration of this profile replaced this relay; waiting for the browser to close the port')
+    pendingReqIds.clear()
     return
   }
 
