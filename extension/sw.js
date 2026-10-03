@@ -284,7 +284,9 @@ async function askBroker(op, { profile = null, args = {} } = {}) {
     // A typed outage means the port we are holding is not a working link. Drop
     // it and reintroduce ourselves, so the human's next click has a chance of
     // landing instead of failing the same way against the same dead link.
-    if (isOutage(err)) void forceReconnect(`ui ${op} hit ${codeOf(err)}`)
+    // A retry the backoff already counted is left to run, so a page polling
+    // every two seconds through an outage does not redial on every poll.
+    if (isOutage(err)) void forceReconnect(`ui ${op} hit ${codeOf(err)}`, { unlessPending: true })
     throw err
   }
 }

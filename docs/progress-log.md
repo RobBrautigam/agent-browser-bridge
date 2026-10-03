@@ -5,6 +5,42 @@ The user-facing record is [CHANGELOG.md](../CHANGELOG.md); this file holds the
 working notes behind it. This repository is public: entries carry no account
 names, machine names or private paths.
 
+## 2026-10-02
+
+- Version 1.1.1: a link that dropped every few seconds for hours on a
+  healthy broker. The cause, proved in the suite: a wake source that landed
+  while a REGISTER_ACK was being recorded opened a second native port without
+  closing the first (the ack timer was cleared on arrival and READY written
+  several storage calls later); the listeners acted on the current port
+  rather than their own, so once the broker replaced the old port's route,
+  the old host's void and its redial's refusal at the 10 s deadline came up
+  the old port and tore down the live link, in a loop.
+- Every new test was seen to fail first: six link tests against 1.1.0's
+  `link.js` (five of thirteen wake timings opened a second port; a stale
+  port's REGISTER_ACK and HELLO_ACK refusals tore down the current link; a
+  stale port's disconnect forgot it; a stale port's ping was answered on it;
+  a replaced port was left open), the replaced-host e2e test against 1.1.0's
+  host and broker (the host kept running), and the page checks against
+  1.1.0's options page and popup. The broker-restart e2e test passes on
+  both, which is its job.
+- An adversarial review before release found ten issues. Five were fixed with
+  a test seen red first: a replaced host that exited on its own (an extension
+  before 1.1.1 still holding its port read that as its live link dropping and
+  looped faster than before, so the host now goes quiet and ends with its
+  port), a forced reconnect that stranded a connect it landed in (seen only
+  once the fake's tab count was slower than a storage call) or threw away a
+  port being introduced, a page poll that redialed ahead of the backoff, READY
+  written after a dropped port's DOWN, and a panic hold left for the next
+  port. Three were taken without a test of their own: a retry claimed before
+  its first await (no current path reaches two at once), the storage reads in
+  `ensureConnected` moved behind the checks that need none, and a dead port
+  check in the panic path. The last two were about the tests: the
+  superseded-port tests now say they guard the second layer behind the close
+  (and the forced-reconnect test holds one open port across its sweep), and
+  the broker-restart test says which half of the restart it covers.
+- Reload every profile first, then restart the broker; the changelog says
+  why.
+
 ## 2026-10-01
 
 - Version 1.1.0: sort by age per window, resume from the popup, and the
