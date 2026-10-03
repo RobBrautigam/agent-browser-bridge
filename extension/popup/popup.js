@@ -13,6 +13,7 @@
  */
 
 import { icon, hydrateIcons, vendorIconName } from '../ui/icons.js'
+import { outageState } from '../lib/outage.js'
 
 /** Vendored protocol module, same one the service worker imports. */
 const PROTOCOL_MODULE = '../lib/protocol.js'
@@ -80,7 +81,10 @@ const state = {
   board: null,
   self: null,
   skewMs: 0,
+  /** Set when board polls have failed for longer than the outage grace. */
   error: null,
+  /** Local epoch ms of the first failed board poll in a row; null while they succeed. */
+  outageSince: null,
   armMinutes: 15,
   armSpan: 0,
   pollTimer: null,
@@ -277,6 +281,10 @@ function renderStatus() {
     patchAttr(el.statusPill, 'data-state', 'loading')
     patchAttr(lamp, 'data-state', 'connecting')
     patchText(el.statusText, 'Connecting')
+  } else if (state.outageSince != null) {
+    patchAttr(el.statusPill, 'data-state', 'loading')
+    patchAttr(lamp, 'data-state', 'connecting')
+    patchText(el.statusText, 'Reconnecting')
   } else if (state.board.panic) {
     patchAttr(el.statusPill, 'data-state', 'panic')
     patchAttr(lamp, 'data-state', 'stale')
@@ -637,6 +645,7 @@ async function refresh({ immediate = false } = {}) {
   if (board.status === 'fulfilled') {
     state.board = board.value.board || null
     state.error = null
+    state.outageSince = null
     if (state.board && typeof state.board.now === 'number') {
       state.skewMs = state.board.now - Date.now()
     }
@@ -645,8 +654,14 @@ async function refresh({ immediate = false } = {}) {
     if (err instanceof BridgeError && !isBrokerDown(err)) {
       toast(`${err.code}: ${err.message}`, 'error')
     } else {
-      state.error = { code: (err && err.code) || ERR.UNKNOWN, message: err ? err.message : '' }
-      state.board = null
+      // The board travels over this profile's own link, so a failed poll is
+      // first this link reconnecting (lib/outage.js). The card waits for a
+      // failure that outlasts one reconnect.
+      if (state.outageSince == null) state.outageSince = Date.now()
+      if (outageState(state.outageSince) === 'down') {
+        state.error = { code: (err && err.code) || ERR.UNKNOWN, message: err ? err.message : '' }
+        state.board = null
+      }
     }
   }
 
