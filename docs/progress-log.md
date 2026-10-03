@@ -5,6 +5,27 @@ The user-facing record is [CHANGELOG.md](../CHANGELOG.md); this file holds the
 working notes behind it. This repository is public: entries carry no account
 names, machine names or private paths.
 
+## 2026-10-02
+
+- Version 1.1.1: a link that dropped every few seconds for hours on a
+  healthy broker. The cause, proved in the suite: a wake source that landed
+  while a REGISTER_ACK was being recorded opened a second native port without
+  closing the first (the ack timer was cleared on arrival and READY written
+  several storage calls later); the listeners acted on the current port
+  rather than their own, so once the broker replaced the old port's route,
+  the old host's void and its redial's refusal at the 10 s deadline came up
+  the old port and tore down the live link, in a loop.
+- Every new test was seen to fail first: six link tests against 1.1.0's
+  `link.js` (five of thirteen wake timings opened a second port; a stale
+  port's REGISTER_ACK and HELLO_ACK refusals tore down the current link; a
+  stale port's disconnect forgot it; a stale port's ping was answered on it;
+  a replaced port was left open), the replaced-host e2e test against 1.1.0's
+  host and broker (the host kept running), and the page checks against
+  1.1.0's options page and popup. The broker-restart e2e test passes on
+  both, which is its job.
+- The order of the upgrade matters and is in the changelog: reload every
+  profile first, then restart the broker.
+
 ## 2026-10-01
 
 - Version 1.1.0: sort by age per window, resume from the popup, and the

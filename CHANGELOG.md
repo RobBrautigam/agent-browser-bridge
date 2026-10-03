@@ -9,6 +9,69 @@ from an earlier history; those versions have no tags here. Every clone made
 before 1.0.0 takes the one-time step in the 1.0.0 Upgrading section, which
 replaces the one-time steps in the earlier entries.
 
+## [1.1.1] - 2026-10-02
+
+A fix for a link that dropped every few seconds for hours while the broker
+was healthy. One service worker could end up holding two native ports; the
+old port's host outlived its route, and once the broker replaced that route,
+the refusals it relayed tore down the profile's live link in a loop. A 1.1.1
+broker talks to 1.1.0 and 1.0.x clients and the reverse.
+
+### Fixed
+
+- **One native port per service worker.** A wake source (the keepalive
+  alarm, `onStartup`, the worker's cold start, a backoff retry) that landed
+  while a REGISTER_ACK was being recorded saw a port with no ack timer and no
+  READY, and opened a second port without closing the first. The ack timer
+  now runs until the answer is fully recorded, `ensureConnected` decides on
+  what it reads after its awaits (and reads again if the link moved), and
+  `connect()` closes any port it replaces.
+- **A port the worker let go of never acts on the current link.** Every
+  listener is bound to its own port. A frame or a disconnect from any other
+  port is ignored and that port is closed, so a refusal, a ping or a
+  disconnect from an old port can no longer tear down, answer on, or forget
+  the current one.
+- **A replaced host exits instead of redialing.** The broker now tells a
+  host its route was taken by a newer registration (a `replaced` event,
+  `HOST_NOTICE.REPLACED`) before it closes the socket, and the host exits
+  without sending anything to its browser. Before, the host could not tell
+  this from a broker restart: it voided a registration the extension had
+  already replaced, redialed, never registered, and was refused at the
+  broker's 10-second deadline. A broker restart is handled as before: the
+  host voids the registration, redials and carries the next REGISTER.
+- **"The broker is not answering" only for an outage.** The options page and
+  the popup reach the broker through the profile's own link, so a link coming
+  back fails a poll or two while the broker is up. Both now say Reconnecting
+  for the first 6 seconds of failed polls and keep the last board on screen;
+  the broker-down card appears only for a failure that lasts longer.
+
+### Added
+
+- `test/link-stale-port.test.mjs`: the extension's real link module against a
+  fake chrome whose storage answers one call per turn, so a wake source can
+  land inside any window. Six of its tests failed on 1.1.0, including five of
+  thirteen wake timings that opened a second port.
+- `test/replaced-host-e2e.test.mjs`: the real broker and hosts; a replaced
+  host exits and relays nothing, and a host whose broker restarts still
+  recovers.
+- `extension/lib/outage.js` and `test/outage-grace.test.mjs`.
+
+### Changed
+
+- The version is 1.1.1 in `package.json`, `package-lock.json` and
+  `extension/manifest.json`.
+
+### Upgrading
+
+1. `git pull`, then `npm ci`.
+2. Reload the extension in every profile FIRST (`npm run reload`, or the
+   Reload arrow on the browser's extensions page). A reload closes every port
+   the old worker held, so any host left over from the old behavior exits
+   with it, and the profile's new host starts from the pulled folder.
+3. Then restart the broker as in the 1.0.0 Upgrading section, so doctor's
+   `runtime` line reads `version 1.1.1`. Restarting it before the reload
+   leaves a 1.1.0 extension that holds an extra port exposed to the old loop.
+
 ## [1.1.0] - 2026-10-01
 
 Three features: sort a window's tabs by age, resume from panic in the
