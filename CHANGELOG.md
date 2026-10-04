@@ -9,6 +9,17 @@ from an earlier history; those versions have no tags here. Every clone made
 before 1.0.0 takes the one-time step in the 1.0.0 Upgrading section, which
 replaces the one-time steps in the earlier entries.
 
+## [Unreleased]
+
+### Added
+
+- `scripts/read-page.mjs <profile label> <url> [--comments] [--json]`: reads one
+  page in a background tab of a profile, prints its text and closes the tab. It
+  can send only open, list, read, scroll and close, and only to the tab its own
+  open returned; anything else is refused before it reaches the broker. Exit 1
+  when the page did not land, 3 when it was read but its tab could not be
+  closed. No extension, host or broker change, so no reload is needed.
+
 ## [1.1.1] - 2026-10-02
 
 A fix for a link that dropped every few seconds for hours while the broker

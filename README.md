@@ -360,6 +360,65 @@ node scripts/open-or-focus.mjs <profile label> <url or file path>
 It prints the same one line and exits non-zero if the page did not land, so a
 caller can fall back to its own opener and say so.
 
+### Reading a page in a signed-in profile, from a script
+
+For a research script that needs the text of a page only a signed-in browser can
+see (a post behind a login, a thread whose replies load as you scroll), there is
+a read command that touches nothing on the page:
+
+```bash
+node scripts/read-page.mjs <profile label> <url> [--comments] [--json]
+```
+
+It opens the address in a BACKGROUND tab of that profile, waits for it to load
+and for its text to stop changing, prints the readable text, and closes the tab.
+`--comments` scrolls the page down first, about one viewport per step and at
+most ten steps, reading after each one, so a thread that loads as it is
+scrolled is in the read, and a feed that unmounts what scrolled away keeps its
+first post. `--json` prints one object with the final URL, the title, the
+character count, the text and whether the tab was closed. The whole read has a
+two-minute deadline, and Ctrl+C ends it at the next step with the tab closed.
+
+Exit codes: 0 the page landed and its tab closed; 1 it did not land (the reason
+is on stderr, so a caller can fall back to another reader); 2 a usage error;
+3 the text was read but the tab could not be closed (a bridge reconnect, the
+panic switch), so a caller can use the text and stop reading. Text mode strips
+control characters, so a page cannot send escape sequences to the terminal;
+`--json` escapes them.
+
+**Read-only by construction.** Every request it makes goes through a wrapper
+that passes five operations, open a tab, list tabs, read a page's text, scroll
+and close a tab, and refuses everything else before it reaches the broker. It
+has no click, fill, key press, navigation or caller JavaScript, so there is no
+control on the page it can press, a like, a follow or a reply included. The
+wrapper also opens tabs in the background only, reads, scrolls and closes only
+the tab its own open returned (never a missing tab, a foreign handle or a raw
+tab id), and scrolls by direction only, never to an element. The tests check
+what it sends; a source scan catches the obvious slip, and the wrapper is the
+guarantee.
+
+**What it does not do, on purpose.** Replies behind a "show more replies" or
+"load more comments" button stay unloaded, because loading them takes a click.
+Content that loads only when the page is visible may not load in a background
+tab. In live checks, a forum thread showed its first comments without any
+scrolling and the same 58 replies after five background scroll steps, and a
+video page's comments did not load at all. So `--comments` helps where a page
+loads more on a scroll event the background tab still receives; it is not a
+promise of the whole thread.
+
+**The visit itself is real.** It presses nothing, but opening a page in a
+signed-in profile is a signed-in visit: a link that does something when it is
+opened (sign out, unsubscribe, confirm, download) does it, and a site records
+that the profile viewed or scrolled the page (profile views, read receipts,
+story views). Do not point it at such links. The tab appears in the profile's
+last-focused window while it is read.
+
+It reads through the browser's own session: it never reads, copies or exports a
+cookie, token or password, though the printed text is whatever the page shows.
+How often it is pointed at one site is the caller's job; a script that reads
+many pages should space them out and stop at the first login wall or challenge
+page.
+
 ### Which version each profile is running
 
 `browser_list_profiles` reports, for every profile, the extension version it is
