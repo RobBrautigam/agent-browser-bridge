@@ -360,6 +360,39 @@ node scripts/open-or-focus.mjs <profile label> <url or file path>
 It prints the same one line and exits non-zero if the page did not land, so a
 caller can fall back to its own opener and say so.
 
+### Reading a page in a signed-in profile, from a script
+
+For a research script that needs the text of a page only a signed-in browser can
+see (a post behind a login, a thread whose replies load as you scroll), there is
+a read command that touches nothing on the page:
+
+```bash
+node scripts/read-page.mjs <profile label> <url> [--comments] [--json]
+```
+
+It opens the address in a BACKGROUND tab of that profile, waits for it to load
+and for its text to stop growing, prints the readable text, and closes the tab.
+`--comments` scrolls the page down first, a few viewports at a time, so lazy
+comment threads have loaded before the read. `--json` prints one object with
+the final URL, the title, the character count, the text and whether the tab was
+closed. It exits 0 when the page landed with text, 1 when it did not (the reason
+is on stderr, so a caller can fall back to another reader), and 2 on a usage
+error.
+
+**Read-only by construction.** Every request it makes goes through a wrapper
+that passes five operations, open a tab, list tabs, read a page, scroll and
+close a tab, and refuses everything else before it reaches the broker. It has
+no click, fill, key press, navigation or JavaScript, so there is no control on
+the page it can press, a like, a follow or a reply included. The wrapper also
+opens tabs in the background only, scrolls by direction only (never to an
+element), and closes only the tab it opened. The tests check what it sends, and
+a source scan fails if the script ever names a write operation.
+
+It reads through the browser's own session: it never reads, copies or exports a
+cookie, token or password. How often it is pointed at one site is the caller's
+job; a script that reads many pages should space them out and stop at the first
+login wall or challenge page.
+
 ### Which version each profile is running
 
 `browser_list_profiles` reports, for every profile, the extension version it is
