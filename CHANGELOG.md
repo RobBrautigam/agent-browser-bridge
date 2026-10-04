@@ -15,9 +15,10 @@ replaces the one-time steps in the earlier entries.
 
 - `scripts/read-page.mjs <profile label> <url> [--comments] [--json]`: reads one
   page in a background tab of a profile, prints its text and closes the tab. It
-  can send only open, list, read, scroll and close; anything else is refused
-  before it reaches the broker. Exits non-zero when the page did not land. No
-  extension, host or broker change, so no reload is needed.
+  can send only open, list, read, scroll and close, and only to the tab its own
+  open returned; anything else is refused before it reaches the broker. Exit 1
+  when the page did not land, 3 when it was read but its tab could not be
+  closed. No extension, host or broker change, so no reload is needed.
 
 ## [1.1.1] - 2026-10-02
 
