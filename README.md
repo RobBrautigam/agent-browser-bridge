@@ -294,8 +294,8 @@ landing on whatever tab now holds that number.
 
 | Tier | Tools | Policy |
 |---|---|---|
-| Read | `browser_list_profiles`, `browser_list_tabs`, `browser_read_page`, `browser_screenshot`, `browser_scroll`, `bridge_status` | always allowed |
-| Write | `browser_navigate`, `browser_open_tab`, `browser_open_or_focus`, `browser_close_tab`, `browser_activate_tab`, `browser_click`, `browser_fill`, `browser_press_keys`, `browser_wait_for`, `browser_sort_window`, `browser_reload_extension` | allowed, always audited |
+| Read | `browser_list_profiles`, `browser_list_tabs`, `browser_list_groups`, `browser_read_page`, `browser_screenshot`, `browser_scroll`, `bridge_status` | always allowed |
+| Write | `browser_navigate`, `browser_open_tab`, `browser_open_or_focus`, `browser_close_tab`, `browser_activate_tab`, `browser_click`, `browser_fill`, `browser_press_keys`, `browser_wait_for`, `browser_sort_window`, `browser_group_tabs`, `browser_update_group`, `browser_move_group`, `browser_ungroup_tabs`, `browser_reload_extension` | allowed, always audited |
 | Armed | `browser_eval_js` | refused unless that profile is armed; see What arm does |
 | Control | `bridge_arm`, `bridge_panic` | |
 
@@ -312,6 +312,46 @@ Pinned tabs stay put and a tab group moves as one block, placed by its oldest
 tab. The popup has the same two buttons. A tab's age is the open time the
 extension recorded when the tab was created; tabs opened before 1.1.0 have
 none, so they are aged by when they were last shown.
+
+### Tab groups
+
+`browser_list_groups` lists each window's groups (id, title, color, collapsed,
+count, where it starts) with their tabs as handles. `browser_group_tabs` puts
+tabs into the group with that exact title in their window, in the order given,
+making the group there if the window has none. `browser_update_group` renames,
+recolors, collapses or expands one; `browser_move_group` moves one within its
+own window (`index: -1` is the end); `browser_ungroup_tabs` takes tabs out.
+
+Four rules come from the browser's own API and are enforced, not documented
+away:
+
+- **No tab changes window.** A group lives in one window, so tabs from two
+  windows are refused, a new group is always made in its tabs' own window (the
+  API's default is the current one, which would drag them there), and a group
+  is never moved to another window.
+- **Pinned tabs are refused**, because grouping a tab unpins it.
+- **A group holding its window's active tab is not collapsed.** The browser
+  would switch that window to another tab; the result's `note` says it was
+  skipped.
+- **Nothing is closed, reloaded, navigated, opened or activated.**
+
+For a whole layout, `node scripts/group-tabs.mjs <profile label> <plan.json>`
+applies a plan:
+
+```json
+{ "groups": [
+  { "title": "Decide", "color": "red", "tabs": ["tab_chrome-work_3_41", "tab_chrome-work_3_17"] },
+  { "title": "Read later", "color": "grey", "collapsed": true, "tabs": ["tab_chrome-work_3_9"] }
+] }
+```
+
+In each window as it stands, every group is filled with the plan's tabs that
+are in that window, in order, and moved to the end of the window, so the groups
+stand left to right in plan order; the collapsed ones are collapsed last; then
+everything is listed again and the script exits 1 if any tab is not in its
+group. `--dry-run` lists and plans without changing anything. The script can
+send only the four list, group, update and move operations, and refuses
+anything else before it reaches the broker.
 
 ### Showing a page to the human at the machine
 

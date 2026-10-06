@@ -29,6 +29,8 @@ import { z } from 'zod'
 
 import {
   ERR,
+  GROUP_COLORS,
+  GROUP_TITLE_MAX,
   MAX_ARM_MINUTES,
   OPS,
   PRODUCT_NAME,
@@ -698,6 +700,131 @@ function registerWriteTools(server) {
       if (Object.keys(times).length > 0) args.ages = times
       const result = await client.request({ op: OPS.SORT_WINDOW, profile, args })
       return shape.renderAction(result?.message || describeWindowSort(result), result)
+    }
+  )
+
+  const groupArg = z
+    .number()
+    .int()
+    .min(0)
+    .describe('A group id from browser_list_groups. Group ids belong to one profile and last for one browser session.')
+  const colorArg = z.enum([...GROUP_COLORS]).describe(`The group's color in the tab strip: ${GROUP_COLORS.join(', ')}.`)
+  const titleArg = z.string().min(1).max(GROUP_TITLE_MAX)
+
+  tool(
+    server,
+    'browser_list_groups',
+    {
+      title: 'List tab groups',
+      description:
+        'List the tab groups of every normal window of a profile, or of one window: each group\'s id, title, color, whether it is collapsed, how many tabs it holds and where it starts, with its tabs as handles in strip order. Also counts each window\'s pinned tabs and the tabs in no group. Titles and addresses of the tabs themselves come from browser_list_tabs, keyed by the same handles. Reads nothing inside any page.',
+      inputSchema: z.object({
+        profile: profileArg,
+        window: z.number().int().optional().describe('The windowId that browser_list_tabs reports. Every normal window when omitted.'),
+      }),
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ profile, window }) => {
+      const args = {}
+      if (window !== undefined) args.window = window
+      const result = await client.request({ op: OPS.LIST_GROUPS, profile, args })
+      return shape.renderGroups(result, { profile })
+    }
+  )
+
+  tool(
+    server,
+    'browser_group_tabs',
+    {
+      title: 'Group tabs under a title and a color',
+      description:
+        'Put tabs into the group with this exact title in their window, in the order given, creating the group there if that window has none by that title. The tabs must all be in ONE window: a group lives in one window and this never moves a tab to another window, so tabs from two windows are refused, as are pinned tabs (grouping a pinned tab unpins it). Tabs already in the group that were not named stay, ahead of the named ones. A new group forms where its first tab stands; browser_move_group places it. `collapsed: true` collapses the group, except when it holds the window\'s active tab, which collapsing would switch away from: that is skipped and said so in the result\'s note. Nothing is closed, reloaded, navigated or activated. Refused while the panic switch is on.',
+      inputSchema: z.object({
+        profile: profileArg,
+        tabs: z.array(tabArg).min(1).max(500).describe('The tabs to group, as handles from browser_list_tabs, in the order they should stand in the group.'),
+        title: titleArg.describe('The group\'s title. An existing group in that window with exactly this title is reused.'),
+        color: colorArg.optional(),
+        collapsed: z.boolean().optional().describe('Collapse (true) or expand (false) the group afterwards. Unchanged when omitted.'),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ profile, tabs, title, color, collapsed }) => {
+      const args = { tabs, title }
+      if (color !== undefined) args.color = color
+      if (collapsed !== undefined) args.collapsed = collapsed
+      const result = await client.request({ op: OPS.GROUP_TABS, profile, args })
+      return shape.renderAction(result?.message || 'Grouped.', result)
+    }
+  )
+
+  tool(
+    server,
+    'browser_update_group',
+    {
+      title: 'Rename, recolor, collapse or expand a tab group',
+      description:
+        'Change one tab group\'s title, color or collapsed state. A collapse is skipped, and said so in the note, when the group holds its window\'s active tab, because the browser would switch that window to another tab. Nothing is closed, reloaded, navigated or activated. Refused while the panic switch is on.',
+      inputSchema: z.object({
+        profile: profileArg,
+        group: groupArg,
+        title: titleArg.optional().describe('A new title.'),
+        color: colorArg.optional(),
+        collapsed: z.boolean().optional().describe('Collapse (true) or expand (false).'),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ profile, group, title, color, collapsed }) => {
+      if (title === undefined && color === undefined && collapsed === undefined) {
+        return argError('browser_update_group needs at least one of `title`, `color` or `collapsed`.')
+      }
+      const args = { group }
+      if (title !== undefined) args.title = title
+      if (color !== undefined) args.color = color
+      if (collapsed !== undefined) args.collapsed = collapsed
+      const result = await client.request({ op: OPS.UPDATE_GROUP, profile, args })
+      return shape.renderAction(result?.message || 'Updated.', result)
+    }
+  )
+
+  tool(
+    server,
+    'browser_move_group',
+    {
+      title: 'Move a tab group within its window',
+      description:
+        'Move one tab group, with all its tabs in their order, to a position in its OWN window: `index` is where its first tab goes, -1 for the end of the window. It never moves a group to another window. Pinned tabs always stay first, so an index among them lands after them. Refused while the panic switch is on.',
+      inputSchema: z.object({
+        profile: profileArg,
+        group: groupArg,
+        index: z.number().int().min(-1).describe('The tab index the group\'s first tab moves to, or -1 for the end of the window.'),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ profile, group, index }) => {
+      const result = await client.request({ op: OPS.MOVE_GROUP, profile, args: { group, index } })
+      return shape.renderAction(result?.message || 'Moved.', result)
+    }
+  )
+
+  tool(
+    server,
+    'browser_ungroup_tabs',
+    {
+      title: 'Take tabs out of their groups',
+      description:
+        'Take tabs out of their groups where they stand, or empty one group entirely (`group`). A group left with no tabs is deleted by the browser; its tabs are not touched otherwise. Name `tabs` or `group`, not both. Refused while the panic switch is on.',
+      inputSchema: z.object({
+        profile: profileArg,
+        tabs: z.array(tabArg).min(1).max(500).optional().describe('The tabs to take out of their groups, as handles.'),
+        group: groupArg.optional().describe('Ungroup every tab of this group, from browser_list_groups.'),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ profile, tabs, group }) => {
+      if ((tabs === undefined) === (group === undefined)) return argError('browser_ungroup_tabs takes `tabs` or `group`, exactly one.')
+      const args = tabs !== undefined ? { tabs } : { group }
+      const result = await client.request({ op: OPS.UNGROUP_TABS, profile, args })
+      return shape.renderAction(result?.message || 'Ungrouped.', result)
     }
   )
 

@@ -119,6 +119,11 @@ export const OPS = Object.freeze({
   EVAL_JS: 'evalJs',
   RELOAD_EXTENSION: 'reloadExtension',
   SORT_WINDOW: 'sortWindow',
+  LIST_GROUPS: 'listGroups',
+  GROUP_TABS: 'groupTabs',
+  UPDATE_GROUP: 'updateGroup',
+  MOVE_GROUP: 'moveGroup',
+  UNGROUP_TABS: 'ungroupTabs',
   SET_LABEL: 'setLabel',
   CLAIM_PROFILE: 'claimProfile',
   GET_BOARD: 'getBoard',
@@ -142,6 +147,9 @@ export const OP_TIER = Object.freeze({
   [OPS.READ_PAGE]: TIER.READ,
   [OPS.SCREENSHOT]: TIER.READ,
   [OPS.SCROLL]: TIER.READ,
+  // Which tab is in which group, and each group's title, color and state.
+  // Nothing a tab list does not already show, and nothing changes.
+  [OPS.LIST_GROUPS]: TIER.READ,
 
   [OPS.NAVIGATE]: TIER.WRITE,
   [OPS.OPEN_TAB]: TIER.WRITE,
@@ -169,6 +177,14 @@ export const OP_TIER = Object.freeze({
   // Moves tabs and never touches a page, so WRITE: the human's tab strip is
   // theirs, and the panic switch refuses it like every other write.
   [OPS.SORT_WINDOW]: TIER.WRITE,
+
+  // Tab groups: the human's tab strip again, never a page, so WRITE for the
+  // same two reasons as the sort. None of them can close, reload or navigate a
+  // tab, and none of them moves a tab or a group to another window.
+  [OPS.GROUP_TABS]: TIER.WRITE,
+  [OPS.UPDATE_GROUP]: TIER.WRITE,
+  [OPS.MOVE_GROUP]: TIER.WRITE,
+  [OPS.UNGROUP_TABS]: TIER.WRITE,
 
   [OPS.EVAL_JS]: TIER.ARMED,
 
@@ -208,6 +224,11 @@ export const BROWSER_OPS = Object.freeze([
   OPS.EVAL_JS,
   OPS.RELOAD_EXTENSION,
   OPS.SORT_WINDOW,
+  OPS.LIST_GROUPS,
+  OPS.GROUP_TABS,
+  OPS.UPDATE_GROUP,
+  OPS.MOVE_GROUP,
+  OPS.UNGROUP_TABS,
 ])
 
 /** Operations the broker answers itself, without touching a browser. */
@@ -1057,6 +1078,51 @@ export function describeWindowSort(result) {
   if (from(AGE_SOURCE.NONE) > 0) ages.push(`${from(AGE_SOURCE.NONE)} with no age, placed at the right`)
   const tail = ages.length > 0 ? ` Ages: ${ages.join(', ')}.` : ''
   return `${parts.join(', ')}.${tail}`
+}
+
+/* -------------------------------------------------------------------------- */
+/* Tab groups                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/** The colors chrome.tabGroups accepts, and nothing else. */
+export const GROUP_COLORS = Object.freeze(['grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange'])
+
+/**
+ * The longest group title this bridge sets. The browser takes any string, but
+ * a group's label is a chip in the tab strip, and a title past this is a
+ * sentence somebody meant to put somewhere else.
+ */
+export const GROUP_TITLE_MAX = 80
+
+/**
+ * Plan the order of one group's tabs, with no browser anywhere near it.
+ *
+ * `current` is the group's tabs in strip order, after the given tabs joined
+ * it. The order wanted: the members the caller did not name, where they are,
+ * then the named ones in the order named. A named tab that is not in the group
+ * (it closed, or would not join) is left out, and a repeat counts once.
+ *
+ * The moves use the window sort's trick: every tab after the longest leading
+ * run already in place moves to the group's last position, in order. Inside
+ * its own group a tab keeps its group when it moves, the group's first index
+ * and size do not change, and so the target index is the same number for every
+ * move instead of arithmetic that drifts as tabs shift.
+ *
+ * @param {{current?: number[], wanted?: number[]}} spec
+ * @returns {{order: number[], moves: number[]}}
+ */
+export function planGroupOrder({ current = [], wanted = [] } = {}) {
+  const now = (Array.isArray(current) ? current : []).filter((id) => Number.isInteger(id))
+  const present = new Set(now)
+  const named = []
+  for (const id of Array.isArray(wanted) ? wanted : []) {
+    if (present.has(id) && !named.includes(id)) named.push(id)
+  }
+  const namedSet = new Set(named)
+  const order = [...now.filter((id) => !namedSet.has(id)), ...named]
+  let inPlace = 0
+  while (inPlace < order.length && order[inPlace] === now[inPlace]) inPlace += 1
+  return { order, moves: order.slice(inPlace) }
 }
 
 /* -------------------------------------------------------------------------- */

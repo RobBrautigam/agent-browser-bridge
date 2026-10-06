@@ -82,6 +82,8 @@ const MIRRORED_CONSTANTS = [
   'RAW_TAB_ID_FIELD',
   'LOCAL_PAGE_EXTENSIONS',
   'OPEN_OR_FOCUS_MATCH',
+  'GROUP_COLORS',
+  'GROUP_TITLE_MAX',
 ]
 const SELF = path.resolve(fileURLToPath(import.meta.url))
 
