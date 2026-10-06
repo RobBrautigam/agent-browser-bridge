@@ -92,6 +92,7 @@ import { NonceLedger, authenticateHello } from '../shared/auth.mjs'
 import {
   RouteTable,
   absentLabelHolder,
+  callerArgs,
   collisionNotes,
   lineFor,
   unclaimedKey,
@@ -1629,7 +1630,9 @@ function forwardToBrowser(conn, msg, route, op) {
     return
   }
 
-  const args = { ...(msg.args && typeof msg.args === 'object' ? msg.args : {}) }
+  // A raw tab id a caller sent is dropped first (callerArgs): only the ids
+  // written below, from handles checked against this route, reach a browser.
+  const args = callerArgs(msg.args)
 
   // Opaque handles become raw tab ids here and nowhere else. The extension only
   // ever sees numbers, and a number can only reach it after this check.

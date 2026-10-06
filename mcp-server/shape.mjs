@@ -853,14 +853,19 @@ export function renderGroups(result, { profile } = {}) {
   const windows = Array.isArray(result?.windows) ? result.windows : null
   if (!windows) return text(`${profile}: unexpected listGroups payload.\n\n${jsonEcho(result)}`)
   const rows = Array.isArray(result?.tabs) ? result.tabs : []
+  const byGroup = new Map()
+  for (const t of [...rows].sort((a, b) => a.index - b.index)) {
+    const key = `${t.windowId}|${t.groupId}`
+    if (!byGroup.has(key)) byGroup.set(key, [])
+    byGroup.get(key).push(t)
+  }
   const out = [`${profile}: ${result?.message || `${windows.length} windows`}`]
   for (const w of windows) {
     out.push('')
     out.push(`window ${w.windowId}: ${w.tabs} tabs, ${w.pinned} pinned, ${w.loose} in no group, ${w.groups.length} group${w.groups.length === 1 ? '' : 's'}`)
     for (const g of w.groups) {
       out.push(`  group ${g.groupId} "${oneLine(g.title) || '(no title)'}" ${g.color}${g.collapsed ? ', collapsed' : ''}, ${g.count} tab${g.count === 1 ? '' : 's'}${g.index == null ? '' : `, from index ${g.index}`}`)
-      const members = rows.filter((t) => t.windowId === w.windowId && t.groupId === g.groupId).sort((a, b) => a.index - b.index)
-      for (const t of members) out.push(`      ${t.handle || '(no handle)'}${t.active ? '  [active]' : ''}`)
+      for (const t of byGroup.get(`${w.windowId}|${g.groupId}`) || []) out.push(`      ${t.handle || '(no handle)'}${t.active ? '  [active]' : ''}`)
     }
   }
   return text(out.join('\n'))

@@ -707,7 +707,7 @@ function registerWriteTools(server) {
     .number()
     .int()
     .min(0)
-    .describe('A group id from browser_list_groups. Group ids belong to one profile and last for one browser session.')
+    .describe('A group id from browser_list_groups for this SAME profile. Group ids are the browser\'s own numbers, not handles: an id from another profile is not refused and may name an unrelated group there. They last for one browser session.')
   const colorArg = z.enum([...GROUP_COLORS]).describe(`The group's color in the tab strip: ${GROUP_COLORS.join(', ')}.`)
   const titleArg = z.string().min(1).max(GROUP_TITLE_MAX)
 

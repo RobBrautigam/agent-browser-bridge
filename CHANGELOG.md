@@ -45,6 +45,14 @@ so the Upgrading order matters.
   when the page did not land, 3 when it was read but its tab could not be
   closed.
 
+### Fixed
+
+- **The broker drops raw tab ids a caller sends.** `tabId` and `tabIds` are
+  written by the broker from handles it has checked against the profile and
+  the browser generation; a caller who sent them directly skipped that check.
+  They are now removed before anything else in the request is read, so only
+  validated ids reach a browser. No caller in this repository sent them.
+
 ### Upgrading
 
 1. `git pull`, then `npm ci`.

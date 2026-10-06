@@ -57,6 +57,9 @@ const RAW_TAB_KEYS = ['tabId', 'tabIds']
 
 const MAX_TABS = 2_000
 
+/** The extension groups at most this many tabs in one call, and a group is one call per window. */
+const MAX_TABS_PER_GROUP = 500
+
 /**
  * Wrap a broker client so it can only list, group, update and move groups.
  *
@@ -109,6 +112,9 @@ export function parsePlan(raw) {
     if (!GROUP_COLORS.includes(color)) return { ok: false, message: `"${title}": "${color}" is not a group color (${GROUP_COLORS.join(', ')}).` }
     if (g.collapsed !== undefined && typeof g.collapsed !== 'boolean') return { ok: false, message: `"${title}": "collapsed" is true or false.` }
     if (!Array.isArray(g.tabs)) return { ok: false, message: `"${title}" has no "tabs" list.` }
+    if (g.tabs.length > MAX_TABS_PER_GROUP) {
+      return { ok: false, message: `"${title}" has ${g.tabs.length} tabs; a group takes at most ${MAX_TABS_PER_GROUP}. Split it.` }
+    }
     const tabs = []
     for (const h of g.tabs) {
       if (typeof h !== 'string' || !h) return { ok: false, message: `"${title}": every tab is a handle string.` }
@@ -184,29 +190,77 @@ export async function applyPlan({ client, profile, plan, dryRun = false }) {
   const steps = planApply({ plan, listed: before })
   if (dryRun) return { ok: true, dryRun: true, steps, before: countsOf(before) }
 
-  const made = [] // { windowId, title, groupId, collapsed, tabs }
+  const made = [] // { windowId, title, groupId, collapsed }
   const notes = []
-  let error = null
-  try {
-    for (const w of steps.windows) {
-      for (const g of w.groups) {
-        const r = await send(OPS.GROUP_TABS, { tabs: g.tabs, title: g.title, color: g.color, collapsed: false })
-        const groupId = r && r.group ? r.group.groupId : undefined
-        if (!Number.isInteger(groupId)) throw new Error(`"${g.title}" in window ${w.windowId} came back without a group id.`)
-        made.push({ windowId: w.windowId, title: g.title, groupId, collapsed: g.collapsed, tabs: g.tabs })
+  const errors = []
+  const skipped = [...steps.skipped]
+
+  // One group at a time, and a failure is that group's alone: every later group
+  // and window is still made, and the collapse pass still runs.
+  const groupOnce = async (w, g) => {
+    const r = await send(OPS.GROUP_TABS, { tabs: g.tabs, title: g.title, color: g.color, collapsed: false })
+    const groupId = r && r.group ? r.group.groupId : undefined
+    if (!Number.isInteger(groupId)) throw new Error(`"${g.title}" in window ${w.windowId} came back without a group id.`)
+    if (r.note) notes.push(r.note)
+    return groupId
+  }
+  for (const w of steps.windows) {
+    for (const g of w.groups) {
+      let groupId
+      try {
+        groupId = await groupOnce(w, g)
+      } catch (err) {
+        // A tab closed or dragged to another window since the listing fails the
+        // whole call. List again, drop the tabs no longer in this window, and
+        // try once more with the rest.
+        let retried = false
+        try {
+          const now = await send(OPS.LIST_GROUPS, {})
+          const here = new Set(((now && now.tabs) || []).filter((t) => t.windowId === w.windowId && !t.pinned).map((t) => t.handle))
+          const keep = g.tabs.filter((h) => here.has(h))
+          if (keep.length < g.tabs.length) {
+            for (const h of g.tabs.filter((x) => !here.has(x))) skipped.push({ handle: h, group: g.title, reason: 'closed or moved during the run' })
+            g.tabs = keep
+            retried = true
+            if (keep.length > 0) groupId = await groupOnce(w, g)
+          }
+        } catch (again) {
+          errors.push(`"${g.title}" in window ${w.windowId}: ${describeError(again)}`)
+          continue
+        }
+        if (!retried) {
+          errors.push(`"${g.title}" in window ${w.windowId}: ${describeError(err)}`)
+          continue
+        }
+        if (groupId === undefined) continue
+      }
+      made.push({ windowId: w.windowId, title: g.title, groupId, collapsed: g.collapsed })
+      try {
         await send(OPS.MOVE_GROUP, { group: groupId, index: -1 })
+      } catch (err) {
+        errors.push(`moving "${g.title}" in window ${w.windowId}: ${describeError(err)}`)
       }
     }
-    for (const m of made) {
-      if (!m.collapsed) continue
+  }
+  for (const m of made) {
+    if (!m.collapsed) continue
+    try {
       const r = await send(OPS.UPDATE_GROUP, { group: m.groupId, collapsed: true })
       if (r && r.note) notes.push(r.note)
+    } catch (err) {
+      errors.push(`collapsing "${m.title}" in window ${m.windowId}: ${describeError(err)}`)
     }
-  } catch (err) {
-    error = describeError(err)
   }
 
-  const after = await send(OPS.LIST_GROUPS, {})
+  // The read-back is the proof, and its failure must not lose what was done.
+  let after
+  try {
+    after = await send(OPS.LIST_GROUPS, {})
+  } catch (err) {
+    errors.push(`the read-back: ${describeError(err)}`)
+    return { ok: false, counts: null, made: made.map(({ windowId, title }) => ({ windowId, title })), misplaced: [], skipped, notes, message: errors.join(' | ') }
+  }
+  const error = errors.length > 0 ? errors.join(' | ') : null
   const titleOf = new Map()
   for (const w of (after && after.windows) || []) {
     for (const g of w.groups || []) titleOf.set(g.groupId, { title: g.title, windowId: w.windowId })
@@ -221,7 +275,7 @@ export async function applyPlan({ client, profile, plan, dryRun = false }) {
       }
     }
   }
-  const result = { ok: !error && misplaced.length === 0, counts: countsOf(after), misplaced, skipped: steps.skipped }
+  const result = { ok: !error && misplaced.length === 0, counts: countsOf(after), misplaced, skipped }
   if (notes.length > 0) result.notes = notes
   if (error) result.message = error
   return result

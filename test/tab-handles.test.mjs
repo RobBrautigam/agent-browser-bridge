@@ -141,3 +141,15 @@ test('a handle that survives a JSON round-trip still parses', () => {
   assert.equal(shipped, handle)
   assert.deepEqual(parseTabHandle(shipped), parseTabHandle(handle))
 })
+
+test('the broker drops raw tab ids a caller sent, so only ids it validated reach a browser', async () => {
+  const fs = await import('node:fs')
+  const { callerArgs } = await import('../bridged/routes.mjs')
+  const sent = { tab: 'tab_p_1_5', tabs: ['tab_p_1_6'], tabId: 812, tabIds: [812, 813], title: 'A' }
+  assert.deepEqual(callerArgs(sent), { tab: 'tab_p_1_5', tabs: ['tab_p_1_6'], title: 'A' })
+  assert.equal('tabId' in sent && 'tabIds' in sent, true, 'the caller object is not changed')
+  for (const bad of [null, undefined, 'x', [1, 2]]) assert.deepEqual(callerArgs(bad), {})
+  // And the broker builds every forwarded request's args with it.
+  const broker = fs.readFileSync(new URL('../bridged/index.mjs', import.meta.url), 'utf8')
+  assert.match(broker, /const args = callerArgs\(msg\.args\)/)
+})

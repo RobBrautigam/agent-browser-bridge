@@ -19,7 +19,7 @@
 
 import crypto from 'node:crypto'
 
-import { ERR, LINK, mintTabHandle, parseTabHandle } from '../shared/protocol.mjs'
+import { ERR, LINK, RAW_TAB_ID_FIELD, mintTabHandle, parseTabHandle } from '../shared/protocol.mjs'
 import { slugify } from '../shared/paths.mjs'
 
 /**
@@ -62,6 +62,22 @@ export function routeKey(vendor, userDataDir, profileDir) {
 /** Key for a route whose profile directory is not known yet. */
 export function unclaimedKey(installId) {
   return `install|${installId}`
+}
+
+/**
+ * A caller's request arguments, copied, without the raw tab id keys.
+ *
+ * The extension reads `tabId` and `tabIds` as tab numbers the broker has
+ * already checked: it writes them itself, from handles it validated against
+ * the route's profile and browser generation. A caller who sent them directly
+ * would skip that check, so they are dropped before anything else is read.
+ */
+export const RAW_TAB_ARG_KEYS = Object.freeze([RAW_TAB_ID_FIELD, 'tabIds'])
+
+export function callerArgs(args) {
+  const out = args && typeof args === 'object' && !Array.isArray(args) ? { ...args } : {}
+  for (const key of RAW_TAB_ARG_KEYS) delete out[key]
+  return out
 }
 
 export class RouteTable {

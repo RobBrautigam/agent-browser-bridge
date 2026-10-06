@@ -150,17 +150,50 @@ async function describe(group) {
  * Collapse a group unless it holds its window's active tab, which would make
  * the browser switch the person to another tab. Returns the note to report, or
  * null when nothing was skipped.
+ *
+ * The check is made inside the edit, so it is made again on the retry: a person
+ * who clicks into the group while a drag holds the strip is seen. What remains
+ * is the gap between one read and one write in the same task, which no API
+ * closes.
  */
 async function collapseSafely(group, collapsed, retryDelayMs) {
   if (collapsed === undefined) return null
-  if (collapsed === true) {
-    const [active] = await chrome.tabs.query({ windowId: group.windowId, active: true })
-    if (active && active.groupId === group.id) {
-      return `Left "${group.title || group.id}" open: it holds the window's active tab, and collapsing it would switch the window to another tab.`
+  let note = null
+  await edit(async () => {
+    note = null
+    if (collapsed === true) {
+      const now = await chrome.tabGroups.get(group.id)
+      const [active] = await chrome.tabs.query({ windowId: now.windowId, active: true })
+      if (active && active.groupId === group.id) {
+        note = `Left "${now.title || group.id}" open: it holds the window's active tab, and collapsing it would switch the window to another tab.`
+        return
+      }
+    }
+    await chrome.tabGroups.update(group.id, { collapsed })
+  }, retryDelayMs)
+  return note
+}
+
+/**
+ * Check, at the moment of an edit, that the tabs are still in `windowId` and
+ * unpinned and, when a group is named, that it is still in that window. A tab
+ * or a group dragged to another window since it was read would otherwise be
+ * pulled back across windows by chrome.tabs.group.
+ */
+async function stillIn(windowId, tabIds, groupId) {
+  if (groupId !== undefined) {
+    const g = await getGroup(groupId)
+    if (g.windowId !== windowId) {
+      throw bad(`Group "${g.title || groupId}" moved to another window during the call. Nothing was added to it; this never moves a tab to another window.`)
     }
   }
-  await edit(() => chrome.tabGroups.update(group.id, { collapsed }), retryDelayMs)
-  return null
+  for (const id of tabIds) {
+    const t = await getTab(id)
+    if (t.windowId !== windowId) {
+      throw bad(`Tab ${id} moved to another window during the call. It was left there; this never moves a tab to another window.`)
+    }
+    if (t.pinned) throw bad(`Tab ${id} was pinned during the call, and grouping it would unpin it.`)
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -276,28 +309,63 @@ export async function groupTabs(args = {}) {
     existing = sameName.sort((a, b) => firstIndex(a) - firstIndex(b))[0]
   }
 
-  const groupId = existing
-    ? await edit(() => chrome.tabs.group({ groupId: existing.id, tabIds }), wait)
-    : await edit(() => chrome.tabs.group({ tabIds, createProperties: { windowId } }), wait)
+  // Every tab-strip edit below re-reads what it is about to touch, inside the
+  // edit, so the drag-lock retry re-reads it too.
+  const groupId = await edit(async () => {
+    await stillIn(windowId, tabIds, existing ? existing.id : undefined)
+    return existing ? chrome.tabs.group({ groupId: existing.id, tabIds }) : chrome.tabs.group({ tabIds, createProperties: { windowId } })
+  }, wait)
 
-  // Order the group: every move stays inside the group's own span.
+  // Order the group: every move stays inside the group's own span, in its own
+  // window. A tab a person dragged elsewhere meanwhile is left where it went.
+  const notes = []
   const members = await membersOf(groupId, windowId)
   const plan = planGroupOrder({ current: members.map((t) => t.id), wanted: tabIds })
-  if (plan.moves.length > 0) {
-    const lastIndex = members[members.length - 1].index
-    for (const id of plan.moves) await edit(() => chrome.tabs.move(id, { index: lastIndex }), wait)
+  for (const id of plan.moves) {
+    await edit(async () => {
+      const t = await chrome.tabs.get(id).catch(() => null)
+      if (!t || t.windowId !== windowId || t.groupId !== groupId) return
+      const span = await membersOf(groupId, windowId)
+      await chrome.tabs.move(id, { index: span[span.length - 1].index })
+    }, wait)
   }
 
-  // A browser that let a tab slip out while ordering gets it put back once.
+  // A tab that slipped out of the group while it was ordered is put back once,
+  // but only if it is still in this window: one dragged to another window, or
+  // closed, is left alone and said so.
   const after = await membersOf(groupId, windowId)
-  const slipped = tabIds.filter((id) => !after.some((t) => t.id === id))
-  if (slipped.length > 0) await edit(() => chrome.tabs.group({ groupId, tabIds: slipped }), wait)
+  const back = []
+  let away = 0
+  for (const id of tabIds.filter((x) => !after.some((t) => t.id === x))) {
+    const t = await chrome.tabs.get(id).catch(() => null)
+    if (t && t.windowId === windowId && !t.pinned) back.push(id)
+    else away += 1
+  }
+  if (back.length > 0) {
+    await edit(async () => {
+      await stillIn(windowId, back, groupId)
+      return chrome.tabs.group({ groupId, tabIds: back })
+    }, wait)
+  }
+  if (away > 0) {
+    notes.push(`${away} of these tabs went to another window or closed during the call, and ${away === 1 ? 'was' : 'were'} left where ${away === 1 ? 'it is' : 'they are'}.`)
+  }
 
+  let still
+  try {
+    still = await chrome.tabGroups.get(groupId)
+  } catch (_err) {
+    throw bad('Every one of these tabs left this window or closed during the call, so the group is gone. Nothing was moved to another window.')
+  }
   const props = { title }
   if (color !== undefined) props.color = color
   if (collapsed === false) props.collapsed = false
-  const updated = await edit(() => chrome.tabGroups.update(groupId, props), wait)
-  const note = collapsed === true ? await collapseSafely(updated, true, wait) : null
+  const updated = await edit(() => chrome.tabGroups.update(still.id, props), wait)
+  if (collapsed === true) {
+    const skipped = await collapseSafely(updated, true, wait)
+    if (skipped) notes.push(skipped)
+  }
+  const note = notes.join(' ')
 
   const group = await describe(await chrome.tabGroups.get(groupId))
   const result = {

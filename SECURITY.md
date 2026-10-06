@@ -249,9 +249,14 @@ point of the tier:
 - **No movement between windows**, which is also no movement between profiles:
   a group is made in its tabs' own window, tabs from two windows are refused,
   and the window argument of the group move API is never passed.
-- **Group ids are scoped like tab ids.** The broker routes the call to one
-  profile's extension, which can see only its own groups, so a group id from
-  another profile finds nothing.
+- **Group ids are NOT scoped like tab ids.** They are the browser's own
+  numbers, passed through as they are, the same as the window ids
+  `browser_sort_window` takes. The call acts only in the profile it names, but
+  an id copied from another profile's listing is not refused there: in another
+  browser it may name an unrelated group, which would then be renamed, moved
+  within its window, collapsed or ungrouped. The damage is bounded by the four
+  rules above (nothing closes, navigates or changes window) and undone by
+  dragging. List groups in the profile you act on.
 
 `scripts/group-tabs.mjs` narrows this further: its client refuses every
 operation except list, group, update and move, refuses raw tab ids, and so

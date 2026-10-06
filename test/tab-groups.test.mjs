@@ -107,6 +107,19 @@ function fakeChrome({ windows, current, blockEdits = 0 }) {
     )
   }
   let blocked = blockEdits
+  // A person acting at the moment of an edit: atEdit(n, fn) runs fn as the nth
+  // edit from now starts, before the browser applies (or refuses) it.
+  let edits = 0
+  const hooks = new Map()
+  const afterHooks = new Map()
+  // afterEdit(n, fn) runs fn once the nth edit from now has been applied.
+  const done = () => {
+    const hook = afterHooks.get(edits)
+    if (hook) {
+      afterHooks.delete(edits)
+      hook()
+    }
+  }
 
   const view = (tab) => {
     const strip = strips.get(tab.windowId)
@@ -120,6 +133,12 @@ function fakeChrome({ windows, current, blockEdits = 0 }) {
     return null
   }
   const gate = () => {
+    edits += 1
+    const hook = hooks.get(edits)
+    if (hook) {
+      hooks.delete(edits)
+      hook()
+    }
     if (blocked > 0) {
       blocked -= 1
       throw new Error(EDIT_BLOCKED)
@@ -229,6 +248,7 @@ function fakeChrome({ windows, current, blockEdits = 0 }) {
           }
         }
         prune()
+        done()
         return gid
       },
       async ungroup(tabIds) {
@@ -296,7 +316,26 @@ function fakeChrome({ windows, current, blockEdits = 0 }) {
     const t = find(tabId)
     return t && t.groupId !== -1 ? groups.get(t.groupId) : null
   }
-  return { chrome, events, strip, groupOf, groups }
+  // What a person does with the mouse, recorded as no event: dragging a tab to
+  // another window takes it out of its group; clicking a tab activates it.
+  const personMoves = (tabId, windowId) => {
+    const t = find(tabId)
+    const from = strips.get(t.windowId)
+    from.splice(from.indexOf(t), 1)
+    t.windowId = windowId
+    t.groupId = -1
+    t.active = false
+    strips.get(windowId).push(t)
+    prune()
+  }
+  const personActivates = (tabId) => {
+    const t = find(tabId)
+    for (const x of strips.get(t.windowId)) x.active = false
+    t.active = true
+  }
+  const atEdit = (n, fn) => hooks.set(edits + n, fn)
+  const afterEdit = (n, fn) => afterHooks.set(edits + n, fn)
+  return { chrome, events, strip, groupOf, groups, atEdit, afterEdit, personMoves, personActivates }
 }
 
 async function loadGroups(fake) {
@@ -463,6 +502,60 @@ test('the list shows every normal window\'s groups and which tab is in which', a
   await assert.rejects(g.listGroups({ window: 5 }), (err) => err.code === 'E_BAD_REQUEST')
 })
 
+test('a tab dragged to another window during a drag-lock retry is refused, not pulled back', async () => {
+  const fake = fakeChrome({ windows: { [W1]: [{ id: 1 }, { id: 2 }, { id: 3 }], [W2]: [{ id: 9 }] }, current: W1, blockEdits: 1 })
+  const g = await loadGroups(fake)
+  fake.atEdit(1, () => fake.personMoves(2, W2))
+  await assert.rejects(
+    g.groupTabs({ tabIds: [1, 2], title: 'A', retryDelayMs: 0 }),
+    (err) => err.code === 'E_BAD_REQUEST' && /window/.test(err.message)
+  )
+  assert.deepEqual(fake.events.filter((e) => e.kind === 'crossWindow'), [])
+  assert.deepEqual(fake.strip(W2), [9, 2])
+})
+
+test('a tab dragged to another window while the group is ordered is left there, and said so', async () => {
+  const fake = fakeChrome({ windows: { [W1]: [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }], [W2]: [{ id: 9 }] }, current: W1 })
+  const g = await loadGroups(fake)
+  // Edit 1 makes the group; the person drags tab 1 away right after it.
+  fake.afterEdit(1, () => fake.personMoves(1, W2))
+  const result = await g.groupTabs({ tabIds: [3, 1], title: 'A', retryDelayMs: 0 })
+  assert.deepEqual(fake.events.filter((e) => e.kind === 'crossWindow'), [])
+  assert.deepEqual(fake.strip(W2), [9, 1])
+  assert.equal(fake.groupOf(1), null)
+  assert.equal(result.group.count, 1)
+  assert.match(result.note, /another window/)
+})
+
+test('a group dragged to another window before tabs are added to it is refused', async () => {
+  const fake = fakeChrome({
+    windows: { [W1]: [{ id: 1, group: { key: 'a', title: 'A' } }, { id: 2 }], [W2]: [{ id: 9 }] },
+    current: W1,
+    blockEdits: 1,
+  })
+  const g = await loadGroups(fake)
+  const groupId = fake.groupOf(1).id
+  fake.atEdit(1, () => {
+    fake.groups.get(groupId).windowId = W2
+  })
+  await assert.rejects(g.groupTabs({ tabIds: [2], title: 'A', retryDelayMs: 0 }), (err) => err.code === 'E_BAD_REQUEST')
+  assert.deepEqual(fake.events.filter((e) => e.kind === 'crossWindow'), [])
+})
+
+test('the active-tab check runs at the moment of the collapse, so a click during a retry is honored', async () => {
+  const fake = fakeChrome({
+    windows: { [W1]: [{ id: 1, active: true }, { id: 2, group: { key: 'a', title: 'A' } }, { id: 3, group: { key: 'a', title: 'A' } }] },
+    current: W1,
+    blockEdits: 1,
+  })
+  const g = await loadGroups(fake)
+  fake.atEdit(1, () => fake.personActivates(2))
+  const result = await g.updateGroup({ group: fake.groupOf(2).id, collapsed: true, retryDelayMs: 0 })
+  assert.equal(result.group.collapsed, false)
+  assert.match(result.note, /active tab/)
+  assert.deepEqual(fake.events.filter((e) => e.kind === 'activated'), [])
+})
+
 test('the MCP rendering lists each group with its tabs as handles, in strip order', async () => {
   const { renderGroups } = await import('../mcp-server/shape.mjs')
   const out = renderGroups(
@@ -587,5 +680,61 @@ test('a tab that did not land in its group makes the apply fail', async () => {
   const result = await script.applyPlan({ client, profile: 'p', plan: { groups: [{ title: 'A', color: 'red', collapsed: false, tabs: ['h1'] }] } })
   assert.equal(result.ok, false)
   assert.deepEqual(result.misplaced, [{ handle: 'h1', group: 'A' }])
+  assert.equal(script.exitCodeFor(result), 1)
+})
+
+test('a plan refuses a group of more than 500 tabs, the most one call groups', () => {
+  const tabs = Array.from({ length: 501 }, (_, i) => `tab_p_1_${i}`)
+  const r = script.parsePlan({ groups: [{ title: 'A', tabs }] })
+  assert.equal(r.ok, false)
+  assert.match(r.message, /500/)
+})
+
+test('a tab closed during the run is skipped, and every later group is still made', async () => {
+  const sent = []
+  let lists = 0
+  const gone = Object.assign(new Error('Tab 5 no longer exists in this profile.'), { code: 'E_TAB_GONE' })
+  const client = {
+    async request(msg) {
+      sent.push(msg.op)
+      if (msg.op === OPS.LIST_GROUPS) {
+        lists += 1
+        if (lists === 1) {
+          return { windows: [{ windowId: W1, groups: [] }], tabs: [{ handle: 'h1', windowId: W1 }, { handle: 'h2', windowId: W1 }, { handle: 'h3', windowId: W1 }] }
+        }
+        if (lists === 2) return { windows: [{ windowId: W1, groups: [] }], tabs: [{ handle: 'h1', windowId: W1 }, { handle: 'h3', windowId: W1 }] }
+        return {
+          windows: [{ windowId: W1, groups: [{ groupId: 7, title: 'A', count: 1 }, { groupId: 8, title: 'B', count: 1 }] }],
+          tabs: [{ handle: 'h1', windowId: W1, groupId: 7 }, { handle: 'h3', windowId: W1, groupId: 8 }],
+        }
+      }
+      if (msg.op === OPS.GROUP_TABS && msg.args.tabs.includes('h2')) throw gone
+      if (msg.op === OPS.GROUP_TABS) return { group: { groupId: msg.args.title === 'A' ? 7 : 8 } }
+      return { group: { groupId: msg.args.group } }
+    },
+  }
+  const plan = { groups: [{ title: 'A', color: 'red', collapsed: false, tabs: ['h1', 'h2'] }, { title: 'B', color: 'blue', collapsed: false, tabs: ['h3'] }] }
+  const result = await script.applyPlan({ client, profile: 'p', plan })
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.deepEqual(result.skipped, [{ handle: 'h2', group: 'A', reason: 'closed or moved during the run' }])
+  assert.deepEqual(sent.filter((op) => op === OPS.GROUP_TABS).length, 3)
+})
+
+test('a failed read-back still returns what was done, with the reason', async () => {
+  let lists = 0
+  const client = {
+    async request(msg) {
+      if (msg.op === OPS.LIST_GROUPS) {
+        lists += 1
+        if (lists === 1) return { windows: [{ windowId: W1, groups: [] }], tabs: [{ handle: 'h1', windowId: W1 }] }
+        throw Object.assign(new Error('Profile "p" is stale.'), { code: 'E_PROFILE_STALE' })
+      }
+      return { group: { groupId: 7 } }
+    },
+  }
+  const result = await script.applyPlan({ client, profile: 'p', plan: { groups: [{ title: 'A', color: 'red', collapsed: false, tabs: ['h1'] }] } })
+  assert.equal(result.ok, false)
+  assert.match(result.message, /the read-back/)
+  assert.deepEqual(result.made, [{ windowId: W1, title: 'A' }])
   assert.equal(script.exitCodeFor(result), 1)
 })
