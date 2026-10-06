@@ -243,12 +243,20 @@ point of the tier:
 - **No content.** Listing groups returns titles, colors and tab handles; no
   page is read and no address is returned that `browser_list_tabs` does not
   already return.
-- **No navigation, no close, no reload, no activation.** None of the five calls
+- **No navigation, no close, no reload, no activation.** None of the six calls
   a tab API that does any of these. Collapsing a group that holds the active
   tab would make the browser activate another tab, so that collapse is skipped.
-- **No movement between windows**, which is also no movement between profiles:
-  a group is made in its tabs' own window, tabs from two windows are refused,
-  and the window argument of the group move API is never passed.
+  Moving a group that holds its window's active tab would too, twice: the
+  browser carries that tab along and shows it in the target window, and shows
+  another tab (a discarded one reloads when shown) in the window it left. So
+  such a group is never moved; it is reported as held.
+- **No movement between profiles, and between windows only by name.** A group
+  is made in its tabs' own window and tabs from two windows are refused. The
+  window argument of the group move API is passed by one operation only,
+  `browser_gather_group`, with the window the caller named, and it moves whole
+  groups of one exact title, never a single tab. The browser itself refuses a
+  move to a window of another profile. No window is emptied: every window's
+  active tab stays in it, so a gather never closes a window.
 - **Group ids are NOT scoped like tab ids.** They are the browser's own
   numbers, passed through as they are, the same as the window ids
   `browser_sort_window` takes. The call acts only in the profile it names, but
@@ -260,7 +268,9 @@ point of the tier:
 
 `scripts/group-tabs.mjs` narrows this further: its client refuses every
 operation except list, group, update and move, refuses raw tab ids, and so
-cannot ungroup, close or navigate even if the script itself were wrong.
+cannot ungroup, close or navigate even if the script itself were wrong. A plan
+that names a host window adds the gather to that list, and the client refuses
+a gather into any other window.
 
 ## Reporting a vulnerability
 

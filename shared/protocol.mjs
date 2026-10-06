@@ -124,6 +124,7 @@ export const OPS = Object.freeze({
   UPDATE_GROUP: 'updateGroup',
   MOVE_GROUP: 'moveGroup',
   UNGROUP_TABS: 'ungroupTabs',
+  GATHER_GROUP: 'gatherGroup',
   SET_LABEL: 'setLabel',
   CLAIM_PROFILE: 'claimProfile',
   GET_BOARD: 'getBoard',
@@ -180,11 +181,14 @@ export const OP_TIER = Object.freeze({
 
   // Tab groups: the human's tab strip again, never a page, so WRITE for the
   // same two reasons as the sort. None of them can close, reload or navigate a
-  // tab, and none of them moves a tab or a group to another window.
+  // tab, and none of them moves a tab or a group to another window, except the
+  // gather, which exists to: it brings every group of one title into one named
+  // window and folds them into one, and has to be asked for by name.
   [OPS.GROUP_TABS]: TIER.WRITE,
   [OPS.UPDATE_GROUP]: TIER.WRITE,
   [OPS.MOVE_GROUP]: TIER.WRITE,
   [OPS.UNGROUP_TABS]: TIER.WRITE,
+  [OPS.GATHER_GROUP]: TIER.WRITE,
 
   [OPS.EVAL_JS]: TIER.ARMED,
 
@@ -229,6 +233,7 @@ export const BROWSER_OPS = Object.freeze([
   OPS.UPDATE_GROUP,
   OPS.MOVE_GROUP,
   OPS.UNGROUP_TABS,
+  OPS.GATHER_GROUP,
 ])
 
 /** Operations the broker answers itself, without touching a browser. */

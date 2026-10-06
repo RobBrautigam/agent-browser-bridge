@@ -295,7 +295,7 @@ landing on whatever tab now holds that number.
 | Tier | Tools | Policy |
 |---|---|---|
 | Read | `browser_list_profiles`, `browser_list_tabs`, `browser_list_groups`, `browser_read_page`, `browser_screenshot`, `browser_scroll`, `bridge_status` | always allowed |
-| Write | `browser_navigate`, `browser_open_tab`, `browser_open_or_focus`, `browser_close_tab`, `browser_activate_tab`, `browser_click`, `browser_fill`, `browser_press_keys`, `browser_wait_for`, `browser_sort_window`, `browser_group_tabs`, `browser_update_group`, `browser_move_group`, `browser_ungroup_tabs`, `browser_reload_extension` | allowed, always audited |
+| Write | `browser_navigate`, `browser_open_tab`, `browser_open_or_focus`, `browser_close_tab`, `browser_activate_tab`, `browser_click`, `browser_fill`, `browser_press_keys`, `browser_wait_for`, `browser_sort_window`, `browser_group_tabs`, `browser_update_group`, `browser_move_group`, `browser_ungroup_tabs`, `browser_gather_group`, `browser_reload_extension` | allowed, always audited |
 | Armed | `browser_eval_js` | refused unless that profile is armed; see What arm does |
 | Control | `bridge_arm`, `bridge_panic` | |
 
@@ -321,14 +321,21 @@ tabs into the group with that exact title in their window, in the order given,
 making the group there if the window has none. `browser_update_group` renames,
 recolors, collapses or expands one; `browser_move_group` moves one within its
 own window (`index: -1` is the end); `browser_ungroup_tabs` takes tabs out.
+`browser_gather_group` is the opt-in exception to staying in one window: given
+a title and a window, it brings every group of that title from every window
+into that one and folds them into one group.
 
 Four rules come from the browser's own API and are enforced, not documented
 away:
 
-- **No tab changes window.** A group lives in one window, so tabs from two
-  windows are refused, a new group is always made in its tabs' own window (the
-  API's default is the current one, which would drag them there), and a group
-  is never moved to another window.
+- **No tab changes window on its own.** A group lives in one window, so tabs
+  from two windows are refused, a new group is always made in its tabs' own
+  window (the API's default is the current one, which would drag them there),
+  and only `browser_gather_group` moves anything to another window: whole
+  groups, into the window it was named. A group holding its window's active
+  tab never moves: the browser would carry that tab along and show it in the
+  named window, and show another tab in the window it left. So no window is
+  emptied by a gather.
 - **Pinned tabs are refused**, because grouping a tab unpins it.
 - **A group holding its window's active tab is not collapsed.** The browser
   would switch that window to another tab; the result's `note` says it was
@@ -352,6 +359,26 @@ everything is listed again and the script exits 1 if any tab is not in its
 group. `--dry-run` lists and plans without changing anything. The script can
 send only the four list, group, update and move operations, and refuses
 anything else before it reaches the broker.
+
+To gather a layout into one window instead, add `"window"`: a window id, or
+`"last-focused"` for the window used last (`browser_list_groups` marks it).
+
+```json
+{ "window": "last-focused", "groups": [
+  { "title": "Decide", "color": "red", "tabs": [] },
+  { "title": "Read later", "color": "grey", "collapsed": true, "tabs": [] }
+] }
+```
+
+Every group of each planned title, in every window, is gathered into that
+window and folded into one, then the groups are lined up left to right in plan
+order, colored and collapsed as planned. A group holding its window's active
+tab stays where it is and is reported; show another tab in that window and
+run the plan again to bring it in. Tabs named in `tabs` join their group when they are in
+that window; one in another window and in no group of that title is left
+there and reported. The read-back fails while a planned title still stands in
+more than one group or outside that window. With `"window"` set, and only
+then, the script's client also passes the gather, and only into that window.
 
 ### Showing a page to the human at the machine
 

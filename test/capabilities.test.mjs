@@ -326,6 +326,9 @@ test('the WRITE tier is exactly the ops that change something and need no arm', 
     OPS.UPDATE_GROUP,
     OPS.MOVE_GROUP,
     OPS.UNGROUP_TABS,
+    // The one way a group changes window, opt-in and named for it: every
+    // group of one title is brought into one window and folded into one.
+    OPS.GATHER_GROUP,
   ]
   for (const op of expectedWrite) {
     assert.equal(OP_TIER[op], TIER.WRITE, `${op} must be a write op`)
@@ -362,7 +365,7 @@ test('control and housekeeping ops are META and never reach a page', () => {
 /* 5. The routing partition: who EXECUTES an op                                */
 /* -------------------------------------------------------------------------- */
 
-test('BROWSER_OPS is exactly the twenty-one ops that cross into the extension', () => {
+test('BROWSER_OPS is exactly the twenty-two ops that cross into the extension', () => {
   // Pinned as a literal list rather than derived from OP_TIER. The first build
   // derived it as "not META, plus SET_LABEL", which quietly made the META tier
   // mean two different things. Tier answers "what policy applies"; this answers
@@ -374,6 +377,7 @@ test('BROWSER_OPS is exactly the twenty-one ops that cross into the extension', 
     OPS.CLOSE_TAB,
     OPS.EVAL_JS,
     OPS.FILL,
+    OPS.GATHER_GROUP,
     OPS.GROUP_TABS,
     OPS.LIST_GROUPS,
     OPS.LIST_TABS,
@@ -391,7 +395,7 @@ test('BROWSER_OPS is exactly the twenty-one ops that cross into the extension', 
     OPS.UPDATE_GROUP,
     OPS.WAIT_FOR,
   ].sort())
-  assert.equal(BROWSER_OPS.length, 21)
+  assert.equal(BROWSER_OPS.length, 22)
   assert.ok(Object.isFrozen(BROWSER_OPS))
 })
 

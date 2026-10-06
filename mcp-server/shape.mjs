@@ -862,7 +862,8 @@ export function renderGroups(result, { profile } = {}) {
   const out = [`${profile}: ${result?.message || `${windows.length} windows`}`]
   for (const w of windows) {
     out.push('')
-    out.push(`window ${w.windowId}: ${w.tabs} tabs, ${w.pinned} pinned, ${w.loose} in no group, ${w.groups.length} group${w.groups.length === 1 ? '' : 's'}`)
+    const last = w.windowId === result?.lastFocusedWindowId ? ' (used last)' : ''
+    out.push(`window ${w.windowId}${last}: ${w.tabs} tabs, ${w.pinned} pinned, ${w.loose} in no group, ${w.groups.length} group${w.groups.length === 1 ? '' : 's'}`)
     for (const g of w.groups) {
       out.push(`  group ${g.groupId} "${oneLine(g.title) || '(no title)'}" ${g.color}${g.collapsed ? ', collapsed' : ''}, ${g.count} tab${g.count === 1 ? '' : 's'}${g.index == null ? '' : `, from index ${g.index}`}`)
       for (const t of byGroup.get(`${w.windowId}|${g.groupId}`) || []) out.push(`      ${t.handle || '(no handle)'}${t.active ? '  [active]' : ''}`)

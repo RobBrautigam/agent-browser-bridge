@@ -717,7 +717,7 @@ function registerWriteTools(server) {
     {
       title: 'List tab groups',
       description:
-        'List the tab groups of every normal window of a profile, or of one window: each group\'s id, title, color, whether it is collapsed, how many tabs it holds and where it starts, with its tabs as handles in strip order. Also counts each window\'s pinned tabs and the tabs in no group. Titles and addresses of the tabs themselves come from browser_list_tabs, keyed by the same handles. Reads nothing inside any page.',
+        'List the tab groups of every normal window of a profile, or of one window: each group\'s id, title, color, whether it is collapsed, how many tabs it holds and where it starts, with its tabs as handles in strip order. Also counts each window\'s pinned tabs and the tabs in no group, and marks the window the person used last. Titles and addresses of the tabs themselves come from browser_list_tabs, keyed by the same handles. Reads nothing inside any page.',
       inputSchema: z.object({
         profile: profileArg,
         window: z.number().int().optional().describe('The windowId that browser_list_tabs reports. Every normal window when omitted.'),
@@ -792,7 +792,7 @@ function registerWriteTools(server) {
     {
       title: 'Move a tab group within its window',
       description:
-        'Move one tab group, with all its tabs in their order, to a position in its OWN window: `index` is where its first tab goes, -1 for the end of the window. It never moves a group to another window. Pinned tabs always stay first, so an index among them lands after them. Refused while the panic switch is on.',
+        'Move one tab group, with all its tabs in their order, to a position in its OWN window: `index` is where its first tab goes, -1 for the end of the window. It never moves a group to another window (browser_gather_group is the one tool that does). Pinned tabs always stay first, so an index among them lands after them. Refused while the panic switch is on.',
       inputSchema: z.object({
         profile: profileArg,
         group: groupArg,
@@ -803,6 +803,26 @@ function registerWriteTools(server) {
     async ({ profile, group, index }) => {
       const result = await client.request({ op: OPS.MOVE_GROUP, profile, args: { group, index } })
       return shape.renderAction(result?.message || 'Moved.', result)
+    }
+  )
+
+  tool(
+    server,
+    'browser_gather_group',
+    {
+      title: 'Gather every group of one title into one window',
+      description:
+        'Bring every tab group with exactly this title, from every window of the profile, into ONE window and fold them into one group there. Each group in another window moves whole, in its order, to the end of that window; then the window\'s groups of that title fold into its leftmost one, and the browser deletes the emptied ones. The group kept is that window\'s own when it had one, so its color and state stay; browser_update_group and browser_move_group place and color it. This is the only tool that moves anything to another window, and it moves only whole groups. A group holding its window\'s active tab is never moved (the browser would carry that tab along and show it in the target window, and show another tab in the window it left): it is listed in `held` and said so in the note, so no window is ever emptied. A group that cannot be moved is listed in `failed`, and the rest still move and fold. Nothing is closed, reloaded, navigated, pinned or activated. Refused while the panic switch is on.',
+      inputSchema: z.object({
+        profile: profileArg,
+        title: titleArg.describe('The exact title of the groups to gather. Matched exactly, not as a pattern.'),
+        window: z.number().int().nonnegative().describe('The window to gather into, a windowId from browser_list_groups (whose result also names the window used last, lastFocusedWindowId).'),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ profile, title, window }) => {
+      const result = await client.request({ op: OPS.GATHER_GROUP, profile, args: { title, window } })
+      return shape.renderAction(result?.message || 'Gathered.', result)
     }
   )
 
