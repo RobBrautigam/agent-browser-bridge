@@ -333,9 +333,9 @@ away:
   window (the API's default is the current one, which would drag them there),
   and only `browser_gather_group` moves anything to another window: whole
   groups, into the window it was named. A group holding its window's active
-  tab moves only once nothing else is left in that window, because the browser
-  would otherwise show another tab there; a window left empty closes, as a
-  browser window does when its last tab leaves.
+  tab never moves: the browser would carry that tab along and show it in the
+  named window, and show another tab in the window it left. So no window is
+  emptied by a gather.
 - **Pinned tabs are refused**, because grouping a tab unpins it.
 - **A group holding its window's active tab is not collapsed.** The browser
   would switch that window to another tab; the result's `note` says it was
@@ -372,9 +372,9 @@ To gather a layout into one window instead, add `"window"`: a window id, or
 
 Every group of each planned title, in every window, is gathered into that
 window and folded into one, then the groups are lined up left to right in plan
-order, colored and collapsed as planned. A group whose window still holds
-other tabs while it holds that window's active tab is tried again after every
-other title has moved. Tabs named in `tabs` join their group when they are in
+order, colored and collapsed as planned. A group holding its window's active
+tab stays where it is and is reported; show another tab in that window and
+run the plan again to bring it in. Tabs named in `tabs` join their group when they are in
 that window; one in another window and in no group of that title is left
 there and reported. The read-back fails while a planned title still stands in
 more than one group or outside that window. With `"window"` set, and only

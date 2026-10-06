@@ -34,11 +34,10 @@
  * into one group per title, then lines them up left to right in plan order.
  * A whole group moving is the only thing that changes window: a planned tab
  * that is in another window and in no group of that title is left there and
- * reported. A group holding its window's active tab moves only once nothing
- * else is left in that window (otherwise the browser would show another tab
- * there); a window emptied this way closes, as a browser window does when its
- * last tab leaves. The read-back fails while any planned title still stands
- * in more than one group or outside that window.
+ * reported. A group holding its window's active tab never moves (the browser
+ * would carry that tab along and show it in the host window), so no window is
+ * emptied. The read-back fails while any planned title still stands in more
+ * than one group or outside that window.
  *
  *   { "window": "last-focused", "groups": [ { "title": "Decide", "color": "red", "tabs": [] }, ... ] }
  *
@@ -346,24 +345,14 @@ async function applyGather({ client, profile, plan, dryRun, before }) {
   const errors = []
 
   // Every title, in plan order. A group holding its window's active tab is
-  // left until that window holds nothing else, so the held ones go again once
-  // every other title has left their windows.
-  const gatherOnce = async (title) => {
-    try {
-      return await send(OPS.GATHER_GROUP, { title, window: host })
-    } catch (err) {
-      errors.push(`gathering "${title}": ${describeError(err)}`)
-      return null
-    }
-  }
-  const held = []
+  // held by the extension and stays a stray in the read-back.
   for (const g of plan.groups) {
-    const r = await gatherOnce(g.title)
-    if (r && Array.isArray(r.held) && r.held.length > 0) held.push(g.title)
-  }
-  for (const title of held) {
-    const r = await gatherOnce(title)
-    if (r && r.note) notes.push(r.note)
+    try {
+      const r = await send(OPS.GATHER_GROUP, { title: g.title, window: host })
+      if (r && r.note) notes.push(r.note)
+    } catch (err) {
+      errors.push(`gathering "${g.title}": ${describeError(err)}`)
+    }
   }
 
   // Named tabs in the host join their group; each group then goes to the end
@@ -401,10 +390,15 @@ async function applyGather({ client, profile, plan, dryRun, before }) {
         await send(OPS.UPDATE_GROUP, props)
       }
       if (!Number.isInteger(groupId)) throw new Error('came back without a group id.')
-      made.push({ title: g.title, groupId, collapsed: g.collapsed })
-      await send(OPS.MOVE_GROUP, { group: groupId, index: -1 })
     } catch (err) {
       errors.push(`"${g.title}" in window ${host}: ${describeError(err)}`)
+      continue
+    }
+    made.push({ title: g.title, groupId, collapsed: g.collapsed })
+    try {
+      await send(OPS.MOVE_GROUP, { group: groupId, index: -1 })
+    } catch (err) {
+      errors.push(`moving "${g.title}" in window ${host}: ${describeError(err)}`)
     }
   }
   for (const m of made) {
@@ -447,7 +441,7 @@ async function applyGather({ client, profile, plan, dryRun, before }) {
   const result = { ok: errors.length === 0 && strays.length === 0 && misplaced.length === 0, host, counts: countsOf(after), misplaced, strays, skipped }
   if (notes.length > 0) result.notes = notes
   if (errors.length > 0) result.message = errors.join(' | ')
-  else if (strays.length > 0) result.message = `${strays.length} group${strays.length === 1 ? '' : 's'} still outside window ${host}.`
+  else if (strays.length > 0) result.message = `${strays.length} group${strays.length === 1 ? '' : 's'} not gathered into one per title in window ${host}.`
   return result
 }
 
@@ -475,7 +469,7 @@ const USAGE =
   '\n' +
   'With "window" in the plan (a window id, or "last-focused"), every group of each planned title is\n' +
   'gathered from every window into that one and folded into one group per title: a whole group\n' +
-  'moving is the only thing that changes window, and a window left empty closes.\n' +
+  'moving is the only thing that changes window, and a group holding its window\'s active tab stays.\n' +
   'Exit: 0 every tab in its group, 1 something did not land, 2 usage or a bad plan.'
 
 export function parseArgs(argv) {
@@ -517,7 +511,13 @@ function summary(result) {
   }
   for (const s of result.skipped || (result.steps && result.steps.skipped) || []) lines.push(`skipped ${s.handle} (${s.group}): ${s.reason}`)
   for (const m of result.misplaced || []) lines.push(`NOT IN ITS GROUP: ${m.handle} should be in "${m.group}"`)
-  for (const s of result.strays || []) lines.push(`STILL OUTSIDE WINDOW ${result.host}: "${s.title}", ${s.count} tabs in window ${s.windowId}`)
+  for (const s of result.strays || []) {
+    lines.push(
+      s.windowId === result.host
+        ? `NOT FOLDED: a second "${s.title}" group, ${s.count} tabs, in window ${s.windowId}`
+        : `STILL OUTSIDE WINDOW ${result.host}: "${s.title}", ${s.count} tabs in window ${s.windowId}`
+    )
+  }
   for (const n of result.notes || []) lines.push(`note: ${n}`)
   return lines.join('\n')
 }

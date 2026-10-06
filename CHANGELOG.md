@@ -26,16 +26,18 @@ window and folded into one group there.
   that title fold into its leftmost one (`chrome.tabs.group` with that group's
   id) and the browser deletes the emptied ones. It is the only operation that
   moves anything to another window, and it moves only whole groups. A group
-  holding its window's active tab is left, and said so, while that window has
-  other tabs; a window left empty closes and is listed in `closedWindows`.
-  Nothing is closed, reloaded, navigated, pinned or activated.
+  holding its window's active tab never moves and is reported in `held`, since
+  the browser would carry that tab along and show it in the target window, so
+  no window is ever emptied; a group that cannot move is reported in `failed`
+  and the rest still move and fold. A negative window id (the browser's
+  "current window") is refused. Nothing is closed, reloaded, navigated, pinned
+  or activated.
 - **`browser_list_groups` names the window used last** (`lastFocusedWindowId`,
   the same read the bridge uses to choose where a page opens), marked
   "(used last)" in the listing.
 - **`scripts/group-tabs.mjs` plans take `"window"`**: a window id, or
   `"last-focused"`. Every planned title is gathered into that window and folded
-  into one group, held groups are tried again after the rest have moved, the
-  groups are lined up left to right in plan order with their colors and
+  into one group, the groups are lined up left to right in plan order with their colors and
   collapsed state, and the read-back exits 1 while a title still stands in more
   than one group or outside that window. Without `"window"` nothing changes,
   and the script's client still refuses the gather.
