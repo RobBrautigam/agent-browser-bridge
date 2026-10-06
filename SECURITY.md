@@ -233,6 +233,35 @@ What it does not defend, stated plainly:
   not recognized. Most sign-in and sign-up forms say what their fields are,
   because password managers depend on it.
 
+## Grouping tabs
+
+The tab group operations are WRITE tier, like sorting a window: audited,
+refused while the panic switch is on, no arm. What they can do is rearrange a
+tab strip, which a person can undo by dragging; what they cannot do is the
+point of the tier:
+
+- **No content.** Listing groups returns titles, colors and tab handles; no
+  page is read and no address is returned that `browser_list_tabs` does not
+  already return.
+- **No navigation, no close, no reload, no activation.** None of the five calls
+  a tab API that does any of these. Collapsing a group that holds the active
+  tab would make the browser activate another tab, so that collapse is skipped.
+- **No movement between windows**, which is also no movement between profiles:
+  a group is made in its tabs' own window, tabs from two windows are refused,
+  and the window argument of the group move API is never passed.
+- **Group ids are NOT scoped like tab ids.** They are the browser's own
+  numbers, passed through as they are, the same as the window ids
+  `browser_sort_window` takes. The call acts only in the profile it names, but
+  an id copied from another profile's listing is not refused there: in another
+  browser it may name an unrelated group, which would then be renamed, moved
+  within its window, collapsed or ungrouped. The damage is bounded by the four
+  rules above (nothing closes, navigates or changes window) and undone by
+  dragging. List groups in the profile you act on.
+
+`scripts/group-tabs.mjs` narrows this further: its client refuses every
+operation except list, group, update and move, refuses raw tab ids, and so
+cannot ungroup, close or navigate even if the script itself were wrong.
+
 ## Reporting a vulnerability
 
 Open a private security advisory on the GitHub repository (Security tab,

@@ -39,6 +39,7 @@ import {
 import { buildSnapshot, clearSnapshot, resolveRef, snapshotMeta } from './snapshot.js'
 import * as inject from './inject.js'
 import { sortWindowsByAge } from './tab-ages.js'
+import * as tabGroups from './tab-groups.js'
 
 /** CDP version pinned for chrome.debugger.attach. */
 const DEBUGGER_PROTOCOL_VERSION = '1.3'
@@ -1733,6 +1734,22 @@ async function sortWindow(args) {
   return sortWindowsByAge({ windowId, ages })
 }
 
+/**
+ * The tab group operations. lib/tab-groups.js does the work and throws a
+ * GroupError with a protocol code; the service worker reports only an OpError
+ * by its code, so the error is carried across here.
+ */
+function groupOp(fn) {
+  return async (args) => {
+    try {
+      return await fn(args)
+    } catch (err) {
+      if (err instanceof tabGroups.GroupError) throw new OpError(err.code, err.message)
+      throw err
+    }
+  }
+}
+
 const HANDLERS = Object.freeze({
   [OPS.LIST_TABS]: listTabs,
   [OPS.READ_PAGE]: readPage,
@@ -1750,6 +1767,11 @@ const HANDLERS = Object.freeze({
   [OPS.EVAL_JS]: evalJs,
   [OPS.RELOAD_EXTENSION]: reloadExtension,
   [OPS.SORT_WINDOW]: sortWindow,
+  [OPS.LIST_GROUPS]: groupOp(tabGroups.listGroups),
+  [OPS.GROUP_TABS]: groupOp(tabGroups.groupTabs),
+  [OPS.UPDATE_GROUP]: groupOp(tabGroups.updateGroup),
+  [OPS.MOVE_GROUP]: groupOp(tabGroups.moveGroup),
+  [OPS.UNGROUP_TABS]: groupOp(tabGroups.ungroupTabs),
   [OPS.SET_LABEL]: setLabel,
 })
 

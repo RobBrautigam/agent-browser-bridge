@@ -141,6 +141,11 @@ export const OPS = Object.freeze({
   EVAL_JS: 'evalJs',
   RELOAD_EXTENSION: 'reloadExtension',
   SORT_WINDOW: 'sortWindow',
+  LIST_GROUPS: 'listGroups',
+  GROUP_TABS: 'groupTabs',
+  UPDATE_GROUP: 'updateGroup',
+  MOVE_GROUP: 'moveGroup',
+  UNGROUP_TABS: 'ungroupTabs',
   SET_LABEL: 'setLabel',
   CLAIM_PROFILE: 'claimProfile',
   GET_BOARD: 'getBoard',
@@ -164,6 +169,7 @@ export const OP_TIER = Object.freeze({
   [OPS.READ_PAGE]: TIER.READ,
   [OPS.SCREENSHOT]: TIER.READ,
   [OPS.SCROLL]: TIER.READ,
+  [OPS.LIST_GROUPS]: TIER.READ,
 
   [OPS.NAVIGATE]: TIER.WRITE,
   [OPS.OPEN_TAB]: TIER.WRITE,
@@ -184,6 +190,12 @@ export const OP_TIER = Object.freeze({
   // Moves tabs and never touches a page, so WRITE: the human's tab strip is
   // theirs, and the panic switch refuses it like every other write.
   [OPS.SORT_WINDOW]: TIER.WRITE,
+
+  // Tab groups: the tab strip again, never a page. See the contract.
+  [OPS.GROUP_TABS]: TIER.WRITE,
+  [OPS.UPDATE_GROUP]: TIER.WRITE,
+  [OPS.MOVE_GROUP]: TIER.WRITE,
+  [OPS.UNGROUP_TABS]: TIER.WRITE,
 
   [OPS.EVAL_JS]: TIER.ARMED,
 
@@ -220,6 +232,11 @@ export const BROWSER_OPS = Object.freeze([
   OPS.EVAL_JS,
   OPS.RELOAD_EXTENSION,
   OPS.SORT_WINDOW,
+  OPS.LIST_GROUPS,
+  OPS.GROUP_TABS,
+  OPS.UPDATE_GROUP,
+  OPS.MOVE_GROUP,
+  OPS.UNGROUP_TABS,
 ])
 
 /** Operations the broker answers itself, without touching a browser. */
@@ -899,6 +916,38 @@ export function describeWindowSort(result) {
   if (from(AGE_SOURCE.NONE) > 0) ages.push(`${from(AGE_SOURCE.NONE)} with no age, placed at the right`)
   const tail = ages.length > 0 ? ` Ages: ${ages.join(', ')}.` : ''
   return `${parts.join(', ')}.${tail}`
+}
+
+/* -------------------------------------------------------------------------- */
+/* Tab groups                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/** The colors chrome.tabGroups accepts, and nothing else. */
+export const GROUP_COLORS = Object.freeze(['grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange'])
+
+/** The longest group title this bridge sets. See the contract. */
+export const GROUP_TITLE_MAX = 80
+
+/**
+ * Plan the order of one group's tabs. A copy of planGroupOrder in
+ * shared/protocol.mjs, which carries the reasoning; test/tab-groups.test.mjs
+ * checks the two plan the same order.
+ *
+ * @param {{current?: number[], wanted?: number[]}} spec
+ * @returns {{order: number[], moves: number[]}}
+ */
+export function planGroupOrder({ current = [], wanted = [] } = {}) {
+  const now = (Array.isArray(current) ? current : []).filter((id) => Number.isInteger(id))
+  const present = new Set(now)
+  const named = []
+  for (const id of Array.isArray(wanted) ? wanted : []) {
+    if (present.has(id) && !named.includes(id)) named.push(id)
+  }
+  const namedSet = new Set(named)
+  const order = [...now.filter((id) => !namedSet.has(id)), ...named]
+  let inPlace = 0
+  while (inPlace < order.length && order[inPlace] === now[inPlace]) inPlace += 1
+  return { order, moves: order.slice(inPlace) }
 }
 
 /* -------------------------------------------------------------------------- */

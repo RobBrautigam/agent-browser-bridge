@@ -282,7 +282,9 @@ test('evalJs is ARMED, and it is the only page-touching op that is', () => {
 test('every read op is in the READ tier', () => {
   // The read tier is what runs with no arming, all day, unattended. Anything
   // that mutates a page must not be sitting in it.
-  const expectedRead = [OPS.LIST_TABS, OPS.READ_PAGE, OPS.SCREENSHOT, OPS.SCROLL]
+  // Listing tab groups reads what browser_list_tabs already shows, plus each
+  // group's title, color and collapsed state, and changes nothing.
+  const expectedRead = [OPS.LIST_TABS, OPS.READ_PAGE, OPS.SCREENSHOT, OPS.SCROLL, OPS.LIST_GROUPS]
 
   for (const op of expectedRead) {
     assert.equal(OP_TIER[op], TIER.READ, `${op} must be a read op`)
@@ -318,6 +320,12 @@ test('the WRITE tier is exactly the ops that change something and need no arm', 
     // Rearranges a window's tab strip by age. It touches no page, and it is
     // WRITE so it is audited and refused while the panic switch is on.
     OPS.SORT_WINDOW,
+    // Group, recolor, collapse, move and ungroup tab groups: the tab strip
+    // again, with no page touched, so WRITE for the same two reasons.
+    OPS.GROUP_TABS,
+    OPS.UPDATE_GROUP,
+    OPS.MOVE_GROUP,
+    OPS.UNGROUP_TABS,
   ]
   for (const op of expectedWrite) {
     assert.equal(OP_TIER[op], TIER.WRITE, `${op} must be a write op`)
@@ -354,7 +362,7 @@ test('control and housekeeping ops are META and never reach a page', () => {
 /* 5. The routing partition: who EXECUTES an op                                */
 /* -------------------------------------------------------------------------- */
 
-test('BROWSER_OPS is exactly the sixteen ops that cross into the extension', () => {
+test('BROWSER_OPS is exactly the twenty-one ops that cross into the extension', () => {
   // Pinned as a literal list rather than derived from OP_TIER. The first build
   // derived it as "not META, plus SET_LABEL", which quietly made the META tier
   // mean two different things. Tier answers "what policy applies"; this answers
@@ -366,7 +374,10 @@ test('BROWSER_OPS is exactly the sixteen ops that cross into the extension', () 
     OPS.CLOSE_TAB,
     OPS.EVAL_JS,
     OPS.FILL,
+    OPS.GROUP_TABS,
+    OPS.LIST_GROUPS,
     OPS.LIST_TABS,
+    OPS.MOVE_GROUP,
     OPS.NAVIGATE,
     OPS.OPEN_OR_FOCUS,
     OPS.OPEN_TAB,
@@ -376,9 +387,11 @@ test('BROWSER_OPS is exactly the sixteen ops that cross into the extension', () 
     OPS.SCREENSHOT,
     OPS.SCROLL,
     OPS.SORT_WINDOW,
+    OPS.UNGROUP_TABS,
+    OPS.UPDATE_GROUP,
     OPS.WAIT_FOR,
   ].sort())
-  assert.equal(BROWSER_OPS.length, 16)
+  assert.equal(BROWSER_OPS.length, 21)
   assert.ok(Object.isFrozen(BROWSER_OPS))
 })
 

@@ -11,14 +11,56 @@ replaces the one-time steps in the earlier entries.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-06
+
+Tab groups: list them, group tabs under a title and a color, collapse or
+expand, move a group, ungroup; as five MCP tools and as a script that applies a
+whole plan. New operations need the new broker as well as the new extension,
+so the Upgrading order matters.
+
 ### Added
 
+- **Five tab group operations**, as MCP tools beside `browser_sort_window`:
+  `browser_list_groups` (READ) and `browser_group_tabs`, `browser_update_group`,
+  `browser_move_group`, `browser_ungroup_tabs` (WRITE: audited, refused under
+  panic, no arm). A group is reused by its exact title in its window, else made
+  in the tabs' own window; the given tabs stand in the given order after any
+  members that were not named.
+- **What they refuse to do, by construction**: tabs from two windows (a group
+  lives in one window, and nothing here moves a tab to another window), pinned
+  tabs (grouping unpins them), collapsing a group that holds its window's active
+  tab (the browser would switch tabs; skipped and said so in the result's
+  `note`). Nothing closes, reloads, navigates, opens or activates a tab. The
+  browser's "Tabs cannot be edited right now" during a drag is tried once more.
+- `scripts/group-tabs.mjs <profile label> <plan.json> [--dry-run] [--json]`:
+  applies a plan of groups (title, color, collapsed, tab handles in order), in
+  each window as it stands, left to right in plan order, collapses last, then
+  reads it all back and exits 1 if any tab is not in its group. It can send only
+  list groups, group tabs, update a group and move a group; anything else,
+  ungrouping included, is refused before it reaches the broker.
 - `scripts/read-page.mjs <profile label> <url> [--comments] [--json]`: reads one
   page in a background tab of a profile, prints its text and closes the tab. It
   can send only open, list, read, scroll and close, and only to the tab its own
   open returned; anything else is refused before it reaches the broker. Exit 1
   when the page did not land, 3 when it was read but its tab could not be
-  closed. No extension, host or broker change, so no reload is needed.
+  closed.
+
+### Fixed
+
+- **The broker drops raw tab ids a caller sends.** `tabId` and `tabIds` are
+  written by the broker from handles it has checked against the profile and
+  the browser generation; a caller who sent them directly skipped that check.
+  They are now removed before anything else in the request is read, so only
+  validated ids reach a browser. No caller in this repository sent them.
+
+### Upgrading
+
+1. `git pull`, then `npm ci`.
+2. Reload the extension in every profile (`npm run reload`).
+3. Restart the broker as in the 1.0.0 Upgrading section. A 1.1.x broker
+   answers the new operations with "Unknown operation" until it is restarted,
+   and a 1.1.x extension answers them the same way until it is reloaded; every
+   older operation keeps working in every mix of versions.
 
 ## [1.1.1] - 2026-10-02
 

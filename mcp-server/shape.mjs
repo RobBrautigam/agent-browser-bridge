@@ -841,6 +841,36 @@ export function renderAction(summary, result) {
   return text([summary, note ? `\nNOTE: ${note}` : null, echo ? `\n${echo}` : null].filter(Boolean).join('\n'))
 }
 
+/**
+ * A profile's tab groups, window by window, with each group's tabs as handles.
+ *
+ * Text, not a JSON echo: the result carries one row per tab, and a profile with
+ * a few hundred tabs would be cut off by the echo's limit exactly where the
+ * group a caller wanted to read was listed. Titles and addresses are not here;
+ * browser_list_tabs has them, keyed by the same handles.
+ */
+export function renderGroups(result, { profile } = {}) {
+  const windows = Array.isArray(result?.windows) ? result.windows : null
+  if (!windows) return text(`${profile}: unexpected listGroups payload.\n\n${jsonEcho(result)}`)
+  const rows = Array.isArray(result?.tabs) ? result.tabs : []
+  const byGroup = new Map()
+  for (const t of [...rows].sort((a, b) => a.index - b.index)) {
+    const key = `${t.windowId}|${t.groupId}`
+    if (!byGroup.has(key)) byGroup.set(key, [])
+    byGroup.get(key).push(t)
+  }
+  const out = [`${profile}: ${result?.message || `${windows.length} windows`}`]
+  for (const w of windows) {
+    out.push('')
+    out.push(`window ${w.windowId}: ${w.tabs} tabs, ${w.pinned} pinned, ${w.loose} in no group, ${w.groups.length} group${w.groups.length === 1 ? '' : 's'}`)
+    for (const g of w.groups) {
+      out.push(`  group ${g.groupId} "${oneLine(g.title) || '(no title)'}" ${g.color}${g.collapsed ? ', collapsed' : ''}, ${g.count} tab${g.count === 1 ? '' : 's'}${g.index == null ? '' : `, from index ${g.index}`}`)
+      for (const t of byGroup.get(`${w.windowId}|${g.groupId}`) || []) out.push(`      ${t.handle || '(no handle)'}${t.active ? '  [active]' : ''}`)
+    }
+  }
+  return text(out.join('\n'))
+}
+
 /** Compact JSON for a payload, or null when there is nothing worth showing. */
 export function jsonEcho(value) {
   if (value == null) return null
