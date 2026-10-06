@@ -146,6 +146,7 @@ export const OPS = Object.freeze({
   UPDATE_GROUP: 'updateGroup',
   MOVE_GROUP: 'moveGroup',
   UNGROUP_TABS: 'ungroupTabs',
+  GATHER_GROUP: 'gatherGroup',
   SET_LABEL: 'setLabel',
   CLAIM_PROFILE: 'claimProfile',
   GET_BOARD: 'getBoard',
@@ -196,6 +197,7 @@ export const OP_TIER = Object.freeze({
   [OPS.UPDATE_GROUP]: TIER.WRITE,
   [OPS.MOVE_GROUP]: TIER.WRITE,
   [OPS.UNGROUP_TABS]: TIER.WRITE,
+  [OPS.GATHER_GROUP]: TIER.WRITE,
 
   [OPS.EVAL_JS]: TIER.ARMED,
 
@@ -237,6 +239,7 @@ export const BROWSER_OPS = Object.freeze([
   OPS.UPDATE_GROUP,
   OPS.MOVE_GROUP,
   OPS.UNGROUP_TABS,
+  OPS.GATHER_GROUP,
 ])
 
 /** Operations the broker answers itself, without touching a browser. */

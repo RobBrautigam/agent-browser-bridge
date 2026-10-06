@@ -37,6 +37,14 @@ test('the five group operations are in the contract, listing READ and the rest W
   }
 })
 
+test('the gather is in the contract as a WRITE that crosses into the extension, mirrored', () => {
+  assert.equal(OPS.GATHER_GROUP, 'gatherGroup')
+  assert.equal(OP_TIER[OPS.GATHER_GROUP], TIER.WRITE)
+  assert.ok(BROWSER_OPS.includes(OPS.GATHER_GROUP))
+  assert.equal(mirror.OPS.GATHER_GROUP, 'gatherGroup')
+  assert.equal(mirror.OP_TIER[OPS.GATHER_GROUP], TIER.WRITE)
+})
+
 test('the group colors are exactly the nine the browser accepts', () => {
   assert.deepEqual([...GROUP_COLORS].sort(), ['blue', 'cyan', 'green', 'grey', 'orange', 'pink', 'purple', 'red', 'yellow'])
   assert.ok(Object.isFrozen(GROUP_COLORS))
@@ -299,7 +307,31 @@ function fakeChrome({ windows, current, blockEdits = 0 }) {
         gate()
         const g = groups.get(id)
         if (!g) throw new Error(`No group with id: ${id}.`)
-        if (windowId !== undefined && windowId !== g.windowId) events.push({ kind: 'crossWindow', group: id, to: windowId })
+        if (windowId !== undefined && windowId !== g.windowId) {
+          // The whole group goes to the other window. The source window shows
+          // another tab when its active tab leaves, and closes when it is empty.
+          if (!strips.has(windowId)) throw new Error(`No window with id: ${windowId}.`)
+          events.push({ kind: 'crossWindow', group: id, to: windowId })
+          const from = g.windowId
+          const members = strips.get(from).filter((t) => t.groupId === id)
+          const rest = strips.get(from).filter((t) => t.groupId !== id)
+          if (members.some((t) => t.active) && rest.length > 0) {
+            events.push({ kind: 'activated', windowId: from })
+            rest[0].active = true
+          }
+          for (const t of members) {
+            t.windowId = windowId
+            t.active = false
+          }
+          const to = strips.get(windowId)
+          to.splice(index < 0 || index > to.length ? to.length : index, 0, ...members)
+          g.windowId = windowId
+          if (rest.length === 0) {
+            strips.delete(from)
+            events.push({ kind: 'windowClosed', windowId: from })
+          } else strips.set(from, rest)
+          return { ...g }
+        }
         const strip = strips.get(g.windowId)
         const members = strip.filter((t) => t.groupId === id)
         const rest = strip.filter((t) => t.groupId !== id)
@@ -561,6 +593,7 @@ test('the MCP rendering lists each group with its tabs as handles, in strip orde
   const out = renderGroups(
     {
       message: '1 window, 1 group.',
+      lastFocusedWindowId: W1,
       windows: [{ windowId: W1, tabs: 3, pinned: 0, loose: 1, groups: [{ groupId: 7, title: 'Decide', color: 'red', collapsed: true, count: 2, index: 1 }] }],
       tabs: [
         { handle: 'h_b', windowId: W1, index: 2, groupId: 7, active: true },
@@ -575,6 +608,116 @@ test('the MCP rendering lists each group with its tabs as handles, in strip orde
   assert.match(out, /h_b {2}\[active\]/)
   assert.ok(!out.includes('h_x'), 'a loose tab is not listed under a group')
   assert.match(out, /1 in no group/)
+  assert.match(out, /window 100 \(used last\)/)
+})
+
+/* -------------------------------------------------------------------------- */
+/* The gather: the one way a group changes window                              */
+/* -------------------------------------------------------------------------- */
+
+const W3 = 300
+
+const crossed = (fake) => fake.events.filter((e) => e.kind === 'crossWindow')
+const activated = (fake) => fake.events.filter((e) => e.kind === 'activated')
+
+test('a gather moves each same-titled group into the host window and folds them into one', async () => {
+  const fake = fakeChrome({
+    windows: {
+      [W1]: [{ id: 1, active: true }, { id: 2, group: { key: 'a', title: 'Decide', color: 'red' } }],
+      [W2]: [{ id: 9, group: { key: 'b', title: 'Decide' } }, { id: 10, active: true }],
+      [W3]: [{ id: 20, group: { key: 'c', title: 'Decide' } }, { id: 21, active: true, group: { key: 'd', title: 'Other' } }],
+    },
+    current: W2,
+  })
+  const g = await loadGroups(fake)
+  const result = await g.gatherGroup({ title: 'Decide', window: W1 })
+  assert.equal(result.moved, 2)
+  assert.equal(result.merged, 2)
+  assert.deepEqual(result.held, [])
+  const decide = [...fake.groups.values()].filter((x) => x.title === 'Decide')
+  assert.equal(decide.length, 1, 'the emptied groups are gone')
+  assert.equal(decide[0].windowId, W1)
+  assert.equal(decide[0].color, 'red', 'the host window\'s own group is the one kept')
+  assert.deepEqual(fake.strip(W1), [1, 2, 9, 20])
+  assert.deepEqual(fake.strip(W2), [10])
+  assert.deepEqual(fake.strip(W3), [21])
+  assert.equal(result.group.count, 3)
+  assert.equal(result.group.windowId, W1)
+  assert.ok(crossed(fake).every((e) => e.group !== undefined && e.to === W1), 'only whole groups cross, and only into the host')
+  assert.deepEqual(activated(fake), [])
+})
+
+test('a group holding its window\'s active tab stays while that window has other tabs, and moves once it has none', async () => {
+  const fake = fakeChrome({
+    windows: {
+      [W1]: [{ id: 1, active: true }],
+      [W2]: [{ id: 9, active: true, group: { key: 'b', title: 'Decide' } }, { id: 10, group: { key: 'x', title: 'Later' } }],
+    },
+    current: W1,
+  })
+  const g = await loadGroups(fake)
+  const held = await g.gatherGroup({ title: 'Decide', window: W1 })
+  assert.equal(held.moved, 0)
+  assert.equal(held.held.length, 1)
+  assert.equal(held.held[0].windowId, W2)
+  assert.match(held.note, /active tab/)
+  assert.deepEqual(activated(fake), [])
+  assert.deepEqual(fake.strip(W2), [9, 10])
+
+  await g.gatherGroup({ title: 'Later', window: W1 })
+  const again = await g.gatherGroup({ title: 'Decide', window: W1 })
+  assert.equal(again.moved, 1)
+  assert.deepEqual(again.held, [])
+  assert.deepEqual(again.closedWindows, [W2])
+  assert.deepEqual(fake.strip(W1), [1, 10, 9])
+  assert.deepEqual(activated(fake), [])
+})
+
+test('with no group of that title in the host, the first group moved in is the one kept', async () => {
+  const fake = fakeChrome({
+    windows: {
+      [W1]: [{ id: 1, active: true }],
+      [W2]: [{ id: 9, group: { key: 'b', title: 'Decide', color: 'blue' } }, { id: 8, active: true }],
+      [W3]: [{ id: 20, group: { key: 'c', title: 'Decide', color: 'red' } }, { id: 21, active: true }],
+    },
+    current: W1,
+  })
+  const g = await loadGroups(fake)
+  const result = await g.gatherGroup({ title: 'Decide', window: W1 })
+  assert.equal(result.moved, 2)
+  assert.equal(result.merged, 1)
+  assert.equal(result.group.color, 'blue')
+  assert.deepEqual(fake.strip(W1), [1, 9, 20])
+  assert.deepEqual([...fake.groups.values()].filter((x) => x.title === 'Decide').length, 1)
+})
+
+test('two groups of the same title already in the host fold into the leftmost', async () => {
+  const fake = fakeChrome({
+    windows: { [W1]: [{ id: 1, group: { key: 'a', title: 'A' } }, { id: 2, active: true }, { id: 3, group: { key: 'b', title: 'A' } }] },
+    current: W1,
+  })
+  const g = await loadGroups(fake)
+  const result = await g.gatherGroup({ title: 'A', window: W1 })
+  assert.equal(result.moved, 0)
+  assert.equal(result.merged, 1)
+  assert.deepEqual(fake.strip(W1), [1, 3, 2])
+  assert.equal(fake.groupOf(3).id, fake.groupOf(1).id)
+  assert.deepEqual(crossed(fake), [])
+})
+
+test('a gather refuses a missing window or title, matches the title exactly, and with no such group changes nothing', async () => {
+  const fake = fakeChrome({
+    windows: { [W1]: [{ id: 1, active: true }], [W2]: [{ id: 9, group: { key: 'b', title: 'Decide later' } }, { id: 10, active: true }] },
+    current: W1,
+  })
+  const g = await loadGroups(fake)
+  await assert.rejects(g.gatherGroup({ title: 'Decide', window: 555 }), (err) => err.code === 'E_BAD_REQUEST' && /555/.test(err.message))
+  await assert.rejects(g.gatherGroup({ window: W1 }), (err) => err.code === 'E_BAD_REQUEST')
+  await assert.rejects(g.gatherGroup({ title: 'Decide' }), (err) => err.code === 'E_BAD_REQUEST')
+  const none = await g.gatherGroup({ title: 'Decide*', window: W1 })
+  assert.equal(none.group, null)
+  assert.equal(none.moved, 0)
+  assert.deepEqual(fake.events, [])
 })
 
 /* -------------------------------------------------------------------------- */
@@ -718,6 +861,115 @@ test('a tab closed during the run is skipped, and every later group is still mad
   assert.equal(result.ok, true, JSON.stringify(result))
   assert.deepEqual(result.skipped, [{ handle: 'h2', group: 'A', reason: 'closed or moved during the run' }])
   assert.deepEqual(sent.filter((op) => op === OPS.GROUP_TABS).length, 3)
+})
+
+test('a plan names its host window by id or as "last-focused", and nothing else', () => {
+  const one = { title: 'A', tabs: [] }
+  assert.equal(script.parsePlan({ window: W1, groups: [one] }).plan.window, W1)
+  assert.equal(script.parsePlan({ window: 'last-focused', groups: [one] }).plan.window, 'last-focused')
+  assert.equal(script.parsePlan({ groups: [one] }).plan.window, undefined)
+  for (const window of ['front', -1, 1.5, null, true]) {
+    assert.equal(script.parsePlan({ window, groups: [one] }).ok, false, String(window))
+  }
+})
+
+test('the script sends a gather only into the host window it was given', async () => {
+  const sent = []
+  const raw = { request: async (msg) => (sent.push(msg.op), {}) }
+  await assert.rejects(script.groupOnlyClient(raw).request({ op: OPS.GATHER_GROUP, profile: 'p', args: { title: 'A', window: W1 } }), /refuses/)
+  const c = script.groupOnlyClient(raw, { gatherInto: W1 })
+  await assert.rejects(c.request({ op: OPS.GATHER_GROUP, profile: 'p', args: { title: 'A', window: W2 } }), /host/)
+  await assert.rejects(c.request({ op: OPS.UNGROUP_TABS, profile: 'p', args: {} }), /refuses/)
+  assert.deepEqual(sent, [])
+  await c.request({ op: OPS.GATHER_GROUP, profile: 'p', args: { title: 'A', window: W1 } })
+  assert.deepEqual(sent, [OPS.GATHER_GROUP])
+})
+
+/** A broker stand-in over the fake browser: handles are "h" and the tab id. */
+function bridgeTo(g, { focused }) {
+  const raw = (h) => Number(String(h).slice(1))
+  return {
+    async request({ op, args }) {
+      if (op === OPS.LIST_GROUPS) {
+        const r = await g.listGroups(args)
+        const tabs = r.tabs.map(({ [shared.RAW_TAB_ID_FIELD]: id, ...rest }) => ({ handle: `h${id}`, ...rest }))
+        return { ...r, tabs, lastFocusedWindowId: focused }
+      }
+      if (op === OPS.GROUP_TABS) {
+        const { tabs, ...rest } = args
+        return g.groupTabs({ ...rest, tabIds: tabs.map(raw) })
+      }
+      if (op === OPS.UPDATE_GROUP) return g.updateGroup(args)
+      if (op === OPS.MOVE_GROUP) return g.moveGroup(args)
+      if (op === OPS.GATHER_GROUP) return g.gatherGroup(args)
+      throw new Error(`the stand-in does not serve ${op}`)
+    },
+  }
+}
+
+test('a gather plan brings every titled group into the last-focused window, one per title, in plan order', async () => {
+  const fake = fakeChrome({
+    windows: {
+      [W1]: [{ id: 1, active: true }, { id: 2, group: { key: 'a', title: 'Projects', color: 'purple' } }],
+      [W2]: [{ id: 9, group: { key: 'b', title: 'Decide', color: 'red' } }, { id: 10, active: true, group: { key: 'c', title: 'Read later', collapsed: true } }],
+      [W3]: [{ id: 20, group: { key: 'd', title: 'Projects' } }, { id: 21, active: true, group: { key: 'e', title: 'Decide' } }],
+    },
+    current: W2,
+  })
+  const g = await loadGroups(fake)
+  const plan = script.parsePlan({
+    window: 'last-focused',
+    groups: [
+      { title: 'Decide', color: 'red', tabs: [] },
+      { title: 'Projects', color: 'purple', tabs: [] },
+      { title: 'Read later', color: 'grey', collapsed: true, tabs: [] },
+    ],
+  }).plan
+  const result = await script.applyPlan({ client: bridgeTo(g, { focused: W1 }), profile: 'p', plan })
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.equal(result.host, W1)
+  assert.deepEqual(fake.strip(W1), [1, 9, 21, 2, 20, 10])
+  assert.deepEqual(result.counts, [
+    {
+      windowId: W1,
+      groups: [
+        { title: 'Decide', count: 2, collapsed: false },
+        { title: 'Projects', count: 2, collapsed: false },
+        { title: 'Read later', count: 1, collapsed: true },
+      ],
+    },
+  ])
+  assert.deepEqual(result.strays, [])
+  assert.ok(crossed(fake).every((e) => e.group !== undefined && e.to === W1))
+  assert.deepEqual(activated(fake), [], 'no window was made to show another tab')
+  assert.equal(script.exitCodeFor(result), 0)
+})
+
+test('a gather plan fails its read-back while a title still stands in two windows', async () => {
+  const fake = fakeChrome({
+    windows: {
+      [W1]: [{ id: 1, active: true }, { id: 2, group: { key: 'a', title: 'Decide' } }],
+      [W2]: [{ id: 9, active: true, group: { key: 'b', title: 'Decide' } }, { id: 10 }],
+    },
+    current: W1,
+  })
+  const g = await loadGroups(fake)
+  const plan = script.parsePlan({ window: W1, groups: [{ title: 'Decide', color: 'red', tabs: ['h10'] }] }).plan
+  const result = await script.applyPlan({ client: bridgeTo(g, { focused: W2 }), profile: 'p', plan })
+  assert.equal(result.ok, false)
+  assert.equal(result.host, W1)
+  assert.deepEqual(result.strays, [{ title: 'Decide', windowId: W2, count: 1 }])
+  assert.deepEqual(result.skipped, [{ handle: 'h10', group: 'Decide', reason: 'in another window; only a whole group moves between windows' }])
+  assert.match(result.notes.join(' '), /active tab/)
+  assert.deepEqual(activated(fake), [])
+  assert.deepEqual(fake.strip(W2), [9, 10])
+  assert.equal(script.exitCodeFor(result), 1)
+
+  const dry = []
+  const preview = await script.applyPlan({ client: { request: async (msg) => (dry.push(msg.op), bridgeTo(g, { focused: W2 }).request(msg)) }, profile: 'p', plan, dryRun: true })
+  assert.deepEqual(dry, [OPS.LIST_GROUPS])
+  assert.equal(preview.host, W1)
+  assert.deepEqual(preview.gather, [{ title: 'Decide', from: [{ windowId: W2, count: 1 }] }])
 })
 
 test('a failed read-back still returns what was done, with the reason', async () => {

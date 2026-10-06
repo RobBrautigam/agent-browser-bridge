@@ -11,6 +11,43 @@ replaces the one-time steps in the earlier entries.
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-06
+
+Gathering tab groups into one window, opt-in. A group lived in the window its
+tabs were in; now every group of one title can be brought into one named
+window and folded into one group there.
+
+### Added
+
+- **`browser_gather_group`** (WRITE: audited, refused under panic, no arm):
+  given a title and a window, every group of exactly that title in the
+  profile's other windows moves whole to the end of that window
+  (`chrome.tabGroups.move` with its `windowId`), then that window's groups of
+  that title fold into its leftmost one (`chrome.tabs.group` with that group's
+  id) and the browser deletes the emptied ones. It is the only operation that
+  moves anything to another window, and it moves only whole groups. A group
+  holding its window's active tab is left, and said so, while that window has
+  other tabs; a window left empty closes and is listed in `closedWindows`.
+  Nothing is closed, reloaded, navigated, pinned or activated.
+- **`browser_list_groups` names the window used last** (`lastFocusedWindowId`,
+  the same read the bridge uses to choose where a page opens), marked
+  "(used last)" in the listing.
+- **`scripts/group-tabs.mjs` plans take `"window"`**: a window id, or
+  `"last-focused"`. Every planned title is gathered into that window and folded
+  into one group, held groups are tried again after the rest have moved, the
+  groups are lined up left to right in plan order with their colors and
+  collapsed state, and the read-back exits 1 while a title still stands in more
+  than one group or outside that window. Without `"window"` nothing changes,
+  and the script's client still refuses the gather.
+
+### Upgrading
+
+1. `git pull`, then `npm ci`.
+2. Reload the extension in every profile (`npm run reload`).
+3. Restart the broker as in the 1.0.0 Upgrading section. Until both are
+   upgraded, the gather is answered with "Unknown operation"; every other
+   operation keeps working in every mix of versions.
+
 ## [1.2.0] - 2026-10-06
 
 Tab groups: list them, group tabs under a title and a color, collapse or

@@ -1767,11 +1767,13 @@ const HANDLERS = Object.freeze({
   [OPS.EVAL_JS]: evalJs,
   [OPS.RELOAD_EXTENSION]: reloadExtension,
   [OPS.SORT_WINDOW]: sortWindow,
-  [OPS.LIST_GROUPS]: groupOp(tabGroups.listGroups),
+  // The list says which window was used last, so a caller can gather into it.
+  [OPS.LIST_GROUPS]: groupOp(async (args) => ({ ...(await tabGroups.listGroups(args)), lastFocusedWindowId: await lastFocusedNormalWindow() })),
   [OPS.GROUP_TABS]: groupOp(tabGroups.groupTabs),
   [OPS.UPDATE_GROUP]: groupOp(tabGroups.updateGroup),
   [OPS.MOVE_GROUP]: groupOp(tabGroups.moveGroup),
   [OPS.UNGROUP_TABS]: groupOp(tabGroups.ungroupTabs),
+  [OPS.GATHER_GROUP]: groupOp(tabGroups.gatherGroup),
   [OPS.SET_LABEL]: setLabel,
 })
 

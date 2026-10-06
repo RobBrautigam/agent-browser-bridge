@@ -11,7 +11,12 @@
  *     two windows are refused rather than gathered into one.
  *   - Grouping a pinned tab unpins it. Pinned tabs are refused.
  *   - chrome.tabGroups.move takes a windowId and moves the group to that
- *     window. This never passes one.
+ *     window. Only gatherGroup passes one, and only the window it was named:
+ *     moving a whole group is the one way anything here changes window.
+ *   - A window whose last tab leaves closes. A window whose active tab leaves
+ *     shows another one, and a tab shown after being discarded reloads. So a
+ *     group holding its window's active tab is gathered only once nothing
+ *     else is left in that window.
  *   - Collapsing a group that holds the window's active tab makes the browser
  *     switch the person to another tab. That collapse is skipped and said so.
  *   - A tab moved into the middle of a group joins it. Tabs are only ever moved
@@ -428,6 +433,126 @@ export async function moveGroup(args = {}) {
   await edit(() => chrome.tabGroups.move(groupId, { index }), wait)
   const group = await describe(await chrome.tabGroups.get(groupId))
   return { group, message: `Moved "${group.title}" to index ${group.index} of window ${group.windowId}.` }
+}
+
+async function checkHostWindow(value) {
+  const id = Number(value)
+  if (value === undefined || value === null || value === '' || !Number.isInteger(id)) {
+    throw bad('Name the window to gather into: "window", a window id from browser_list_groups.')
+  }
+  let win = null
+  try {
+    win = await chrome.windows.get(id)
+  } catch (_err) {
+    win = null
+  }
+  if (!win) throw bad(`There is no window ${value} in this profile. browser_list_groups lists the windows.`)
+  if (win.type !== 'normal') throw bad(`Window ${id} is a ${win.type} window; only normal windows hold tab groups.`)
+  return id
+}
+
+/** Every group in the profile whose title is exactly `title`. */
+async function titled(title) {
+  // chrome.tabGroups.query matches `title` as a pattern, so match exactly here.
+  return (await chrome.tabGroups.query({})).filter((g) => g.title === title)
+}
+
+/**
+ * Bring every group titled `title` into one window and fold them into one.
+ *
+ * Each group of that title in another window moves, whole and in its order, to
+ * the end of the host window (chrome.tabGroups.move with the host's windowId).
+ * Then the host's groups of that title fold into its leftmost one
+ * (chrome.tabs.group with that group's id); the browser deletes each group
+ * left empty. The group kept is the host's own when it had one, so its color
+ * and state stay.
+ *
+ * A group holding its window's active tab is left where it is, and said so,
+ * while that window has any other tab: moving it would make the browser show
+ * another tab there. Once it is the last thing in its window it moves, and the
+ * window, left empty, closes. Nothing is closed, reloaded, navigated, pinned
+ * or activated, and no single tab changes window.
+ *
+ * @param {{title:string, window:number}} args
+ */
+export async function gatherGroup(args = {}) {
+  const title = checkTitle(args.title, { required: true })
+  const host = await checkHostWindow(args.window)
+  const wait = retryDelay(args)
+
+  let moved = 0
+  const held = []
+  const closedWindows = []
+  for (const g of (await titled(title)).filter((x) => x.windowId !== host)) {
+    await edit(async () => {
+      let now
+      try {
+        now = await chrome.tabGroups.get(g.id)
+      } catch (_err) {
+        return
+      }
+      if (now.title !== title || now.windowId === host) return
+      const strip = await chrome.tabs.query({ windowId: now.windowId })
+      const members = strip.filter((t) => t.groupId === now.id)
+      if (members.some((t) => t.active) && strip.length > members.length) {
+        held.push({ groupId: now.id, windowId: now.windowId, count: members.length })
+        return
+      }
+      await chrome.tabGroups.move(now.id, { windowId: host, index: -1 })
+      moved += 1
+      if (members.length === strip.length) {
+        const gone = await chrome.windows.get(now.windowId).then(() => false, () => true)
+        if (gone) closedWindows.push(now.windowId)
+      }
+    }, wait)
+  }
+
+  // Fold the host's groups of this title into its leftmost one.
+  let merged = 0
+  const inHost = async () => {
+    const tabs = (await chrome.tabs.query({ windowId: host })).sort((a, b) => a.index - b.index)
+    const order = []
+    for (const t of tabs) if (Number.isInteger(t.groupId) && t.groupId !== NONE_ID && !order.includes(t.groupId)) order.push(t.groupId)
+    const ids = new Set((await titled(title)).filter((x) => x.windowId === host).map((x) => x.id))
+    return order.filter((id) => ids.has(id))
+  }
+  const here = await inHost()
+  const keep = here.length > 0 ? here[0] : null
+  for (const other of here.slice(1)) {
+    await edit(async () => {
+      const now = await chrome.tabGroups.get(other).catch(() => null)
+      if (!now || now.windowId !== host || now.title !== title) return
+      const tabIds = (await membersOf(other, host)).map((t) => t.id)
+      if (tabIds.length === 0) return
+      await stillIn(host, tabIds, keep)
+      await chrome.tabs.group({ groupId: keep, tabIds })
+      merged += 1
+    }, wait)
+  }
+
+  const group = keep === null ? null : await describe(await chrome.tabGroups.get(keep))
+  const parts = []
+  if (moved > 0) parts.push(`moved ${moved} group${moved === 1 ? '' : 's'} in`)
+  if (merged > 0) parts.push(`folded ${merged} into one`)
+  const result = {
+    group,
+    moved,
+    merged,
+    held,
+    closedWindows,
+    message: group
+      ? `"${title}" in window ${host}: ${parts.join(', ') || 'already one group there'}; ${group.count} tabs.`
+      : held.length > 0
+        ? `No "${title}" group is in window ${host} yet.`
+        : `No group titled "${title}" in this profile.`,
+  }
+  if (held.length > 0) {
+    result.note =
+      `Left ${held.length} "${title}" group${held.length === 1 ? '' : 's'} where ${held.length === 1 ? 'it is' : 'they are'} ` +
+      `(window ${held.map((h) => h.windowId).join(', ')}): ${held.length === 1 ? 'it holds' : 'each holds'} the window's active tab, ` +
+      'and moving it while that window has other tabs would make the browser show another tab there.'
+  }
+  return result
 }
 
 /**

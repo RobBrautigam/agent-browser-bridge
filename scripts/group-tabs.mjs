@@ -28,9 +28,24 @@
  * it is (grouping would unpin it), and a tab no longer open is skipped; both
  * are reported.
  *
+ * Gathering into one window, opt-in: a plan with `"window"` (a window id, or
+ * "last-focused" for the window the person used last) brings every group of
+ * each planned title, from every window, into that one window and folds them
+ * into one group per title, then lines them up left to right in plan order.
+ * A whole group moving is the only thing that changes window: a planned tab
+ * that is in another window and in no group of that title is left there and
+ * reported. A group holding its window's active tab moves only once nothing
+ * else is left in that window (otherwise the browser would show another tab
+ * there); a window emptied this way closes, as a browser window does when its
+ * last tab leaves. The read-back fails while any planned title still stands
+ * in more than one group or outside that window.
+ *
+ *   { "window": "last-focused", "groups": [ { "title": "Decide", "color": "red", "tabs": [] }, ... ] }
+ *
  * Group-only by construction. Everything this command sends goes through
  * `groupOnlyClient`, which passes exactly four operations (list groups, group
- * tabs, update a group, move a group) and refuses everything else before it
+ * tabs, update a group, move a group), plus the gather into the one host
+ * window when the plan names it, and refuses everything else before it
  * reaches the broker: no close, no reload, no navigation, no new tab, no
  * activation, no caller JavaScript, and not even ungrouping.
  *
@@ -60,22 +75,32 @@ const MAX_TABS = 2_000
 /** The extension groups at most this many tabs in one call, and a group is one call per window. */
 const MAX_TABS_PER_GROUP = 500
 
+/** The value of a plan's "window" that means the window the person used last. */
+export const LAST_FOCUSED = 'last-focused'
+
 /**
  * Wrap a broker client so it can only list, group, update and move groups.
  *
  * The refusals happen here, before a frame is written, so a slip elsewhere in
  * this file cannot close, reload or navigate a tab, or reach a tab by a raw id.
+ * A gather passes only when `gatherInto` names the host window, and only into
+ * that window.
  *
  * @param {{request: Function}} client
+ * @param {{gatherInto?: number}} [options]
  */
-export function groupOnlyClient(client) {
+export function groupOnlyClient(client, { gatherInto } = {}) {
   return {
     async request(msg) {
       const op = msg && msg.op
-      if (!GROUP_ONLY_OPS.includes(op)) {
+      const args = (msg && msg.args) || {}
+      if (op === OPS.GATHER_GROUP && Number.isInteger(gatherInto)) {
+        if (args.window !== gatherInto) {
+          throw new Error(`group-tabs gathers only into the host window ${gatherInto}, not window ${args.window}.`)
+        }
+      } else if (!GROUP_ONLY_OPS.includes(op)) {
         throw new Error(`group-tabs refuses the operation "${op}": it only lists, groups, updates and moves tab groups.`)
       }
-      const args = (msg && msg.args) || {}
       if (RAW_TAB_KEYS.some((k) => k in args)) {
         throw new Error('group-tabs addresses tabs by handle, never by a raw tab id.')
       }
@@ -96,6 +121,10 @@ export function groupOnlyClient(client) {
 export function parsePlan(raw) {
   const groups = raw && typeof raw === 'object' && Array.isArray(raw.groups) ? raw.groups : null
   if (!groups || groups.length === 0) return { ok: false, message: 'The plan needs "groups": a list of { title, color, tabs }.' }
+  const window = raw.window
+  if (window !== undefined && window !== LAST_FOCUSED && !(Number.isInteger(window) && window >= 0)) {
+    return { ok: false, message: `"window" is the window to gather every group into: a window id, or "${LAST_FOCUSED}".` }
+  }
   const titles = new Set()
   const seen = new Map()
   const out = []
@@ -126,7 +155,7 @@ export function parsePlan(raw) {
     out.push({ title, color, collapsed: g.collapsed === true, tabs })
   }
   if (total > MAX_TABS) return { ok: false, message: `${total} tabs in one plan; the most is ${MAX_TABS}.` }
-  return { ok: true, plan: { groups: out } }
+  return { ok: true, plan: window === undefined ? { groups: out } : { window, groups: out } }
 }
 
 /**
@@ -187,6 +216,7 @@ export async function applyPlan({ client, profile, plan, dryRun = false }) {
   const send = (op, args) => c.request({ op, profile, args })
 
   const before = await send(OPS.LIST_GROUPS, {})
+  if (plan.window !== undefined) return applyGather({ client, profile, plan, dryRun, before })
   const steps = planApply({ plan, listed: before })
   if (dryRun) return { ok: true, dryRun: true, steps, before: countsOf(before) }
 
@@ -281,6 +311,146 @@ export async function applyPlan({ client, profile, plan, dryRun = false }) {
   return result
 }
 
+/** Each group of a listing as { title, windowId, groupId, count }, window by window, left to right. */
+function groupsIn(listed) {
+  const out = []
+  for (const w of (listed && Array.isArray(listed.windows) ? listed.windows : [])) {
+    for (const g of w.groups || []) out.push({ title: g.title, windowId: w.windowId, groupId: g.groupId, count: g.count })
+  }
+  return out
+}
+
+/**
+ * Apply a plan that names a host window: gather, fold, line up, collapse, read back.
+ *
+ * @param {{client: {request: Function}, profile: string, plan: object, dryRun: boolean, before: object}} spec
+ */
+async function applyGather({ client, profile, plan, dryRun, before }) {
+  const host = plan.window === LAST_FOCUSED ? before && before.lastFocusedWindowId : plan.window
+  const windowIds = ((before && before.windows) || []).map((w) => w.windowId)
+  if (!Number.isInteger(host) || !windowIds.includes(host)) {
+    const what = plan.window === LAST_FOCUSED ? 'The window used last could not be read' : `There is no window ${plan.window} in this profile`
+    return { ok: false, host: null, counts: countsOf(before), misplaced: [], strays: [], skipped: [], message: `${what}; nothing was moved.` }
+  }
+  const gather = plan.groups.map((g) => ({
+    title: g.title,
+    from: groupsIn(before)
+      .filter((x) => x.title === g.title && x.windowId !== host)
+      .map(({ windowId, count }) => ({ windowId, count })),
+  }))
+  if (dryRun) return { ok: true, dryRun: true, host, gather, before: countsOf(before) }
+
+  const c = groupOnlyClient(client, { gatherInto: host })
+  const send = (op, args) => c.request({ op, profile, args })
+  const notes = []
+  const errors = []
+
+  // Every title, in plan order. A group holding its window's active tab is
+  // left until that window holds nothing else, so the held ones go again once
+  // every other title has left their windows.
+  const gatherOnce = async (title) => {
+    try {
+      return await send(OPS.GATHER_GROUP, { title, window: host })
+    } catch (err) {
+      errors.push(`gathering "${title}": ${describeError(err)}`)
+      return null
+    }
+  }
+  const held = []
+  for (const g of plan.groups) {
+    const r = await gatherOnce(g.title)
+    if (r && Array.isArray(r.held) && r.held.length > 0) held.push(g.title)
+  }
+  for (const title of held) {
+    const r = await gatherOnce(title)
+    if (r && r.note) notes.push(r.note)
+  }
+
+  // Named tabs in the host join their group; each group then goes to the end
+  // of the host window in plan order, in its color.
+  let now
+  try {
+    now = await send(OPS.LIST_GROUPS, {})
+  } catch (err) {
+    return { ok: false, host, counts: null, misplaced: [], strays: [], skipped: [], notes, message: [...errors, `listing after the gather: ${describeError(err)}`].join(' | ') }
+  }
+  const steps = planApply({ plan, listed: now })
+  const skipped = [...steps.skipped]
+  const inHost = new Map()
+  for (const w of steps.windows) {
+    for (const g of w.groups) {
+      if (w.windowId === host) inHost.set(g.title, g.tabs)
+      else for (const handle of g.tabs) skipped.push({ handle, group: g.title, reason: 'in another window; only a whole group moves between windows' })
+    }
+  }
+  const made = []
+  for (const g of plan.groups) {
+    let groupId
+    try {
+      const named = inHost.get(g.title) || []
+      if (named.length > 0) {
+        const r = await send(OPS.GROUP_TABS, { tabs: named, title: g.title, color: g.color, collapsed: false })
+        groupId = r && r.group ? r.group.groupId : undefined
+        if (r && r.note) notes.push(r.note)
+      } else {
+        const found = groupsIn(now).find((x) => x.title === g.title && x.windowId === host)
+        if (!found) continue
+        groupId = found.groupId
+        const props = { group: groupId, color: g.color }
+        if (!g.collapsed) props.collapsed = false
+        await send(OPS.UPDATE_GROUP, props)
+      }
+      if (!Number.isInteger(groupId)) throw new Error('came back without a group id.')
+      made.push({ title: g.title, groupId, collapsed: g.collapsed })
+      await send(OPS.MOVE_GROUP, { group: groupId, index: -1 })
+    } catch (err) {
+      errors.push(`"${g.title}" in window ${host}: ${describeError(err)}`)
+    }
+  }
+  for (const m of made) {
+    if (!m.collapsed) continue
+    try {
+      const r = await send(OPS.UPDATE_GROUP, { group: m.groupId, collapsed: true })
+      if (r && r.note) notes.push(r.note)
+    } catch (err) {
+      errors.push(`collapsing "${m.title}": ${describeError(err)}`)
+    }
+  }
+
+  let after
+  try {
+    after = await send(OPS.LIST_GROUPS, {})
+  } catch (err) {
+    errors.push(`the read-back: ${describeError(err)}`)
+    return { ok: false, host, counts: null, made: made.map(({ title }) => ({ windowId: host, title })), misplaced: [], strays: [], skipped, notes, message: errors.join(' | ') }
+  }
+  // The proof: each planned title is at most one group, and that one is in the
+  // host window; each named tab in the host is in its group.
+  const all = groupsIn(after)
+  const strays = []
+  for (const g of plan.groups) {
+    const mine = all.filter((x) => x.title === g.title)
+    const kept = mine.find((x) => x.windowId === host)
+    for (const x of mine) {
+      if (x !== kept) strays.push({ title: g.title, windowId: x.windowId, count: x.count })
+    }
+  }
+  const byId = new Map(all.map((x) => [x.groupId, x]))
+  const groupOfTab = new Map(((after && after.tabs) || []).map((t) => [t.handle, t.groupId]))
+  const misplaced = []
+  for (const [title, handles] of inHost) {
+    for (const handle of handles) {
+      const found = byId.get(groupOfTab.get(handle))
+      if (!found || found.title !== title || found.windowId !== host) misplaced.push({ handle, group: title })
+    }
+  }
+  const result = { ok: errors.length === 0 && strays.length === 0 && misplaced.length === 0, host, counts: countsOf(after), misplaced, strays, skipped }
+  if (notes.length > 0) result.notes = notes
+  if (errors.length > 0) result.message = errors.join(' | ')
+  else if (strays.length > 0) result.message = `${strays.length} group${strays.length === 1 ? '' : 's'} still outside window ${host}.`
+  return result
+}
+
 /** @param {{ok: boolean}} result */
 export function exitCodeFor(result) {
   return result && result.ok ? 0 : 1
@@ -302,6 +472,10 @@ const USAGE =
   'Groups each window\'s planned tabs under the plan\'s titles and colors, left to right in plan\n' +
   'order, collapses the groups marked collapsed, and reads it all back. It never closes, reloads,\n' +
   'navigates, opens or activates a tab, and never moves a tab to another window.\n' +
+  '\n' +
+  'With "window" in the plan (a window id, or "last-focused"), every group of each planned title is\n' +
+  'gathered from every window into that one and folded into one group per title: a whole group\n' +
+  'moving is the only thing that changes window, and a window left empty closes.\n' +
   'Exit: 0 every tab in its group, 1 something did not land, 2 usage or a bad plan.'
 
 export function parseArgs(argv) {
@@ -331,13 +505,19 @@ function summary(result) {
   for (const w of result.counts || result.before || []) {
     lines.push(`window ${w.windowId}: ${w.groups.map((g) => `${g.title} ${g.count}${g.collapsed ? ' (collapsed)' : ''}`).join(', ') || 'no groups'}`)
   }
-  if (result.dryRun) {
+  if (result.dryRun && result.gather) {
+    for (const g of result.gather) {
+      const from = g.from.map((f) => `${f.count} from window ${f.windowId}`).join(', ')
+      lines.push(`would gather "${g.title}" into window ${result.host}${from ? `: ${from}` : ': nothing to move'}`)
+    }
+  } else if (result.dryRun) {
     for (const w of result.steps.windows) {
       lines.push(`would group window ${w.windowId}: ${w.groups.map((g) => `${g.title} ${g.tabs.length}`).join(', ')}`)
     }
   }
   for (const s of result.skipped || (result.steps && result.steps.skipped) || []) lines.push(`skipped ${s.handle} (${s.group}): ${s.reason}`)
   for (const m of result.misplaced || []) lines.push(`NOT IN ITS GROUP: ${m.handle} should be in "${m.group}"`)
+  for (const s of result.strays || []) lines.push(`STILL OUTSIDE WINDOW ${result.host}: "${s.title}", ${s.count} tabs in window ${s.windowId}`)
   for (const n of result.notes || []) lines.push(`note: ${n}`)
   return lines.join('\n')
 }
