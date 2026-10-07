@@ -31,11 +31,16 @@ tab-by-tab path below through repeated runs without a fault.
   still groups what had moved, and is reported in `failed`.
 - **A group holding its window's active tab is gathered too.** The tab arrives
   unselected, so the named window keeps showing what it showed; the window it
-  left shows the tab the browser picks next, named in `reshown`. A window left
-  with no tabs is closed by the browser, named in `emptied`. No tab is closed,
-  reloaded, navigated, pinned, discarded or opened. `held` is gone; `tabsMoved`
-  counts the tabs moved, and `merged` counts only the window's own extra groups
-  folded.
+  left shows the tab the browser picks next, named in `reshown` (a discarded
+  tab shown that way reloads). A window left with no tabs is closed by the
+  browser, named in `emptied`. No tab is closed, reloaded, navigated, pinned,
+  discarded or opened by the tool. `held` is gone; `tabsMoved` counts the tabs
+  moved, and `merged` counts only the window's own extra groups folded.
+- **The gather is marked destructive** (`destructiveHint: true`), since the
+  browser may close a window it empties.
+- **Grouping the moved tabs reuses the plain grouping**, so a drag lock is
+  retried and the new group is still titled and colored; a grouping that
+  fails is reported in `failed`, and the tabs already moved are still counted.
 - **`scripts/group-tabs.mjs`**: the gather's grouping of named tabs now lists
   again and retries without a tab closed or dragged away since the listing, as
   the plain apply always did; both paths share one grouping, one move-to-end

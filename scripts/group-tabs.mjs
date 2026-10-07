@@ -468,7 +468,7 @@ const USAGE =
   '\n' +
   'Groups each window\'s planned tabs under the plan\'s titles and colors, left to right in plan\n' +
   'order, collapses the groups marked collapsed, and reads it all back. It never closes, reloads,\n' +
-  'navigates, opens or activates a tab, and never moves a tab to another window.\n' +
+  'navigates, opens or activates a tab; without "window" it never moves a tab to another window.\n' +
   '\n' +
   'With "window" in the plan (a window id, or "last-focused"), every group of each planned title is\n' +
   'gathered from every window into that one and folded into one group per title: only the tabs of\n' +

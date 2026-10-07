@@ -818,7 +818,7 @@ function registerWriteTools(server) {
         title: titleArg.describe('The exact title of the groups to gather. Matched exactly, not as a pattern.'),
         window: z.number().int().nonnegative().describe('The window to gather into, a windowId from browser_list_groups (whose result also names the window used last, lastFocusedWindowId).'),
       }),
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     },
     async ({ profile, title, window }) => {
       const result = await client.request({ op: OPS.GATHER_GROUP, profile, args: { title, window } })

@@ -487,8 +487,8 @@ async function windowOpen(id) {
 /**
  * Move one outside group's tabs into the host, one tab at a time, each to the
  * end of the host window (chrome.tabs.move with the host's windowId), then put
- * them in the host's group of that title: `keep`, or a new one made in the
- * host with the outside group's color when the host has none.
+ * them in the host's leftmost group of that title (groupTabs), or a new one
+ * made in the host with the outside group's color when the host has none.
  *
  * chrome.tabGroups.move with a windowId is never called: on 2026-10-06 its
  * first cross-window call closed a real browser (Brave 154), while this path
@@ -497,8 +497,9 @@ async function windowOpen(id) {
  * where it went.
  *
  * A move the browser refuses stops this group there: the tabs already moved
- * still go into the host's group, and the error is returned for the caller to
- * report, so no moved tab is left outside a group.
+ * still go into the host's group. Either error (a refused move, or a grouping
+ * that fails) is returned for the caller to report beside the tabs that did
+ * move, so the counts and the windows they left stay true.
  *
  * @returns {Promise<{keep: number|null, ids: number[], tookActive: boolean, error: string|null}>}
  */
@@ -525,24 +526,24 @@ async function moveGroupTabsIn(group, title, host, keep, wait) {
   }
   if (ids.length === 0) return { keep, ids, tookActive, error }
 
+  // groupTabs puts them in the host's leftmost group of this title, or makes
+  // one there, with its own re-reads and drag-lock retries; a group made here
+  // takes the color of the group the tabs came from.
   let kept = keep
-  await edit(async () => {
+  try {
     const here = []
     for (const id of ids) {
       const t = await chrome.tabs.get(id).catch(() => null)
       if (t && t.windowId === host && !t.pinned) here.push(id)
     }
-    if (here.length === 0) return
-    const now = kept === null ? null : await chrome.tabGroups.get(kept).catch(() => null)
-    if (now && now.windowId === host) {
-      await stillIn(host, here, kept)
-      await chrome.tabs.group({ groupId: kept, tabIds: here })
-    } else {
-      await stillIn(host, here)
-      kept = await chrome.tabs.group({ tabIds: here, createProperties: { windowId: host } })
-      await chrome.tabGroups.update(kept, { title, color: group.color })
+    if (here.length > 0) {
+      const r = await groupTabs({ tabIds: here, title, retryDelayMs: wait })
+      kept = r.group.groupId
+      if (r.created) await edit(() => chrome.tabGroups.update(kept, { color: group.color }), wait)
     }
-  }, wait)
+  } catch (err) {
+    error = error || errorText(err)
+  }
   return { keep: kept, ids, tookActive, error }
 }
 
@@ -655,7 +656,7 @@ export async function gatherGroup(args = {}) {
     notes.push(`Window ${reshown.join(', ')} now shows another tab, picked by the browser: its active tab was in this group and moved.`)
   }
   if (emptied.length > 0) {
-    notes.push(`Window ${emptied.join(', ')} had no tabs left; the browser closes a window left with no tabs. No tab was closed.`)
+    notes.push(`Window ${emptied.join(', ')} had no tabs left after the gather, or was closed meanwhile; the browser closes a window left with no tabs. No tab was closed.`)
   }
   if (failed.length > 0) notes.push(`${failed.length} "${title}" group${failed.length === 1 ? '' : 's'} could not be moved or folded: ${failed.map((f) => f.error).join('; ')}`)
   if (notes.length > 0) result.note = notes.join(' ')

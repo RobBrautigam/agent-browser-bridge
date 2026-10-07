@@ -342,7 +342,10 @@ away:
 - **A group holding its window's active tab is not collapsed.** The browser
   would switch that window to another tab; the result's `note` says it was
   skipped.
-- **Nothing is closed, reloaded, navigated, opened or activated.**
+- **Nothing is closed, reloaded, navigated, opened or activated**, with one
+  exception in the gather: a window whose active tab is gathered away shows
+  the tab the browser picks next (a discarded one reloads), and a window the
+  gather leaves with no tabs is closed by the browser. No tab is closed.
 
 For a whole layout, `node scripts/group-tabs.mjs <profile label> <plan.json>`
 applies a plan:

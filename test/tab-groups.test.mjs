@@ -726,6 +726,39 @@ test('a window the gather empties closes on its own, and nothing else is closed'
   assert.equal(shown.id, 1)
 })
 
+test('a gather that makes the host\'s group still titles and colors it when the drag lock refuses the first try', async () => {
+  const fake = fakeChrome({
+    windows: { [W1]: [{ id: 1, active: true }], [W2]: [{ id: 9, group: { key: 'b', title: 'Decide', color: 'red' } }, { id: 10, active: true }] },
+    current: W1,
+  })
+  const g = await loadGroups(fake)
+  // Edit 1 moves tab 9, edit 2 makes the group; the next edit, its title and color, meets a drag.
+  fake.atEdit(3, () => {
+    throw new Error(EDIT_BLOCKED)
+  })
+  const result = await g.gatherGroup({ title: 'Decide', window: W1, retryDelayMs: 0 })
+  assert.equal(result.group && result.group.title, 'Decide', JSON.stringify(result))
+  assert.equal(result.group.color, 'red')
+  assert.equal(fake.groupOf(9).title, 'Decide')
+})
+
+test('a moved tab the host cannot group is still counted, and its window is still reported', async () => {
+  const fake = fakeChrome({
+    windows: { [W1]: [{ id: 1, active: true }], [W2]: [{ id: 9, active: true, group: { key: 'b', title: 'Decide' } }, { id: 10 }] },
+    current: W1,
+  })
+  const g = await loadGroups(fake)
+  fake.atEdit(2, () => {
+    throw new Error('Grouping failed.')
+  })
+  const result = await g.gatherGroup({ title: 'Decide', window: W1, retryDelayMs: 0 })
+  assert.equal(result.tabsMoved, 1)
+  assert.deepEqual(result.reshown, [W2])
+  assert.equal(result.failed.length, 1)
+  assert.match(result.failed[0].error, /Grouping failed/)
+  assert.deepEqual(fake.strip(W1), [1, 9])
+})
+
 test('a tab a person drags out of its group during the gather is left where it went', async () => {
   const fake = fakeChrome({
     windows: {
