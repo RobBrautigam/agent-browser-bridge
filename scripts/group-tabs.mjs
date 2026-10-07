@@ -32,12 +32,12 @@
  * "last-focused" for the window the person used last) brings every group of
  * each planned title, from every window, into that one window and folds them
  * into one group per title, then lines them up left to right in plan order.
- * A whole group moving is the only thing that changes window: a planned tab
+ * Only the tabs of a group of a planned title change window: a planned tab
  * that is in another window and in no group of that title is left there and
- * reported. A group holding its window's active tab never moves (the browser
- * would carry that tab along and show it in the host window), so no window is
- * emptied. The read-back fails while any planned title still stands in more
- * than one group or outside that window.
+ * reported. A group holding its window's active tab is gathered too; that
+ * window shows whatever tab the browser picks next, and a window left with no
+ * tabs is closed by the browser (no tab is). The read-back fails while any
+ * planned title still stands in more than one group or outside that window.
  *
  *   { "window": "last-focused", "groups": [ { "title": "Decide", "color": "red", "tabs": [] }, ... ] }
  *
@@ -206,6 +206,68 @@ function countsOf(listed) {
 }
 
 /**
+ * Group one window's named tabs under a plan group's title, in the plan's order.
+ *
+ * A tab closed or dragged to another window since the listing fails the whole
+ * call, so on a failure the profile is listed again, the tabs no longer in this
+ * window are dropped (and reported in `skipped`), and the call is tried once
+ * more with the rest. `g.tabs` is narrowed to what was grouped, so the
+ * read-back checks only those. Shared by the plain apply and the gather.
+ *
+ * @returns {Promise<number|undefined>} the group id, or undefined when nothing was grouped
+ */
+async function groupNamed({ send, windowId, g, skipped, notes, errors }) {
+  const once = async () => {
+    const r = await send(OPS.GROUP_TABS, { tabs: g.tabs, title: g.title, color: g.color, collapsed: false })
+    const groupId = r && r.group ? r.group.groupId : undefined
+    if (!Number.isInteger(groupId)) throw new Error(`"${g.title}" in window ${windowId} came back without a group id.`)
+    if (r.note) notes.push(r.note)
+    return groupId
+  }
+  try {
+    return await once()
+  } catch (err) {
+    try {
+      const now = await send(OPS.LIST_GROUPS, {})
+      const here = new Set(((now && now.tabs) || []).filter((t) => t.windowId === windowId && !t.pinned).map((t) => t.handle))
+      const keep = g.tabs.filter((h) => here.has(h))
+      if (keep.length === g.tabs.length) {
+        errors.push(`"${g.title}" in window ${windowId}: ${describeError(err)}`)
+        return undefined
+      }
+      for (const h of g.tabs.filter((x) => !here.has(x))) skipped.push({ handle: h, group: g.title, reason: 'closed or moved during the run' })
+      g.tabs = keep
+      return keep.length > 0 ? await once() : undefined
+    } catch (again) {
+      errors.push(`"${g.title}" in window ${windowId}: ${describeError(again)}`)
+      return undefined
+    }
+  }
+}
+
+/** Collapse the groups the plan marks collapsed; a skipped collapse comes back as a note. */
+async function collapseMarked({ send, made, notes, errors }) {
+  for (const m of made) {
+    if (!m.collapsed) continue
+    try {
+      const r = await send(OPS.UPDATE_GROUP, { group: m.groupId, collapsed: true })
+      if (r && r.note) notes.push(r.note)
+    } catch (err) {
+      errors.push(`collapsing "${m.title}" in window ${m.windowId}: ${describeError(err)}`)
+    }
+  }
+}
+
+/** Move one group to the end of its window, so the groups stand in plan order. */
+async function toTheEnd({ send, windowId, title, groupId, errors }) {
+  try {
+    await send(OPS.MOVE_GROUP, { group: groupId, index: -1 })
+  } catch (err) {
+    errors.push(`moving "${title}" in window ${windowId}: ${describeError(err)}`)
+  }
+}
+
+/**
  * Apply a plan to one profile, then read it back.
  *
  * @param {{client: {request: Function}, profile: string, plan: object, dryRun?: boolean}} spec
@@ -226,60 +288,15 @@ export async function applyPlan({ client, profile, plan, dryRun = false }) {
 
   // One group at a time, and a failure is that group's alone: every later group
   // and window is still made, and the collapse pass still runs.
-  const groupOnce = async (w, g) => {
-    const r = await send(OPS.GROUP_TABS, { tabs: g.tabs, title: g.title, color: g.color, collapsed: false })
-    const groupId = r && r.group ? r.group.groupId : undefined
-    if (!Number.isInteger(groupId)) throw new Error(`"${g.title}" in window ${w.windowId} came back without a group id.`)
-    if (r.note) notes.push(r.note)
-    return groupId
-  }
   for (const w of steps.windows) {
     for (const g of w.groups) {
-      let groupId
-      try {
-        groupId = await groupOnce(w, g)
-      } catch (err) {
-        // A tab closed or dragged to another window since the listing fails the
-        // whole call. List again, drop the tabs no longer in this window, and
-        // try once more with the rest.
-        let retried = false
-        try {
-          const now = await send(OPS.LIST_GROUPS, {})
-          const here = new Set(((now && now.tabs) || []).filter((t) => t.windowId === w.windowId && !t.pinned).map((t) => t.handle))
-          const keep = g.tabs.filter((h) => here.has(h))
-          if (keep.length < g.tabs.length) {
-            for (const h of g.tabs.filter((x) => !here.has(x))) skipped.push({ handle: h, group: g.title, reason: 'closed or moved during the run' })
-            g.tabs = keep
-            retried = true
-            if (keep.length > 0) groupId = await groupOnce(w, g)
-          }
-        } catch (again) {
-          errors.push(`"${g.title}" in window ${w.windowId}: ${describeError(again)}`)
-          continue
-        }
-        if (!retried) {
-          errors.push(`"${g.title}" in window ${w.windowId}: ${describeError(err)}`)
-          continue
-        }
-        if (groupId === undefined) continue
-      }
+      const groupId = await groupNamed({ send, windowId: w.windowId, g, skipped, notes, errors })
+      if (groupId === undefined) continue
       made.push({ windowId: w.windowId, title: g.title, groupId, collapsed: g.collapsed })
-      try {
-        await send(OPS.MOVE_GROUP, { group: groupId, index: -1 })
-      } catch (err) {
-        errors.push(`moving "${g.title}" in window ${w.windowId}: ${describeError(err)}`)
-      }
+      await toTheEnd({ send, windowId: w.windowId, title: g.title, groupId, errors })
     }
   }
-  for (const m of made) {
-    if (!m.collapsed) continue
-    try {
-      const r = await send(OPS.UPDATE_GROUP, { group: m.groupId, collapsed: true })
-      if (r && r.note) notes.push(r.note)
-    } catch (err) {
-      errors.push(`collapsing "${m.title}" in window ${m.windowId}: ${describeError(err)}`)
-    }
-  }
+  await collapseMarked({ send, made, notes, errors })
 
   // The read-back is the proof, and its failure must not lose what was done.
   let after
@@ -344,8 +361,8 @@ async function applyGather({ client, profile, plan, dryRun, before }) {
   const notes = []
   const errors = []
 
-  // Every title, in plan order. A group holding its window's active tab is
-  // held by the extension and stays a stray in the read-back.
+  // Every title, in plan order. A group that could not move stays a stray in
+  // the read-back.
   for (const g of plan.groups) {
     try {
       const r = await send(OPS.GATHER_GROUP, { title: g.title, window: host })
@@ -368,48 +385,34 @@ async function applyGather({ client, profile, plan, dryRun, before }) {
   const inHost = new Map()
   for (const w of steps.windows) {
     for (const g of w.groups) {
-      if (w.windowId === host) inHost.set(g.title, g.tabs)
-      else for (const handle of g.tabs) skipped.push({ handle, group: g.title, reason: 'in another window; only a whole group moves between windows' })
+      if (w.windowId === host) inHost.set(g.title, g)
+      else for (const handle of g.tabs) skipped.push({ handle, group: g.title, reason: 'in another window and in no group of that title' })
     }
   }
   const made = []
   for (const g of plan.groups) {
     let groupId
-    try {
-      const named = inHost.get(g.title) || []
-      if (named.length > 0) {
-        const r = await send(OPS.GROUP_TABS, { tabs: named, title: g.title, color: g.color, collapsed: false })
-        groupId = r && r.group ? r.group.groupId : undefined
-        if (r && r.note) notes.push(r.note)
-      } else {
-        const found = groupsIn(now).find((x) => x.title === g.title && x.windowId === host)
-        if (!found) continue
-        groupId = found.groupId
-        const props = { group: groupId, color: g.color }
-        if (!g.collapsed) props.collapsed = false
+    const named = inHost.get(g.title)
+    if (named && named.tabs.length > 0) {
+      groupId = await groupNamed({ send, windowId: host, g: named, skipped, notes, errors })
+      if (groupId === undefined) continue
+    } else {
+      const found = groupsIn(now).find((x) => x.title === g.title && x.windowId === host)
+      if (!found) continue
+      groupId = found.groupId
+      const props = { group: groupId, color: g.color }
+      if (!g.collapsed) props.collapsed = false
+      try {
         await send(OPS.UPDATE_GROUP, props)
+      } catch (err) {
+        errors.push(`"${g.title}" in window ${host}: ${describeError(err)}`)
+        continue
       }
-      if (!Number.isInteger(groupId)) throw new Error('came back without a group id.')
-    } catch (err) {
-      errors.push(`"${g.title}" in window ${host}: ${describeError(err)}`)
-      continue
     }
-    made.push({ title: g.title, groupId, collapsed: g.collapsed })
-    try {
-      await send(OPS.MOVE_GROUP, { group: groupId, index: -1 })
-    } catch (err) {
-      errors.push(`moving "${g.title}" in window ${host}: ${describeError(err)}`)
-    }
+    made.push({ windowId: host, title: g.title, groupId, collapsed: g.collapsed })
+    await toTheEnd({ send, windowId: host, title: g.title, groupId, errors })
   }
-  for (const m of made) {
-    if (!m.collapsed) continue
-    try {
-      const r = await send(OPS.UPDATE_GROUP, { group: m.groupId, collapsed: true })
-      if (r && r.note) notes.push(r.note)
-    } catch (err) {
-      errors.push(`collapsing "${m.title}": ${describeError(err)}`)
-    }
-  }
+  await collapseMarked({ send, made, notes, errors })
 
   let after
   try {
@@ -432,8 +435,8 @@ async function applyGather({ client, profile, plan, dryRun, before }) {
   const byId = new Map(all.map((x) => [x.groupId, x]))
   const groupOfTab = new Map(((after && after.tabs) || []).map((t) => [t.handle, t.groupId]))
   const misplaced = []
-  for (const [title, handles] of inHost) {
-    for (const handle of handles) {
+  for (const [title, g] of inHost) {
+    for (const handle of g.tabs) {
       const found = byId.get(groupOfTab.get(handle))
       if (!found || found.title !== title || found.windowId !== host) misplaced.push({ handle, group: title })
     }
@@ -468,8 +471,8 @@ const USAGE =
   'navigates, opens or activates a tab, and never moves a tab to another window.\n' +
   '\n' +
   'With "window" in the plan (a window id, or "last-focused"), every group of each planned title is\n' +
-  'gathered from every window into that one and folded into one group per title: a whole group\n' +
-  'moving is the only thing that changes window, and a group holding its window\'s active tab stays.\n' +
+  'gathered from every window into that one and folded into one group per title: only the tabs of\n' +
+  'those groups change window, and a window left with no tabs is closed by the browser.\n' +
   'Exit: 0 every tab in its group, 1 something did not land, 2 usage or a bad plan.'
 
 export function parseArgs(argv) {

@@ -331,11 +331,13 @@ away:
 - **No tab changes window on its own.** A group lives in one window, so tabs
   from two windows are refused, a new group is always made in its tabs' own
   window (the API's default is the current one, which would drag them there),
-  and only `browser_gather_group` moves anything to another window: whole
-  groups, into the window it was named. A group holding its window's active
-  tab never moves: the browser would carry that tab along and show it in the
-  named window, and show another tab in the window it left. So no window is
-  emptied by a gather.
+  and only `browser_gather_group` moves anything to another window: the tabs
+  of groups of one title, one by one, into the window it was named. A moved
+  tab arrives unselected, so that window keeps showing what it showed. The
+  window a group's active tab left shows whatever tab the browser picks next,
+  and a window left with no tabs is closed by the browser; no tab is closed.
+  The whole-group window move (`chrome.tabGroups.move` with a window) is never
+  used: its first call on a real browser closed that browser.
 - **Pinned tabs are refused**, because grouping a tab unpins it.
 - **A group holding its window's active tab is not collapsed.** The browser
   would switch that window to another tab; the result's `note` says it was
@@ -373,12 +375,12 @@ To gather a layout into one window instead, add `"window"`: a window id, or
 Every group of each planned title, in every window, is gathered into that
 window and folded into one, then the groups are lined up left to right in plan
 order, colored and collapsed as planned. A group holding its window's active
-tab stays where it is and is reported; show another tab in that window and
-run the plan again to bring it in. Tabs named in `tabs` join their group when they are in
-that window; one in another window and in no group of that title is left
-there and reported. The read-back fails while a planned title still stands in
-more than one group or outside that window. With `"window"` set, and only
-then, the script's client also passes the gather, and only into that window.
+tab is gathered too, and a window the gather empties is closed by the browser.
+Tabs named in `tabs` join their group when they are in that window; one in
+another window and in no group of that title is left there and reported. The
+read-back fails while a planned title still stands in more than one group or
+outside that window. With `"window"` set, and only then, the script's client
+also passes the gather, and only into that window.
 
 ### Showing a page to the human at the machine
 
