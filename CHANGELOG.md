@@ -11,6 +11,41 @@ replaces the one-time steps in the earlier entries.
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-10-06
+
+The gather no longer moves a whole group between windows. In 1.2.1 its first
+real call, `chrome.tabGroups.move` with a `windowId`, closed the browser it ran
+in (Brave 154, a deliberate crash in the browser process while handling that
+call). The same browser build, run on its own throwaway profile, took the
+tab-by-tab path below through repeated runs without a fault.
+
+### Changed
+
+- **`browser_gather_group` moves tabs, not groups.** Each tab of a group of
+  that title in another window moves on its own, in its order, to the end of
+  the named window (`chrome.tabs.move` with its `windowId`) and into that
+  window's group of the title (`chrome.tabs.group` with its id), or a new one
+  in the moved group's color. `chrome.tabGroups.move` is never given a window.
+  Each tab is re-read inside its own edit, so a tab a person drags away or
+  closes meanwhile is left where it went; a refused move stops that group,
+  still groups what had moved, and is reported in `failed`.
+- **A group holding its window's active tab is gathered too.** The tab arrives
+  unselected, so the named window keeps showing what it showed; the window it
+  left shows the tab the browser picks next, named in `reshown` (a discarded
+  tab shown that way reloads). A window left with no tabs is closed by the
+  browser, named in `emptied`. No tab is closed, reloaded, navigated, pinned,
+  discarded or opened by the tool. `held` is gone; `tabsMoved` counts the tabs
+  moved, and `merged` counts only the window's own extra groups folded.
+- **The gather is marked destructive** (`destructiveHint: true`), since the
+  browser may close a window it empties.
+- **Grouping the moved tabs reuses the plain grouping**, so a drag lock is
+  retried and the new group is still titled and colored; a grouping that
+  fails is reported in `failed`, and the tabs already moved are still counted.
+- **`scripts/group-tabs.mjs`**: the gather's grouping of named tabs now lists
+  again and retries without a tab closed or dragged away since the listing, as
+  the plain apply always did; both paths share one grouping, one move-to-end
+  and one collapse helper.
+
 ## [1.2.1] - 2026-10-06
 
 Gathering tab groups into one window, opt-in. A group lived in the window its
