@@ -11,6 +11,68 @@ replaces the one-time steps in the earlier entries.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-08
+
+A guarded file upload. Until now there was deliberately no upload tool, because
+an unguarded one is a file-exfiltration primitive a poisoned page could aim at
+your secrets. It now exists behind the rails that reasoning asked for: one
+approved folder, the arm, and an audit line written before anything leaves.
+It does nothing until you name a folder.
+
+### Added
+
+- **`browser_upload_file`** (ARMED): puts one or more files into a page's file
+  input, as if they had been picked, and fires the `input` and `change` events
+  a pick fires. It does not submit the form. The target is the input, its
+  label, or an element holding exactly one; a disabled input, a folder picker
+  and several files for a single-file input are refused. At most 10 files and
+  20 MB together.
+- **Three rails, each named in its refusal.** The folder rail
+  (`E_UPLOAD_REFUSED`): only files inside the one folder named in
+  `upload.json` in the state directory are read, on their real paths, so a
+  `..`, a symlink or a junction that leads out is refused, and so is anything
+  that is not a regular file or names an NTFS alternate data stream; no folder
+  named means every upload is refused. The arm rail (`E_NOT_ARMED`): the
+  profile must be armed, the same arm as `browser_eval_js`. The audit rail
+  (`E_UPLOAD_REFUSED`): the upload's send line must be on disk before the
+  bytes leave.
+- **The upload's audit lines.** A send line (stage `send`) before the bytes
+  leave names the tab handle and each file by its bare name and size; the
+  completion line adds the site's origin and the outcome. Never a path, never
+  the contents. A refused upload is logged with the names the caller gave.
+- `UPLOAD_LIMITS` and `UPLOAD_RAIL` in the contract, mirrored in the
+  extension; a refusal's error data carries its rail.
+
+### Security
+
+- **The broker reads the bytes; no path reaches the browser.** The extension
+  receives bytes under bare names and sets them through a `DataTransfer`.
+  Chromium's path-based route (`DOM.setFileInputFiles`) would make the browser
+  the reader of any path it is given and needs "Allow access to file URLs" for
+  the extension, which stays off. A `files` payload sent by a caller is thrown
+  away, and no other operation carries `files` or `paths`.
+- **`bridge_arm` now also opens the upload**, and its description and
+  confirmation say so. Keep it off every auto-approve list. SECURITY.md has
+  what the rails do not defend, chiefly an agent that can write into the
+  folder.
+
+### Changed
+
+- An upload's request may exceed Chromium's 1 MiB host-to-browser cap, because
+  the host splits large frames and the extension reassembles them. Every other
+  operation keeps the 1 MiB refusal.
+
+### Upgrading
+
+1. `git pull`, then `npm ci`.
+2. Reload the extension in every profile (`npm run reload`).
+3. Restart the broker as in the 1.0.0 Upgrading section. Until both are
+   upgraded, an upload is answered with "Unknown operation"; every other
+   operation keeps working in every mix of versions.
+4. To use uploads, write `upload.json` in the state directory with the one
+   folder they may come from (`{"folder": "<absolute path>"}`). Without it,
+   nothing changes.
+
 ## [1.2.2] - 2026-10-06
 
 The gather no longer moves a whole group between windows. In 1.2.1 its first

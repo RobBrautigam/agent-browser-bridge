@@ -7,7 +7,7 @@ point of it, and it is also the whole risk: an agent that can click, type and
 read inside your authenticated sessions can do what you can do there. The
 design limits that in the ways listed in the README's Security section (no
 network listener, a per-boot token, a required `profile` on every call, an
-explicit arm for arbitrary JavaScript, a panic switch that works without the
+explicit arm for arbitrary JavaScript and for file uploads, a panic switch that works without the
 agent's cooperation, an origin-only audit log). It does not and cannot protect
 you from code already running as your user, and it does not make an agent
 wise about what it reads on a page. Prompt injection is real; the tiering,
@@ -232,6 +232,68 @@ What it does not defend, stated plainly:
   field with no password type, no matching autocomplete and no label words is
   not recognized. Most sign-in and sign-up forms say what their fields are,
   because password managers depend on it.
+
+## Uploading a file
+
+`browser_upload_file` sends a file from this machine to a website. That is the
+move a poisoned page would most like an agent to make ("attach your SSH key to
+this support form"), so the tool runs only behind three rails, checked by the
+broker, and a refusal names the rail that refused.
+
+- **The arm rail.** The profile must be armed, with the same arm as
+  `browser_eval_js`: one profile, a bounded window, refused with
+  `E_NOT_ARMED` otherwise, and refused outright for an unclaimed profile.
+- **The audit rail.** Before any file is opened, the broker checks that the
+  audit log can take a line. Before the bytes leave, it writes the upload's
+  send line (stage `send`: the tab handle and each file by its bare name and
+  size) and refuses with `E_UPLOAD_REFUSED` when that write fails. Everywhere
+  else in the bridge a failed audit write never fails the operation it
+  describes; an upload is the exception, so a crash or a kill after the send
+  still leaves its line. When the browser answers, the completion line adds
+  the site's origin and the outcome. Never a path and never the contents. A
+  refused upload is logged too, with the bare names the caller gave.
+- **The folder rail.** Only files inside the one folder named in `upload.json`
+  in the state directory (`{"folder": "<absolute path>"}`) are read. No file
+  there means no folder and every upload refused, which is the default. Each
+  path, a bare name, a relative path or an absolute one, must lie inside the
+  folder as written and again once resolved to its real path, so `..`, a
+  symlink and a junction that lead out are refused, and on Windows so is a
+  path naming an alternate data stream (`report.pdf:hidden`), a hidden part of
+  a file that every other check would pass. It must be a regular file,
+  and it is opened once and checked to be the file its path resolved to, so a
+  swap between the check and the read is refused. At most 10 files and 20 MB
+  together. A refusal names the file by its bare name and never echoes the
+  folder or any other path.
+
+Why the broker reads the bytes rather than handing the browser a path:
+Chromium's own way to set a file input from a path (the DevTools protocol's
+`DOM.setFileInputFiles`) has the browser read whatever path it is given, and
+Chromium allows that for an extension only when the operator turns on "Allow
+access to file URLs" for it. Turning that on would open every local file to the
+extension, and nothing here asks for it. Instead the extension receives bytes
+under bare names, builds `File` objects, sets them on the input through a
+`DataTransfer` and fires `input` and `change`, which is how Playwright sets
+files from a buffer. A `files` payload sent by a caller is thrown away by the
+broker, so the only bytes that can reach a page are bytes it read from the
+folder.
+
+What it does not defend, stated plainly:
+
+- **An agent that can arm.** `bridge_arm` is an agent tool. Its description
+  tells the agent to ask you, and your client's approval prompt is the human
+  step; keep `bridge_arm` off every auto-approve list.
+- **An agent that can write files.** The broker uploads whatever is in the
+  folder, and reads `upload.json` on every upload. An agent with shell or file
+  access can copy a secret into the folder first, or rewrite `upload.json` to
+  name another folder, as can any code running as your user. Keep the folder
+  and the state directory out of reach of the sessions that can upload, put in
+  the folder only what you mean to send, and empty it afterwards.
+- **What the page does with the file.** The tool fills the input and does not
+  submit the form, but a page's own script can send a file the moment it
+  lands. The site you upload to is the site that receives it.
+- **Frames.** Inputs are set in the page's main frame only. An upload box
+  inside an iframe is not reachable, by the main-frame rule every page
+  operation follows rather than by a guard of its own.
 
 ## Grouping tabs
 

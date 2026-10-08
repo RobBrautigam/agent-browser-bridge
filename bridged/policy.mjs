@@ -25,6 +25,7 @@ import {
   HOST_REQ_ALLOWED_OPS,
   HOST_ONLY_OPS,
   MAX_ARM_MINUTES,
+  UPLOAD_RAIL,
 } from '../shared/protocol.mjs'
 import { PANIC_FILE } from '../shared/paths.mjs'
 
@@ -205,7 +206,7 @@ export function isAuditableOp(op) {
  *
  * @returns {{code:string,message:string}|null} null means allowed
  */
-export function checkTierAccess({ tier, claimed, armed, label }) {
+export function checkTierAccess({ tier, claimed, armed, label, op = null }) {
   if (tier !== TIER.ARMED) return null
 
   if (!claimed) {
@@ -215,6 +216,20 @@ export function checkTierAccess({ tier, claimed, armed, label }) {
         `Profile "${label}" has not been claimed yet, so its identity is unknown and the armed ` +
         'tier is refused. Open the extension options page in that browser profile and pick ' +
         'which profile it is.',
+    }
+  }
+  if (!armed && op === OPS.UPLOAD_FILE) {
+    // The upload's own words, because the refusal is read by a model that may
+    // have been steered by the page it is on: it says which rail refused and
+    // that opening the window is a human's call, not a retry.
+    return {
+      code: ERR.NOT_ARMED,
+      rail: UPLOAD_RAIL.ARM,
+      message:
+        `The arm rail refused this upload: profile "${label}" is not armed (its arm window is closed or was never ` +
+        'opened). An upload sends a file from this machine to a web page, so it runs only while a human has armed ' +
+        `that profile. Ask the human first; with their yes, bridge_arm with profile "${label}" opens the window ` +
+        `(${TIMING.DEFAULT_ARM_MINUTES} minutes by default).`,
     }
   }
   if (!armed) {

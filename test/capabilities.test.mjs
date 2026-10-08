@@ -265,7 +265,7 @@ test('every tier value is a real TIER member', () => {
   }
 })
 
-test('evalJs is ARMED, and it is the only page-touching op that is', () => {
+test('evalJs and uploadFile are ARMED, and they are the only page-touching ops that are', () => {
   // Arbitrary JS in an authenticated session is a full-compromise primitive.
   // If someone ever demotes it to the write tier, this is the test that should
   // stop the commit.
@@ -274,9 +274,12 @@ test('evalJs is ARMED, and it is the only page-touching op that is', () => {
     TIER.ARMED,
     'evalJs must require an explicit arm - it is unbounded blast radius'
   )
+  // An upload sends a local file to a web page. Demoted to the write tier it
+  // would be the exfiltration primitive DESIGN.md kept it out for.
+  assert.equal(OP_TIER[OPS.UPLOAD_FILE], TIER.ARMED, 'uploadFile must require an explicit arm')
 
   const armed = Object.keys(OP_TIER).filter((op) => OP_TIER[op] === TIER.ARMED)
-  assert.deepEqual(armed, [OPS.EVAL_JS], `unexpected armed ops: ${armed.join(', ')}`)
+  assert.deepEqual(armed.sort(), [OPS.EVAL_JS, OPS.UPLOAD_FILE].sort(), `unexpected armed ops: ${armed.join(', ')}`)
 })
 
 test('every read op is in the READ tier', () => {
@@ -365,7 +368,7 @@ test('control and housekeeping ops are META and never reach a page', () => {
 /* 5. The routing partition: who EXECUTES an op                                */
 /* -------------------------------------------------------------------------- */
 
-test('BROWSER_OPS is exactly the twenty-two ops that cross into the extension', () => {
+test('BROWSER_OPS is exactly the twenty-three ops that cross into the extension', () => {
   // Pinned as a literal list rather than derived from OP_TIER. The first build
   // derived it as "not META, plus SET_LABEL", which quietly made the META tier
   // mean two different things. Tier answers "what policy applies"; this answers
@@ -393,9 +396,10 @@ test('BROWSER_OPS is exactly the twenty-two ops that cross into the extension', 
     OPS.SORT_WINDOW,
     OPS.UNGROUP_TABS,
     OPS.UPDATE_GROUP,
+    OPS.UPLOAD_FILE,
     OPS.WAIT_FOR,
   ].sort())
-  assert.equal(BROWSER_OPS.length, 22)
+  assert.equal(BROWSER_OPS.length, 23)
   assert.ok(Object.isFrozen(BROWSER_OPS))
 })
 

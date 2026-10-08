@@ -1255,6 +1255,32 @@ async function fill(args) {
   return { ok: true, selector, tier: 2, mode: 'type', typed: text.length, focused: focus.focused, tag: focus.tag, ...secret }
 }
 
+/**
+ * The guarded upload's last step: put files into a page's file input.
+ *
+ * Every rail is the broker's and has passed before this runs: the profile is
+ * armed, the files were read from the one upload folder, and the audit log can
+ * take the line. What arrives is bytes under bare names, never a path, so this
+ * cannot read a file from the disk and does not try. Main frame only, on a page
+ * the bridge may script, like every other tier 1 operation.
+ */
+async function uploadFile(args) {
+  const tabId = await requireTabId(args)
+  const tab = await getTab(tabId)
+  assertNotRestricted(tab)
+  const selector = await requireSelector(tabId, args)
+  const files = Array.isArray(args && args.files) ? args.files : []
+  const usable = (f) => f && typeof f.name === 'string' && f.name && typeof f.data === 'string'
+  if (files.length === 0 || !files.every(usable)) {
+    throw new OpError(
+      ERR.BAD_REQUEST,
+      'An upload arrives carrying the files the broker read from the upload folder; this one carried none it could use.'
+    )
+  }
+  const result = await runInPage(tabId, inject.pageSetFiles, { selector, files })
+  return { ...assertPageOk(result, 'upload'), tier: 1 }
+}
+
 async function pressKeys(args) {
   const tabId = await requireTabId(args)
   const tab = await getTab(tabId)
@@ -1765,6 +1791,7 @@ const HANDLERS = Object.freeze({
   [OPS.PRESS_KEYS]: pressKeys,
   [OPS.WAIT_FOR]: waitFor,
   [OPS.EVAL_JS]: evalJs,
+  [OPS.UPLOAD_FILE]: uploadFile,
   [OPS.RELOAD_EXTENSION]: reloadExtension,
   [OPS.SORT_WINDOW]: sortWindow,
   // The list says which window was used last, so a caller can gather into it.

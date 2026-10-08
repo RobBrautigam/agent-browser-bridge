@@ -22,7 +22,11 @@
  *     be sure it cannot.
  *
  * Nothing else about an operation is recorded. No page content, no form
- * values, no selectors, no arguments.
+ * values, no selectors, no arguments. The one addition is an upload's two
+ * lines, the send line written before the bytes leave (recordBeforeSend) and
+ * the completion line, which name its tab handle and each file by its bare name
+ * and size: what left this machine, and through which tab, is the point of
+ * auditing it. Never a path, and never the file's contents.
  */
 
 import fs from 'node:fs'
@@ -41,6 +45,14 @@ export const AUDIT_ROTATE_BYTES = 5 * 1024 * 1024
 const ERR_CODE_RE = /^E_[A-Z0-9_]{1,40}$/
 /** A receipt is recorded by its file name only, and only a name of this shape. */
 const RECEIPT_RE = /^[\w .()-]{1,120}\.md$/i
+/** An upload's tab is recorded as its opaque handle, and only a handle of this shape. */
+const TAB_HANDLE_RE = /^tab_[a-z0-9-]{1,40}_\d{1,9}_\d{1,12}$/
+/**
+ * An uploaded file is recorded by its bare name: no separator (so never a path),
+ * no control character, nothing that walks up. Its size is a whole number of bytes.
+ */
+const UPLOAD_NAME_RE = /^(?!\.{1,2}$)[^\\/\u0000-\u001f\u007f]{1,120}$/
+const UPLOAD_FILES_MAX = 10
 
 export class AuditLog {
   #file
@@ -87,9 +99,12 @@ export class AuditLog {
    * @param {string|null} [entry.receipt] the account-word receipt's FILE NAME a
    *   password-field call carried; written only when present, and never a path
    *   or anything the file says
+   * @param {string|null} [entry.tab]   an upload's tab HANDLE; written only when it is one
+   * @param {Array<{name:string, bytes?:number}>|null} [entry.files] an upload's files by bare
+   *   name and size; a name that is a path, or carries a control character, is dropped
    * @param {number} [entry.at]
    */
-  record({ profile = null, op, url = null, ok = true, ms = null, err = null, receipt = null, at = Date.now() }) {
+  record({ profile = null, op, url = null, ok = true, ms = null, err = null, receipt = null, tab = null, files = null, at = Date.now() }) {
     const code = err == null ? null : String(err)
     const entry = {
       at,
@@ -101,11 +116,41 @@ export class AuditLog {
       err: code && ERR_CODE_RE.test(code) ? code : null,
     }
     if (typeof receipt === 'string' && RECEIPT_RE.test(receipt)) entry.receipt = receipt
+    addUploadFields(entry, tab, files)
 
     this.#ring.push(entry)
     if (this.#ring.length > this.#ringMax) this.#ring.shift()
     this.#append(entry)
     return entry
+  }
+
+  /**
+   * The upload's send line: written BEFORE the bytes go to the browser, and
+   * the upload goes only when it landed.
+   *
+   * Every other line is written after the fact and a failed write never fails
+   * its operation. An upload is the exception the audit rail exists for: a
+   * line written only on completion would be lost to a crash, a kill or a disk
+   * that filled between the send and the answer, with the file already in the
+   * page. So this line says which tab and which files, by bare name and size,
+   * and stage "send"; the completion line that follows adds the page's origin
+   * and how it went. It stays off the board's ring, which shows what happened.
+   *
+   * @returns {boolean} whether the line is on disk
+   */
+  recordBeforeSend({ profile = null, op, tab = null, files = null, at = Date.now() }) {
+    const entry = {
+      at,
+      profile: profile == null ? null : String(profile),
+      op: String(op),
+      stage: 'send',
+      origin: null,
+      ok: null,
+      ms: null,
+      err: null,
+    }
+    addUploadFields(entry, tab, files)
+    return this.#append(entry)
   }
 
   /**
@@ -119,6 +164,33 @@ export class AuditLog {
       .map(({ at, profile, op, origin, ok }) => ({ at, profile, op, origin, ok }))
   }
 
+  /**
+   * Whether a line could be appended right now, without writing one.
+   *
+   * The upload's audit rail: a failed write never fails the operation it
+   * describes (#append), so an upload asks first, and is refused when the log
+   * cannot take its line. Opening for append and closing again proves the
+   * folder and the file accept a write at this moment.
+   */
+  canWrite() {
+    let fd = null
+    try {
+      fs.mkdirSync(path.dirname(this.#file), { recursive: true })
+      fd = fs.openSync(this.#file, 'a')
+      return true
+    } catch {
+      return false
+    } finally {
+      if (fd != null) {
+        try {
+          fs.closeSync(fd)
+        } catch {
+          /* a descriptor that will not close is the next write's problem */
+        }
+      }
+    }
+  }
+
   /** Bytes currently in the live log file. Exposed for the doctor script. */
   get size() {
     return this.#size
@@ -128,6 +200,7 @@ export class AuditLog {
     return this.#file
   }
 
+  /** @returns {boolean} whether the line was written */
   #append(entry) {
     const line = JSON.stringify(entry) + '\n'
     const bytes = Buffer.byteLength(line, 'utf8')
@@ -136,10 +209,13 @@ export class AuditLog {
       fs.mkdirSync(path.dirname(this.#file), { recursive: true })
       fs.appendFileSync(this.#file, line, 'utf8')
       this.#size += bytes
+      return true
     } catch (err) {
-      // A failed audit write must never fail the operation it was describing,
+      // A failed audit write must never fail the operation it was describing
+      // (the upload's send line is the one exception, and its caller decides),
       // but it must never be silent either: the broker logs it.
       this.#onError?.(err)
+      return false
     }
   }
 
@@ -161,6 +237,20 @@ export class AuditLog {
       // self-heals once the holder lets go.
       this.#size = 0
     }
+  }
+}
+
+/**
+ * The upload's fields: which tab, which files and how big. Names only, never a
+ * path, so the log says what left without saying where it lives.
+ */
+function addUploadFields(entry, tab, files) {
+  if (typeof tab === 'string' && TAB_HANDLE_RE.test(tab)) entry.tab = tab
+  if (Array.isArray(files)) {
+    entry.files = files
+      .slice(0, UPLOAD_FILES_MAX)
+      .filter((f) => f && typeof f.name === 'string' && UPLOAD_NAME_RE.test(f.name))
+      .map((f) => (Number.isSafeInteger(f.bytes) && f.bytes >= 0 ? { name: f.name, bytes: f.bytes } : { name: f.name }))
   }
 }
 

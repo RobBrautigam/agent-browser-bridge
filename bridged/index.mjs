@@ -31,7 +31,7 @@ import crypto from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-import { FrameDecoder, MAX_TO_BROWSER_BYTES, encodeFrame, writeFrame } from '../shared/framing.mjs'
+import { FrameDecoder, MAX_FRAME_BYTES, MAX_TO_BROWSER_BYTES, encodeFrame, writeFrame } from '../shared/framing.mjs'
 import {
   PRODUCT_NAME,
   PROTOCOL_VERSION,
@@ -57,6 +57,8 @@ import {
   reloadRefusal,
   isRestrictedUrl,
   RAW_TAB_ID_FIELD,
+  UPLOAD_LIMITS,
+  UPLOAD_RAIL,
 } from '../shared/protocol.mjs'
 import {
   BASE_DIR,
@@ -71,6 +73,8 @@ import {
 } from '../shared/paths.mjs'
 
 import { AuditLog } from './audit.mjs'
+import { AUDIT_RAIL_REFUSAL, prepareUpload } from './upload.mjs'
+import { displayName } from '../shared/upload-folder.mjs'
 import {
   ArmingState,
   MAX_ARM_MINUTES,
@@ -888,9 +892,15 @@ function handleReq(conn, msg) {
     claimed: route.claimed,
     armed: arming.isArmed(route.installId),
     label: route.label,
+    op,
   })
   if (gate) {
-    reply(conn, msg, fail(id, gate.code, gate.message), { route })
+    reply(
+      conn,
+      msg,
+      fail(id, gate.code, gate.message, gate.rail ? { rail: gate.rail } : undefined),
+      { route, ...uploadAuditOf(op, msg.args) }
+    )
     return
   }
 
@@ -1634,6 +1644,10 @@ function forwardToBrowser(conn, msg, route, op) {
   // written below, from handles checked against this route, reach a browser.
   const args = callerArgs(msg.args)
 
+  // An upload's audit line names its tab by the handle the caller sent, so it
+  // is kept before the handle becomes a raw id below.
+  const uploadTab = op === OPS.UPLOAD_FILE && typeof args.tab === 'string' ? args.tab : null
+
   // Opaque handles become raw tab ids here and nowhere else. The extension only
   // ever sees numbers, and a number can only reach it after this check.
   //
@@ -1692,6 +1706,46 @@ function forwardToBrowser(conn, msg, route, op) {
   }
   delete args.accountWord
 
+  // The guarded upload's tab, audit and folder rails; the arm rail is the tier
+  // gate, already passed. The caller's paths never travel: the broker reads the
+  // files from the one upload folder and sends their bytes under bare names,
+  // and a `files` payload the caller wrote is thrown away (prepareUpload). No
+  // other operation carries either key.
+  let upload = null
+  if (op === OPS.UPLOAD_FILE) {
+    const named = uploadAuditOf(op, msg.args)
+    if (!uploadTab) {
+      reply(
+        conn,
+        msg,
+        fail(
+          id,
+          ERR.BAD_REQUEST,
+          'An upload names its tab: pass the tab handle from browser_list_tabs, so the audit line can say which tab the file went to.'
+        ),
+        { route, ...named }
+      )
+      return
+    }
+    const prepared = prepareUpload({ args, auditWritable: audit.canWrite() })
+    if (!prepared.ok) {
+      reply(conn, msg, fail(id, prepared.code, prepared.message, { rail: prepared.rail }), {
+        route,
+        tab: uploadTab,
+        files: prepared.audit.files,
+      })
+      return
+    }
+    // In place, so these stay the args callerArgs built: the paths go and the
+    // files are the bytes prepareUpload read, the caller's own `files` replaced.
+    delete args.paths
+    args.files = prepared.args.files
+    upload = { tab: uploadTab, files: prepared.audit.files }
+  } else {
+    delete args.files
+    delete args.paths
+  }
+
   // A sort's ages arrive keyed by tab handle and leave keyed by raw tab id, by
   // the same rule as `tab`: a handle that is not this profile's is refused.
   if (op === OPS.SORT_WINDOW && args.ages !== undefined && args.ages !== null) {
@@ -1738,24 +1792,36 @@ function forwardToBrowser(conn, msg, route, op) {
   const outbound = req({ id: brokerId, op, profile: route.label, args, timeoutMs })
 
   // Native messaging is asymmetric: 64 MiB browser to host, but only 1 MiB
-  // host to browser, enforced by Chromium on the READ path. An oversized frame
-  // is dropped without an error anywhere, so an unchunked large command would
-  // present as a request that simply never answers. Refuse it here with a typed
-  // error instead. Chunking above CHUNK_THRESHOLD_BYTES is not implemented yet;
-  // this is the guard that makes its absence diagnosable rather than silent.
+  // host to browser, enforced by Chromium on the READ path. The host splits any
+  // frame over CHUNK_THRESHOLD_BYTES and the extension reassembles it (the
+  // contract's chunk()), so a large frame does arrive. Every operation but an
+  // upload still keeps under Chromium's cap, because none of them has a reason
+  // to send more and a page-sized command is a command worth questioning. An
+  // upload carries its files' bytes, held by UPLOAD_LIMITS well under a frame.
   const outboundBytes = Buffer.byteLength(JSON.stringify(outbound), 'utf8')
-  if (outboundBytes > MAX_TO_BROWSER_BYTES) {
+  const outboundCap = op === OPS.UPLOAD_FILE ? MAX_FRAME_BYTES : MAX_TO_BROWSER_BYTES
+  if (outboundBytes > outboundCap) {
     reply(
       conn,
       msg,
       fail(
         id,
         ERR.UNSUPPORTED,
-        `This "${op}" request is ${outboundBytes} bytes, over Chromium's ${MAX_TO_BROWSER_BYTES}-byte ` +
+        `This "${op}" request is ${outboundBytes} bytes, over the ${outboundCap}-byte ` +
           'limit for a message sent to a browser. Split the work into smaller requests.'
       ),
-      { route }
+      { route, ...(upload || {}) }
     )
+    return
+  }
+
+  // The audit rail's last word: an upload leaves only once its send line is on
+  // disk. The probe in prepareUpload refused early, before any file was read;
+  // this write is the one that holds, because a log can fail between the two,
+  // and a line written only on completion would be lost to a crash with the
+  // file already in the page. The completion line, with the origin, follows.
+  if (upload && !audit.recordBeforeSend({ profile: route.label, op, tab: upload.tab, files: upload.files })) {
+    reply(conn, msg, fail(id, ERR.UPLOAD_REFUSED, AUDIT_RAIL_REFUSAL, { rail: UPLOAD_RAIL.AUDIT }), { route, ...upload })
     return
   }
 
@@ -1767,6 +1833,8 @@ function forwardToBrowser(conn, msg, route, op) {
     op,
     url: typeof args.url === 'string' ? args.url : null,
     receipt,
+    tab: upload?.tab ?? null,
+    files: upload?.files ?? null,
     startedAt: Date.now(),
     timer: setTimeout(() => {
       pendings.delete(brokerId)
@@ -1843,6 +1911,8 @@ function finish(pending, response, result) {
       ms: Date.now() - pending.startedAt,
       err: response.ok ? null : response.error?.code,
       receipt: pending.receipt,
+      tab: pending.tab,
+      files: pending.files,
     })
   }
   pending.mcpConn?.send(response)
@@ -1890,7 +1960,7 @@ function stampRow(route, row) {
 }
 
 /** Send a locally-decided response, auditing it if the operation is auditable. */
-function reply(conn, msg, response, { route = null, url = null, startedAt = null } = {}) {
+function reply(conn, msg, response, { route = null, url = null, startedAt = null, tab = null, files = null } = {}) {
   if (isAuditableOp(msg.op)) {
     audit.record({
       profile: route?.label ?? (typeof msg.profile === 'string' ? msg.profile : null),
@@ -1899,9 +1969,25 @@ function reply(conn, msg, response, { route = null, url = null, startedAt = null
       ok: response.ok === true,
       ms: startedAt == null ? null : Date.now() - startedAt,
       err: response.ok ? null : response.error?.code,
+      tab,
+      files,
     })
   }
   conn.send(response)
+}
+
+/**
+ * What an upload's refusal line names before any file was read: the tab handle
+ * the caller sent and each file by its bare name. The audit module drops a tab
+ * that is not handle-shaped and a name that is not a bare name.
+ */
+function uploadAuditOf(op, rawArgs) {
+  if (op !== OPS.UPLOAD_FILE || !rawArgs || typeof rawArgs !== 'object') return {}
+  const paths = Array.isArray(rawArgs.paths) ? rawArgs.paths : []
+  return {
+    tab: typeof rawArgs.tab === 'string' ? rawArgs.tab : null,
+    files: paths.slice(0, UPLOAD_LIMITS.MAX_FILES).map((p) => ({ name: displayName(p) })),
+  }
 }
 
 function failPendingsFor(predicate, code, message) {

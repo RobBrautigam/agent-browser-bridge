@@ -117,6 +117,7 @@ export const OPS = Object.freeze({
   PRESS_KEYS: 'pressKeys',
   WAIT_FOR: 'waitFor',
   EVAL_JS: 'evalJs',
+  UPLOAD_FILE: 'uploadFile',
   RELOAD_EXTENSION: 'reloadExtension',
   SORT_WINDOW: 'sortWindow',
   LIST_GROUPS: 'listGroups',
@@ -191,6 +192,11 @@ export const OP_TIER = Object.freeze({
   [OPS.GATHER_GROUP]: TIER.WRITE,
 
   [OPS.EVAL_JS]: TIER.ARMED,
+  // Sets a page's file input from a file on this machine: the one way local
+  // bytes leave through a page. ARMED, so it runs only inside the window a
+  // human opened, and the broker adds the folder rail and the audit rail
+  // (bridged/upload.mjs). DESIGN.md section 3 has the reasoning.
+  [OPS.UPLOAD_FILE]: TIER.ARMED,
 
   [OPS.SET_LABEL]: TIER.META,
   [OPS.CLAIM_PROFILE]: TIER.META,
@@ -226,6 +232,7 @@ export const BROWSER_OPS = Object.freeze([
   OPS.PRESS_KEYS,
   OPS.WAIT_FOR,
   OPS.EVAL_JS,
+  OPS.UPLOAD_FILE,
   OPS.RELOAD_EXTENSION,
   OPS.SORT_WINDOW,
   OPS.LIST_GROUPS,
@@ -290,6 +297,23 @@ export const HOST_REQ_ALLOWED_OPS = Object.freeze([
 /** Hard ceiling on an arm window, enforced by the broker and mirrored by the MCP schema. */
 export const MAX_ARM_MINUTES = 60
 
+/**
+ * The guarded upload's limits. The bytes cross native messaging as base64 in
+ * a host-chunked frame (64 MiB at most, see shared/framing.mjs), so the total
+ * is held well under that; ten files covers a form that takes several.
+ */
+export const UPLOAD_LIMITS = Object.freeze({
+  MAX_FILES: 10,
+  MAX_TOTAL_BYTES: 20 * 1024 * 1024,
+})
+
+/** The three rails an upload passes, named in every refusal and in its data. */
+export const UPLOAD_RAIL = Object.freeze({
+  FOLDER: 'folder',
+  ARM: 'arm',
+  AUDIT: 'audit',
+})
+
 /** Typed error codes. Every failure the model can see is one of these. */
 /**
  * The rule for a custom profile label: 1 to 32 characters of lowercase
@@ -318,6 +342,9 @@ export const ERR = Object.freeze({
   // A fill or key press aimed at a password or one-time-code field without a
   // recorded yes for that site. See secretFieldVerdict below.
   SECRET_FIELD: 'E_SECRET_FIELD',
+  // An upload refused by the folder rail or the audit rail; the message says
+  // which. The arm rail answers E_NOT_ARMED like every armed operation.
+  UPLOAD_REFUSED: 'E_UPLOAD_REFUSED',
 
   // Extension-page-local. These describe an options page or popup failing to
   // reach its OWN service worker, so they never cross the wire - but a human

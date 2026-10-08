@@ -39,6 +39,8 @@ const IDENTICAL = [
   'OPEN_OR_FOCUS_MODE',
   'GROUP_COLORS',
   'GROUP_TITLE_MAX',
+  'UPLOAD_LIMITS',
+  'UPLOAD_RAIL',
 ]
 
 test('every mirrored constant is identical to the shared contract', () => {
