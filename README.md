@@ -296,7 +296,7 @@ landing on whatever tab now holds that number.
 |---|---|---|
 | Read | `browser_list_profiles`, `browser_list_tabs`, `browser_list_groups`, `browser_read_page`, `browser_screenshot`, `browser_scroll`, `bridge_status` | always allowed |
 | Write | `browser_navigate`, `browser_open_tab`, `browser_open_or_focus`, `browser_close_tab`, `browser_activate_tab`, `browser_click`, `browser_fill`, `browser_press_keys`, `browser_wait_for`, `browser_sort_window`, `browser_group_tabs`, `browser_update_group`, `browser_move_group`, `browser_ungroup_tabs`, `browser_gather_group`, `browser_reload_extension` | allowed, always audited |
-| Armed | `browser_eval_js` | refused unless that profile is armed; see What arm does |
+| Armed | `browser_eval_js`, `browser_upload_file` | refused unless that profile is armed; see What arm does. An upload also needs the upload folder; see Uploading a file |
 | Control | `bridge_arm`, `bridge_panic` | |
 
 `browser_read_page` with format `snapshot` returns a tree of interactable
@@ -516,9 +516,39 @@ acknowledgement leaves before the reload happens. `browser_list_profiles` is
 what confirms it landed. From a shell, `node scripts/reload-extension.mjs --all`
 does the asking and the confirming in one command.
 
-There is deliberately no file-upload tool. It would be an
-arbitrary-file-exfiltration primitive a poisoned page could aim at your
-secrets.
+### Uploading a file
+
+`browser_upload_file` puts files into a page's file input, as if you had picked
+them. A file going from your disk to a website is the move a poisoned page would
+most like an agent to make, so the tool does nothing until you name a folder,
+and it runs behind three rails. A refusal names the rail that refused.
+
+1. **The folder rail.** Only files inside the ONE folder you name are ever
+   read. With no folder named, every upload is refused, which is the default.
+   Each path is resolved to its real location before anything opens it, so a
+   `..`, a symlink or a junction that leads out of the folder is refused, and
+   so is anything that is not a regular file. The broker reads the bytes
+   itself and the extension gets them under the file's bare name: no path
+   reaches the browser, and the browser never reads your disk.
+2. **The arm rail.** The profile has to be armed, the same arm as
+   `browser_eval_js` (see What arm does).
+3. **The audit rail.** Every upload is written to the audit log with each
+   file's name and size, the site's origin and the tab. When the log cannot
+   be written, the upload does not go out.
+
+Name the folder in `upload.json` in the state directory (on Windows,
+`%LOCALAPPDATA%\agent-browser-bridge\upload.json`). The broker reads it on every
+upload, so no restart is needed:
+
+```json
+{ "folder": "C:\\Users\\you\\BridgeUploads" }
+```
+
+Paths are given by name inside that folder (`invoice.pdf`, `scans/page-1.png`)
+or as an absolute path inside it. At most 10 files and 20 MB together. The
+tool fills the input and fires the same `input` and `change` events a person's
+pick does; it does not submit the form. An upload box inside an iframe is not
+reachable, because page operations work in the main frame only.
 
 ## Security
 
@@ -538,9 +568,16 @@ Stated plainly, because a security model nobody believes is worse than none.
   The only browser file the broker ever opens is `Local State`, and only the
   profile-name section of it: never `Cookies`, `Login Data` or `Web Data`.
 - **What arm does.** `browser_eval_js` runs arbitrary JavaScript inside a
-  logged-in session, so it is refused unless that profile is armed, for that
+  logged-in session, and `browser_upload_file` sends a file from your disk to
+  a website, so both are refused unless that profile is armed, for that
   profile only, for a bounded window (60 minutes at most, 15 by default).
   Reading, clicking, navigating and typing never need arming.
+- **Uploads read one folder.** `browser_upload_file` reads only files inside
+  the one folder named in `upload.json`, on their real paths, and nothing at
+  all when none is named. The broker reads them, so no path reaches the
+  browser. Every upload is audited with each file's name and size, the origin
+  and the tab, and does not go out when that line cannot be written. See
+  SECURITY.md for what this does not defend.
 - **Who can arm.** You can, from the Board. So can the agent, through the
   `bridge_arm` tool, whose description tells it to ask you first; the broker
   cannot tell which of you asked. The human step in front of an agent's arm is
