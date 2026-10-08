@@ -99,6 +99,18 @@ function isInside(folder, file) {
   return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel)
 }
 
+/**
+ * Whether a Windows path names an alternate data stream (`report.pdf:hidden`,
+ * `report.pdf::$DATA`): a colon anywhere after the drive or share root. A
+ * stream is a hidden part of a file that lives inside the folder, so every
+ * path check passes it, and the operator who put the file there never sees
+ * what it carries. On other systems a colon is an ordinary character.
+ */
+export function namesAStream(p, windows = process.platform === 'win32') {
+  if (!windows || typeof p !== 'string') return false
+  return p.slice(path.win32.parse(p).root.length).includes(':')
+}
+
 /** A name fit to show the model and the log: the last segment, no control characters. */
 export function displayName(requested) {
   if (typeof requested !== 'string') return 'the file'
@@ -148,6 +160,9 @@ export function readUploadFiles(requested, settings = loadUploadSettings(), limi
       return refuse(`"${name}" is not a usable file name.`)
     }
     const wanted = path.resolve(path.isAbsolute(raw) ? raw : path.join(folder, raw))
+    if (namesAStream(wanted)) {
+      return refuse(`${name} names a hidden part of a file (an alternate data stream); only whole files are read.`)
+    }
     // The written path first, so a `..` or a path elsewhere never reaches the disk at all.
     if (!isInside(path.resolve(folder), wanted) && !isInside(folderReal, wanted)) {
       return refuse(`${name} is outside the upload folder, and only that folder is read.`)
@@ -169,8 +184,11 @@ export function readUploadFiles(requested, settings = loadUploadSettings(), limi
       if (!opened.isFile()) return refuse(`${name} is not a file.`)
       // The file opened must be the file checked: a path swapped for a link
       // between the check and the open is a different file, and is refused.
-      const checked = fs.statSync(fs.realpathSync.native(wanted))
-      if (opened.ino !== checked.ino || opened.dev !== checked.dev || !isInside(folderReal, fs.realpathSync.native(wanted))) {
+      // Compared as 64-bit numbers, because an NTFS file id does not fit a double.
+      const again = fs.realpathSync.native(wanted)
+      const openedId = fs.fstatSync(fd, { bigint: true })
+      const checkedId = fs.statSync(again, { bigint: true })
+      if (openedId.ino !== checkedId.ino || openedId.dev !== checkedId.dev || !isInside(folderReal, again)) {
         return refuse(`${name} changed while it was being read, so it was not sent.`)
       }
       if (total + opened.size > limits.MAX_TOTAL_BYTES) {

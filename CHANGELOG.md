@@ -31,13 +31,15 @@ It does nothing until you name a folder.
   (`E_UPLOAD_REFUSED`): only files inside the one folder named in
   `upload.json` in the state directory are read, on their real paths, so a
   `..`, a symlink or a junction that leads out is refused, and so is anything
-  that is not a regular file; no folder named means every upload is refused.
-  The arm rail (`E_NOT_ARMED`): the profile must be armed, the same arm as
-  `browser_eval_js`. The audit rail (`E_UPLOAD_REFUSED`): the broker checks the
-  audit log can take the line before any file is opened.
-- **The upload's audit line** names the tab handle and each file by its bare
-  name and size, with the site's origin. Never a path, never the contents. A
-  refused upload is logged with the names the caller gave.
+  that is not a regular file or names an NTFS alternate data stream; no folder
+  named means every upload is refused. The arm rail (`E_NOT_ARMED`): the
+  profile must be armed, the same arm as `browser_eval_js`. The audit rail
+  (`E_UPLOAD_REFUSED`): the upload's send line must be on disk before the
+  bytes leave.
+- **The upload's audit lines.** A send line (stage `send`) before the bytes
+  leave names the tab handle and each file by its bare name and size; the
+  completion line adds the site's origin and the outcome. Never a path, never
+  the contents. A refused upload is logged with the names the caller gave.
 - `UPLOAD_LIMITS` and `UPLOAD_RAIL` in the contract, mirrored in the
   extension; a refusal's error data carries its rail.
 

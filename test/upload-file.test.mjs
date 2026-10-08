@@ -30,7 +30,7 @@ delete process.env.BRIDGE_SOCKET_NAME
 const shared = await import('../shared/protocol.mjs')
 const mirror = await import('../extension/lib/protocol.js')
 const { ERR, OPS, OP_TIER, TIER, BROWSER_OPS, TIMING, UPLOAD_LIMITS, UPLOAD_RAIL } = shared
-const { readUploadFiles, loadUploadSettings, UPLOAD_SETTINGS_FILE } = await import('../shared/upload-folder.mjs')
+const { readUploadFiles, loadUploadSettings, namesAStream, UPLOAD_SETTINGS_FILE } = await import('../shared/upload-folder.mjs')
 const { prepareUpload } = await import('../bridged/upload.mjs')
 const { ArmingState, checkTierAccess } = await import('../bridged/policy.mjs')
 const { AuditLog } = await import('../bridged/audit.mjs')
@@ -272,6 +272,62 @@ test('the audit line keeps a bare file name and a real tab handle, and drops any
   assert.equal(Object.hasOwn(plain, 'tab'), false)
 })
 
+test('the send line: an upload is on disk, by tab and file, before it leaves, or it does not leave', () => {
+  const file = path.join(TEMP_ROOT, 'audit', 'send.jsonl')
+  const log = new AuditLog({ file })
+  const written = log.recordBeforeSend({
+    profile: 'chrome-work',
+    op: OPS.UPLOAD_FILE,
+    tab: 'tab_chrome-work_3_41',
+    files: [{ name: 'contract.pdf', bytes: 26 }],
+  })
+  assert.equal(written, true)
+  const [line] = fs.readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+  assert.equal(line.stage, 'send')
+  assert.equal(line.op, 'uploadFile')
+  assert.equal(line.tab, 'tab_chrome-work_3_41')
+  assert.deepEqual(line.files, [{ name: 'contract.pdf', bytes: 26 }])
+  // The board shows what happened, not what is about to: the send line stays off it.
+  assert.equal(log.recent().length, 0)
+
+  const blocker = path.join(TEMP_ROOT, 'not-a-dir-send')
+  fs.writeFileSync(blocker, 'a file where the audit folder should be')
+  const errors = []
+  const bad = new AuditLog({ file: path.join(blocker, 'audit.jsonl'), onError: (e) => errors.push(e) })
+  assert.equal(bad.recordBeforeSend({ profile: 'p', op: OPS.UPLOAD_FILE, tab: 'tab_p_1_2', files: [{ name: 'a.pdf', bytes: 1 }] }), false)
+  assert.equal(errors.length, 1, 'a failed write is still reported to the broker')
+})
+
+test('the folder rail refuses an alternate data stream, which is a hidden part of a file', (t) => {
+  assert.equal(namesAStream('C:\\up\\contract.pdf:hidden', true), true)
+  assert.equal(namesAStream('C:\\up\\contract.pdf::$DATA', true), true)
+  assert.equal(namesAStream('\\\\?\\C:\\up\\contract.pdf:x', true), true)
+  assert.equal(namesAStream('C:\\up\\contract.pdf', true), false)
+  assert.equal(namesAStream('\\\\server\\share\\contract.pdf', true), false)
+  // A colon is an ordinary character in a POSIX file name.
+  assert.equal(namesAStream('/up/contract.pdf:v2', false), false)
+
+  if (process.platform !== 'win32') {
+    t.skip('alternate data streams are an NTFS feature')
+    return
+  }
+  const host = path.join(FOLDER, 'stream-host.txt')
+  fs.writeFileSync(host, 'the visible part\n')
+  try {
+    fs.writeFileSync(`${host}:hidden`, 'do-not-leak from a hidden stream\n')
+  } catch (err) {
+    t.skip(`this volume does not take alternate data streams (${err.code})`)
+    return
+  }
+  for (const asked of ['stream-host.txt:hidden', `${host}:hidden`, 'stream-host.txt::$DATA']) {
+    const r = readUploadFiles([asked], SETTINGS)
+    assert.ok(r.problem, `${asked} was read`)
+    assert.match(r.problem, /folder rail refused/i)
+    assertNoLeak(r.problem)
+  }
+  assert.equal(readUploadFiles(['stream-host.txt'], SETTINGS).files?.length, 1, 'the file itself still reads')
+})
+
 test('the audit log can say whether it can be written before anything leaves', () => {
   const good = new AuditLog({ file: path.join(TEMP_ROOT, 'audit', 'probe.jsonl') })
   assert.equal(good.canWrite(), true)
@@ -344,6 +400,11 @@ test('the broker wires the three rails: the op reaches the arm gate, the audit a
   // The caller's paths never travel, and no other operation carries files.
   assert.match(broker, /delete args\.paths\s+args\.files = prepared\.args\.files/)
   assert.match(broker, /\} else \{\s+delete args\.files\s+delete args\.paths\s+\}/)
+  // The send line is written, and must land, before the request goes to the browser.
+  const forward = broker.slice(broker.indexOf('function forwardToBrowser('), broker.indexOf('function urlAllowedFor('))
+  const sendLine = forward.indexOf('audit.recordBeforeSend(')
+  assert.ok(sendLine > 0, 'no send line in forwardToBrowser')
+  assert.ok(sendLine < forward.indexOf('route.conn.send(outbound)'), 'the send line is written after the send')
   // The upload's line names its tab and files, whether it went out or was refused.
   assert.match(broker, /tab: pending\.tab,\s+files: pending\.files,/)
   assert.match(broker, /tab,\s+files,\s+\}\)\s+\}\s+conn\.send\(response\)/)

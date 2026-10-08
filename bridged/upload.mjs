@@ -16,6 +16,10 @@
 import { ERR, UPLOAD_LIMITS, UPLOAD_RAIL } from '../shared/protocol.mjs'
 import { displayName, loadUploadSettings, readUploadFiles } from '../shared/upload-folder.mjs'
 
+/** The audit rail's refusal, the same whether the probe or the send line failed. */
+export const AUDIT_RAIL_REFUSAL =
+  'The audit rail refused this upload: the bridge\'s audit log cannot be written right now, and no upload goes out without its line. Check the disk and the state folder, then retry.'
+
 /**
  * @param {object} opts
  * @param {object} opts.args            the request's arguments, tab handle already resolved
@@ -31,16 +35,10 @@ export function prepareUpload({ args, settings = loadUploadSettings(), auditWrit
   const named = { files: requested.slice(0, limits.MAX_FILES).map((p) => ({ name: displayName(p) })) }
 
   // The audit rail first: an upload that could not be recorded does not go
-  // out, so this is checked before any file is opened.
+  // out, so this is checked before any file is opened. It is a probe; the
+  // send line the broker writes just before the send is what holds the rail.
   if (!auditWritable) {
-    return {
-      ok: false,
-      code: ERR.UPLOAD_REFUSED,
-      rail: UPLOAD_RAIL.AUDIT,
-      message:
-        'The audit rail refused this upload: the bridge\'s audit log cannot be written right now, and no upload goes out without its line. Check the disk and the state folder, then retry.',
-      audit: named,
-    }
+    return { ok: false, code: ERR.UPLOAD_REFUSED, rail: UPLOAD_RAIL.AUDIT, message: AUDIT_RAIL_REFUSAL, audit: named }
   }
 
   const read = readUploadFiles(requested, settings, limits)

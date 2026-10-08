@@ -244,18 +244,22 @@ broker, and a refusal names the rail that refused.
   `browser_eval_js`: one profile, a bounded window, refused with
   `E_NOT_ARMED` otherwise, and refused outright for an unclaimed profile.
 - **The audit rail.** Before any file is opened, the broker checks that the
-  audit log can take a line, and refuses the upload with `E_UPLOAD_REFUSED`
-  when it cannot. Everywhere else in the bridge a failed audit write never
-  fails the operation it describes, so an upload asks first. The line names
-  the tab handle and each file by its bare name and size, with the site's
-  origin; never a path and never the contents. A refused upload is logged too,
-  with the bare names the caller gave.
+  audit log can take a line. Before the bytes leave, it writes the upload's
+  send line (stage `send`: the tab handle and each file by its bare name and
+  size) and refuses with `E_UPLOAD_REFUSED` when that write fails. Everywhere
+  else in the bridge a failed audit write never fails the operation it
+  describes; an upload is the exception, so a crash or a kill after the send
+  still leaves its line. When the browser answers, the completion line adds
+  the site's origin and the outcome. Never a path and never the contents. A
+  refused upload is logged too, with the bare names the caller gave.
 - **The folder rail.** Only files inside the one folder named in `upload.json`
   in the state directory (`{"folder": "<absolute path>"}`) are read. No file
   there means no folder and every upload refused, which is the default. Each
   path, a bare name, a relative path or an absolute one, must lie inside the
   folder as written and again once resolved to its real path, so `..`, a
-  symlink and a junction that lead out are refused. It must be a regular file,
+  symlink and a junction that lead out are refused, and on Windows so is a
+  path naming an alternate data stream (`report.pdf:hidden`), a hidden part of
+  a file that every other check would pass. It must be a regular file,
   and it is opened once and checked to be the file its path resolved to, so a
   swap between the check and the read is refused. At most 10 files and 20 MB
   together. A refusal names the file by its bare name and never echoes the
@@ -278,11 +282,12 @@ What it does not defend, stated plainly:
 - **An agent that can arm.** `bridge_arm` is an agent tool. Its description
   tells the agent to ask you, and your client's approval prompt is the human
   step; keep `bridge_arm` off every auto-approve list.
-- **An agent that can write into the folder.** The broker uploads whatever is
-  in the folder. An agent with shell or file access can copy a secret into it
-  first, as can any code running as your user. Keep the folder out of reach of
-  the sessions that can upload, put in it only what you mean to send, and empty
-  it afterwards.
+- **An agent that can write files.** The broker uploads whatever is in the
+  folder, and reads `upload.json` on every upload. An agent with shell or file
+  access can copy a secret into the folder first, or rewrite `upload.json` to
+  name another folder, as can any code running as your user. Keep the folder
+  and the state directory out of reach of the sessions that can upload, put in
+  the folder only what you mean to send, and empty it afterwards.
 - **What the page does with the file.** The tool fills the input and does not
   submit the form, but a page's own script can send a file the moment it
   lands. The site you upload to is the site that receives it.

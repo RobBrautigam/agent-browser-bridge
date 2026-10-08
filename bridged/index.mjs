@@ -58,6 +58,7 @@ import {
   isRestrictedUrl,
   RAW_TAB_ID_FIELD,
   UPLOAD_LIMITS,
+  UPLOAD_RAIL,
 } from '../shared/protocol.mjs'
 import {
   BASE_DIR,
@@ -72,7 +73,7 @@ import {
 } from '../shared/paths.mjs'
 
 import { AuditLog } from './audit.mjs'
-import { prepareUpload } from './upload.mjs'
+import { AUDIT_RAIL_REFUSAL, prepareUpload } from './upload.mjs'
 import { displayName } from '../shared/upload-folder.mjs'
 import {
   ArmingState,
@@ -1811,6 +1812,16 @@ function forwardToBrowser(conn, msg, route, op) {
       ),
       { route, ...(upload || {}) }
     )
+    return
+  }
+
+  // The audit rail's last word: an upload leaves only once its send line is on
+  // disk. The probe in prepareUpload refused early, before any file was read;
+  // this write is the one that holds, because a log can fail between the two,
+  // and a line written only on completion would be lost to a crash with the
+  // file already in the page. The completion line, with the origin, follows.
+  if (upload && !audit.recordBeforeSend({ profile: route.label, op, tab: upload.tab, files: upload.files })) {
+    reply(conn, msg, fail(id, ERR.UPLOAD_REFUSED, AUDIT_RAIL_REFUSAL, { rail: UPLOAD_RAIL.AUDIT }), { route, ...upload })
     return
   }
 

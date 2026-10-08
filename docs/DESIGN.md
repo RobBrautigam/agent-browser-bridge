@@ -159,9 +159,11 @@ default; every path must lie inside it as written and on its real path, so no
 `..`, symlink or junction leads out. The gate is the existing arm, one profile
 for a bounded window, which is what an operator already understands as "the
 agent may do the dangerous thing now". A third rail is the audit log: the
-broker checks it can write the upload's line (tab, file names and sizes,
-origin) before any file is opened, because a failed audit write never fails
-any other operation. The broker reads the bytes itself and sends them on under
+broker writes the upload's send line (tab, file names and sizes) before the
+bytes leave and refuses the upload when that write fails, because a failed
+audit write never fails any other operation and a line written only on
+completion would be lost to a crash; the completion line adds the origin. The
+broker reads the bytes itself and sends them on under
 bare names. The alternative, handing Chromium a path through
 `DOM.setFileInputFiles`, makes the browser the reader of any path it is given,
 and Chromium permits it for an extension only behind "Allow access to file
