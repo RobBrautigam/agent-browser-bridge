@@ -965,6 +965,78 @@ export function pageFocusSelect(payload) {
 }
 
 /**
+ * Put files into a page's file input: the guarded upload's last step.
+ *
+ * The bytes arrive as base64 under bare names, read by the broker from the one
+ * upload folder; this function never sees a path. A File set through a
+ * DataTransfer is what a page gets from a person's pick, and the input and
+ * change events tell its scripts so (the same two events, with the same flags,
+ * that a person's pick fires).
+ *
+ * The target is a file input, a label whose control is one, or an element
+ * holding exactly one. Anything else is refused rather than guessed at, and so
+ * is a disabled input, a folder picker, and several files for an input that
+ * takes one.
+ */
+export function pageSetFiles(payload) {
+  const { selector, files } = payload || {}
+  let el = null
+  try {
+    el = document.querySelector(selector)
+  } catch (_e) {
+    return { ok: false, reason: 'bad_selector', selector }
+  }
+  if (!el) return { ok: false, reason: 'not_found', selector }
+
+  const isFileInput = (node) =>
+    !!node && node.tagName === 'INPUT' && String(node.type || '').toLowerCase() === 'file'
+  let input = el
+  if (!isFileInput(input) && el.tagName === 'LABEL' && isFileInput(el.control)) input = el.control
+  if (!isFileInput(input)) {
+    const inside = el.querySelectorAll('input[type="file" i]')
+    if (inside.length !== 1) {
+      return { ok: false, reason: inside.length > 1 ? 'several_file_inputs' : 'not_a_file_input', selector }
+    }
+    input = inside[0]
+  }
+  if (input.disabled === true) return { ok: false, reason: 'disabled', selector }
+  if (input.webkitdirectory === true) return { ok: false, reason: 'folder_picker', selector }
+
+  const list = Array.isArray(files) ? files : []
+  if (list.length === 0) return { ok: false, reason: 'no_files', selector }
+  if (list.length > 1 && !input.multiple) return { ok: false, reason: 'takes_one_file', selector }
+
+  const transfer = new DataTransfer()
+  for (const f of list) {
+    const binary = atob(String(f.data || ''))
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    const lastModified = Number.isFinite(f.lastModified) ? f.lastModified : Date.now()
+    transfer.items.add(new File([bytes], String(f.name), { type: String(f.type || ''), lastModified }))
+  }
+
+  try {
+    input.scrollIntoView({ block: 'center', behavior: 'instant' })
+  } catch (_e) {
+    /* ignore */
+  }
+  input.files = transfer.files
+  input.dispatchEvent(new Event('input', { bubbles: true, composed: true }))
+  input.dispatchEvent(new Event('change', { bubbles: true }))
+
+  const set = Array.from(input.files || [])
+  if (set.length !== list.length) return { ok: false, reason: 'not_set', selector }
+  return {
+    ok: true,
+    selector,
+    url: location.href,
+    tag: 'input',
+    count: set.length,
+    files: set.map((f) => ({ name: f.name, bytes: f.size })),
+  }
+}
+
+/**
  * Evaluate an expression in the page and return a JSON-safe description.
  *
  * This is the MAIN-world path of evalJs. The injected function itself is

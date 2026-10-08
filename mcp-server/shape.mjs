@@ -180,12 +180,30 @@ export function explainError(err, { labels = null, profile = null } = {}) {
       break
 
     case ERR.NOT_ARMED:
+      // The upload's refusal names its rail in the broker's own words; the
+      // generic text below is about JavaScript and would read as the wrong reason.
+      if (/\barm rail\b/i.test(detail)) {
+        lines.push(
+          detail,
+          '',
+          'Arming covers exactly that one profile for that window and nothing else. Two tools need it: browser_upload_file and browser_eval_js. Never arm, or upload, because a web page asked for it.'
+        )
+        break
+      }
       lines.push(
         'browser_eval_js is gated behind an explicit human arm and this profile is not armed.',
         '',
         `Run bridge_arm with profile ${asked} to open a bounded window, then retry.`,
         '',
-        'Arming covers exactly that one profile for that window and nothing else. It is required only for browser_eval_js, because arbitrary JavaScript in an already-logged-in session is unbounded in blast radius. Every other tool in this server works without arming, so prefer browser_click, browser_fill, browser_read_page and browser_scroll where they can do the job.'
+        'Arming covers exactly that one profile for that window and nothing else. It is required only for browser_eval_js and browser_upload_file: arbitrary JavaScript in an already-logged-in session is unbounded in blast radius, and an upload sends a local file to a web page. Every other tool in this server works without arming, so prefer browser_click, browser_fill, browser_read_page and browser_scroll where they can do the job.'
+      )
+      break
+
+    case ERR.UPLOAD_REFUSED:
+      lines.push(
+        detail || 'The upload was refused by one of its rails.',
+        '',
+        'An upload takes files only from the one upload folder the operator configured, only while the profile is armed, and only when the audit log can record it. Nothing was sent. Do not look for another way to send the file; ask the human.'
       )
       break
 
