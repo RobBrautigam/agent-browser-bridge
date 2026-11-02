@@ -21,27 +21,33 @@ the README opens with why a real browser, a quick start and a first prompt.
 ### Added
 
 - **`shared/visit-guard.mjs`**: `visitRefusal(url)` names why an address must
-  not be opened in a signed-in profile (a whole path segment that signs out,
-  unsubscribes, authorizes, deletes, deactivates, confirms, activates,
-  verifies an email or opens a story; a query that signs out or unsubscribes;
-  a download; a local or private network address or a host with no domain; a
-  user name or password in the address; a redirector whose query carries any
-  of those). Addresses are judged as the browser reads them, by the WHATWG
-  parser and Node's `BlockList`. `detectWall(url, text)` names a sign-in,
-  checkpoint, locked-account, challenge, bot-check, rate-limit or blocked page
-  by its landed path, and on a short page only, by its opening words.
+  not be opened in a signed-in profile (a whole path segment, each decoded on
+  its own and matched without its extension or `;` parameters, that signs out,
+  signs off, opts out, unsubscribes, authorizes, consents, deletes,
+  deactivates, confirms, activates or verifies an email; an OAuth segment
+  followed by a grant segment; a story on Instagram or Facebook; a query
+  parameter whose name or whole value signs out or unsubscribes; a download; a
+  local, private or reserved network address, IPv6 forms that carry an IPv4
+  address included, or a host with no domain; a user name or password in the
+  address; a redirector whose query carries any of those). Addresses are
+  judged as the browser reads them, by the WHATWG parser and Node's
+  `BlockList`. `detectWall(url, text)` names a sign-in, checkpoint,
+  locked-account, challenge, bot-check, rate-limit or blocked page by its
+  landed host and path, and on a short page only, by its opening words.
 - **`read-page` refuses those addresses before anything is sent** (exit 1,
   `refused` in `--json`), names a wall after the read (`wall` in `--json`,
-  exit 4 when the page was read and its tab closed), and carries
+  exit 4 when the page landed and its tab closed, also when the wall showed
+  no text; `--comments` never scrolls a wall), and carries
   `maybeLeftOpen: true` whenever a background tab may still be open: an open
-  that timed out, a bridge reconnect while the page loaded, or a close that
-  failed.
+  that failed in any way other than a refusal, a bridge reconnect while the
+  page loaded, or a close that failed.
 - **`scripts/close-duplicates.mjs <profile> [--dry-run] [--json]`**: closes
   the exact copies of an http or https address, keeping one (shown, then
   pinned, then shown most recently, then leftmost). Never an active, pinned or
   playing copy. Each close is checked against a fresh listing first and
-  skipped, with the reason, when the copy or its kept copy moved or closed.
-  Its vocabulary is list tabs and close a planned copy.
+  skipped, with the reason, when the copy or its kept copy moved or closed. A
+  listing that fails partway stops the run, which still reports what it
+  closed. Its vocabulary is list tabs and close a planned copy.
 - **`scripts/snapshot-tabs.mjs <profile>`**: every tab and group of a profile
   as one JSON document. Its vocabulary is list tabs and list groups.
 - **`docs/agent-playbook.md`**: how an agent should drive a real browser.
@@ -53,7 +59,7 @@ the README opens with why a real browser, a quick start and a first prompt.
 - **README**: a contents line, "Why your real browser" with a comparison
   against a browser the agent launches, "What is new", a quick start with a
   first prompt, a scripts table, the read guard and walls, the two new
-  scripts, and "Using it well".
+  scripts, "Using it well" and "Getting help".
 - **`read-page` exit codes**: 1 now also covers a refused address, and 4 is
   new (read and closed, but a wall). A caller that treated every non-zero exit
   as "did not land" should read 4 as "landed on a wall".

@@ -27,12 +27,25 @@ import net from 'node:net'
 
 /**
  * Path segments that act on the signed-in account by being opened. Matched
- * against a WHOLE segment (before any extension), decoded and lower-cased, so
- * `/logout`, `/users/sign_out` and `/logout.php` are refused while a post at
- * `/blog/how-oauth-works` is not.
+ * against a WHOLE segment, each segment decoded on its own, lower-cased and cut
+ * at its first `;` and `.`, so `/logout`, `/users/sign_out`, `/logout.php` and
+ * `/logout;jsessionid=1` are refused while a post at `/blog/how-oauth-works` is
+ * not. `delete`, `confirm` and the rest are refused even where a page only
+ * documents them: a refused read costs the caller another reader, an opened
+ * action link is not undone.
  */
 const ACTING_SEGMENT =
-  /^(log[-_]?out|log[-_]?off|sign[-_]?out|unsubscribe|oauth2?|authorize|delete|deactivate|stories|confirm|activate|verify[-_]?email)$/
+  /^(log[-_]?out|log[-_]?off|sign[-_]?out|sign[-_]?off|opt[-_]?out|unsubscribe|authorize|consent|delete|deactivate|confirm|activate|verify[-_]?email)$/
+
+/** An OAuth path segment, which acts only when a grant segment follows it (`/oauth2/authorize`, `/o/oauth2/v2/auth`). */
+const OAUTH_SEGMENT = /^oauth2?$/
+const OAUTH_GRANT_SEGMENT = /^(auth|authorize|token|consent|approve)$/
+
+/** Sites where opening a story records the profile as one of its viewers. */
+const STORY_SITES = ['instagram.com', 'facebook.com']
+
+/** Query parameter names and values that sign out or unsubscribe, matched whole. */
+const ACTING_QUERY_WORD = /^(log[-_]?out|log[-_]?off|sign[-_]?out|sign[-_]?off|unsubscribe|opt[-_]?out)$/
 
 /** A path ending in one of these is a download, which lands on the disk rather than in a tab. */
 const DOWNLOAD_EXT =
@@ -41,19 +54,44 @@ const DOWNLOAD_EXT =
 /** Host suffixes that only ever name a machine on a local network. */
 const LOCAL_SUFFIXES = ['.localhost', '.local', '.internal', '.lan', '.home.arpa']
 
-/** Address ranges that are not on the public internet: loopback, private, link-local, carrier-grade NAT, unique-local. */
+/**
+ * Address ranges that are not a public web server: this network, private,
+ * carrier-grade NAT, loopback, link-local, protocol assignments, benchmarking,
+ * multicast, reserved and broadcast; in IPv6 the unspecified and loopback
+ * addresses, unique-local, link-local, multicast, and the forms that carry an
+ * IPv4 address inside them (IPv4-compatible, NAT64, 6to4, Teredo), which can
+ * carry a private one. An IPv4-mapped address (::ffff:7f00:1) is checked
+ * against the IPv4 rules by BlockList itself.
+ */
 const NOT_PUBLIC = (() => {
   const list = new net.BlockList()
-  list.addSubnet('0.0.0.0', 8, 'ipv4')
-  list.addSubnet('10.0.0.0', 8, 'ipv4')
-  list.addSubnet('100.64.0.0', 10, 'ipv4')
-  list.addSubnet('127.0.0.0', 8, 'ipv4')
-  list.addSubnet('169.254.0.0', 16, 'ipv4')
-  list.addSubnet('172.16.0.0', 12, 'ipv4')
-  list.addSubnet('192.168.0.0', 16, 'ipv4')
-  list.addSubnet('::', 127, 'ipv6') // :: and ::1
-  list.addSubnet('fc00::', 7, 'ipv6')
-  list.addSubnet('fe80::', 10, 'ipv6')
+  for (const [net4, bits] of [
+    ['0.0.0.0', 8],
+    ['10.0.0.0', 8],
+    ['100.64.0.0', 10],
+    ['127.0.0.0', 8],
+    ['169.254.0.0', 16],
+    ['172.16.0.0', 12],
+    ['192.0.0.0', 24],
+    ['192.168.0.0', 16],
+    ['198.18.0.0', 15],
+    ['224.0.0.0', 4],
+    ['240.0.0.0', 4],
+  ]) {
+    list.addSubnet(net4, bits, 'ipv4')
+  }
+  for (const [net6, bits] of [
+    ['::', 96],
+    ['64:ff9b::', 96],
+    ['64:ff9b:1::', 48],
+    ['2001::', 32],
+    ['2002::', 16],
+    ['fc00::', 7],
+    ['fe80::', 10],
+    ['ff00::', 8],
+  ]) {
+    list.addSubnet(net6, bits, 'ipv6')
+  }
   return list
 })()
 
@@ -66,6 +104,26 @@ function decode(text) {
   } catch {
     return text
   }
+}
+
+/**
+ * A path's segments, lower-cased, each percent-decoded ON ITS OWN, so one bad
+ * escape leaves only its own segment undecoded. A decoded `/` or `\` splits a
+ * segment again, because some servers route `%2F` as a separator.
+ *
+ * @param {string} pathname  the URL's pathname as the parser left it
+ */
+function pathSegments(pathname) {
+  return String(pathname || '')
+    .split('/')
+    .flatMap((raw) => decode(raw).split(/[/\\]/))
+    .map((s) => s.toLowerCase())
+    .filter(Boolean)
+}
+
+/** The word a segment names: cut at its first `;` (matrix parameters) and its first `.` (an extension). */
+function segmentWord(segment) {
+  return segment.split(';')[0].split('.')[0]
 }
 
 /** True when an IP literal (a WHATWG-canonical host) is not a public address. */
@@ -105,11 +163,16 @@ export function visitRefusal(url, depth = 0) {
     return 'it is a local address (a host name with no domain)'
   }
 
-  const path = decode(parsed.pathname).toLowerCase()
-  const segments = path.split('/').filter(Boolean)
-  const acting = segments.find((s) => ACTING_SEGMENT.test(s.split('.')[0]))
+  const segments = pathSegments(parsed.pathname)
+  const words = segments.map(segmentWord)
+  let acting = segments.find((s, i) => ACTING_SEGMENT.test(words[i]))
+  if (!acting) {
+    const oauth = words.findIndex((w) => OAUTH_SEGMENT.test(w))
+    if (oauth >= 0 && words.slice(oauth + 1).some((w) => OAUTH_GRANT_SEGMENT.test(w))) acting = segments[oauth]
+  }
+  if (!acting && hostMatches(host.replace(/^www\./, ''), STORY_SITES)) acting = segments.find((s, i) => words[i] === 'stories')
   if (acting) return `a /${acting} link acts on the signed-in account by being opened`
-  if (DOWNLOAD_EXT.test(path)) return 'it is a download'
+  if (DOWNLOAD_EXT.test((segments.at(-1) || '').split(';')[0])) return 'it is a download'
 
   // A redirector (a search engine's /url, a feed's /redirect) opens the address
   // it carries. Judged before the query's own words, so the refusal names the
@@ -124,8 +187,11 @@ export function visitRefusal(url, depth = 0) {
     }
   }
 
-  const query = decode(parsed.search).toLowerCase()
-  if (/log[-_]?out|sign[-_]?out|unsubscribe/.test(query)) return 'its query signs out or unsubscribes'
+  for (const [name, value] of parsed.searchParams) {
+    if (ACTING_QUERY_WORD.test(name.trim().toLowerCase()) || ACTING_QUERY_WORD.test(value.trim().toLowerCase())) {
+      return 'its query signs out or unsubscribes'
+    }
+  }
   return null
 }
 
@@ -139,11 +205,27 @@ export const WALL_SHORT_CHARS = 3000
 /** Only the opening of a short page is read for wall wording. */
 export const WALL_HEAD_CHARS = 1500
 
-/** Sign-in and checkpoint paths that mean the same thing on any site. Matched from the start of the path, whole segments. */
+/**
+ * Sign-in and checkpoint paths that mean the same thing on any site. Matched
+ * from the start of the path, or after one short prefix segment (`/m/`, `/en/`,
+ * `/en-us/`), as whole segments that may carry an extension or `;` parameters
+ * (`/login.php`, `/login;jsessionid=1`). A sign-in path deeper in a site
+ * (`/docs/api/login`) is a page about signing in, not a wall.
+ */
+const WALL_PREFIX = String.raw`(?:[a-z]{1,2}(?:[-_][a-z]{2})?\/)?`
+const WALL_END = String.raw`(?:\/|\.|;|$)`
 const WALL_PATH_ANY = [
-  ['login', /^\/(login|log-in|signin|sign-in|sign_in|logon|authwall|i\/flow\/login|accounts\/login|account\/login|uas\/login|users\/sign_in|auth\/login)(\/|$)/],
-  ['checkpoint', /^\/checkpoint(\/|$)/],
+  [
+    'login',
+    new RegExp(
+      String.raw`^\/${WALL_PREFIX}(?:login|log-in|signin|sign-in|sign_in|logon|authwall|i\/flow\/login|accounts\/login|account\/login|uas\/login|users\/sign_in|auth\/login)${WALL_END}`
+    ),
+  ],
+  ['checkpoint', new RegExp(String.raw`^\/${WALL_PREFIX}checkpoint${WALL_END}`)],
 ]
+
+/** A host that exists to sign people in (login.microsoftonline.com, signin.example.com, sso.example.com). */
+const SIGN_IN_HOST = /^(login|signin|sso)\./
 
 /** Paths that are a wall only on the site that uses them. */
 const WALL_PATH_BY_HOST = [
@@ -203,6 +285,7 @@ export function detectWall(url, text) {
     if (!hostMatches(host, domains)) continue
     for (const [name, pattern] of rules) if (pattern.test(path)) return `${name} (${shown})`
   }
+  if (SIGN_IN_HOST.test(host)) return `login (${host})`
   for (const [name, pattern] of WALL_PATH_ANY) if (pattern.test(path)) return `${name} (${shown})`
 
   const flat = String(text ?? '')

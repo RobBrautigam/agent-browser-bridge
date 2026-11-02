@@ -56,9 +56,26 @@ export const READ_ONLY_OPS = Object.freeze([OPS.OPEN_TAB, OPS.LIST_TABS, OPS.REA
 
 export const DEFAULT_MAX_CHARS = 400_000
 
+/**
+ * The open failures that prove no tab was made: the broker refused the request
+ * before sending it on. Any other failure (a dropped link, an extension error,
+ * a timeout, a code this script does not know) may arrive after the tab was
+ * opened, so it sets `maybeLeftOpen`. E_PANIC and E_PROFILE_STALE are not here:
+ * the broker also fails requests already in flight with them.
+ */
+const OPEN_REFUSED = new Set([
+  ERR.UNAUTHORIZED,
+  ERR.BAD_REQUEST,
+  ERR.UNKNOWN_PROFILE,
+  ERR.PROFILE_UNCLAIMED,
+  ERR.NOT_ARMED,
+  ERR.RESTRICTED_URL,
+  ERR.UNSUPPORTED,
+])
+
 /** How long each phase may take. Injected in tests, so no test sleeps for real. */
 export const DEFAULT_TIMING = Object.freeze({
-  totalMs: 120_000, // the whole read, so a caller's own timeout (180 s in the research doors) never kills it first
+  totalMs: 120_000, // the whole read, so a caller's own timeout (often 180 s) never kills it first
   loadTimeoutMs: 30_000, // the tab reaching "complete"
   pollMs: 500, // how often the tab's status is re-read while loading
   settleMs: 1_500, // first pause after load, for a client-rendered page to draw
@@ -324,7 +341,9 @@ export async function readPage({
     try {
       opened = await c.request({ op: OPS.OPEN_TAB, profile, args: { url, active: false }, timeoutMs: t.requestTimeoutMs })
     } catch (err) {
-      const maybeOpened = [ERR.TIMEOUT, ERR.NO_WORKER, ERR.NO_EXTENSION].includes(err?.code)
+      // Only a refusal proves no tab was made. A dropped link, an extension
+      // error or a timeout may land after the extension opened the tab.
+      const maybeOpened = !OPEN_REFUSED.has(err?.code)
       result.maybeLeftOpen = maybeOpened
       result.message =
         cliError(err) +
@@ -368,7 +387,9 @@ export async function readPage({
     }
 
     let text = page.text
-    if (comments) {
+    // A wall is never scrolled: judged on the first settled read, before --comments moves the page.
+    const landedWall = detectWall(page.url || url, page.text)
+    if (comments && !landedWall) {
       let quietAtBottom = 0
       while (result.scrolls < t.maxScrolls && remaining() > 0) {
         checkpoint()
@@ -392,8 +413,12 @@ export async function readPage({
     result.text = text
     result.chars = text.length
     result.ok = result.chars > 0
-    if (!result.ok) result.message = 'The page loaded no readable text.'
-    else result.wall = detectWall(page.url || url, text)
+    result.wall = landedWall || (result.ok ? detectWall(page.url || url, text) : null)
+    if (!result.ok) {
+      result.message = result.wall
+        ? `The page is a wall (${result.wall}) and showed no readable text.`
+        : 'The page loaded no readable text.'
+    }
     return result
   } catch (err) {
     result.message = cliError(err)
@@ -416,6 +441,7 @@ export async function readPage({
 export function exitCodeFor(r) {
   if (r.ok && r.closed) return r.wall ? 4 : 0
   if (r.ok) return 3
+  if (r.wall && r.closed) return 4 // a wall that showed no text: stop reading the site, not fall back
   return 1
 }
 

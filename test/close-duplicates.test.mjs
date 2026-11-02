@@ -204,6 +204,31 @@ test('a close the broker refuses is reported, not retried', async () => {
   assert.equal(exitCodeFor(report), 1)
 })
 
+test('a listing that fails mid-run stops the run and still reports what was closed', async () => {
+  // listing 1 plans, listing 2 checks the first close, listing 3 (the check before the second close) fails
+  const broker = fakeBroker(
+    [tab(1, 'https://example.com/a'), tab(2, 'https://example.com/a'), tab(3, 'https://example.com/a'), tab(4, 'https://example.com/a')],
+    {
+      onList: (open, n) => {
+        if (n >= 3) throw Object.assign(new Error('The broker closed the connection.'), { code: 'E_NO_BROKER' })
+        return open
+      },
+    }
+  )
+  const report = await closeDuplicates({ client: broker, profile: 'chrome-work' })
+  assert.equal(report.results.length, 3, 'every planned close is in the report')
+  assert.equal(report.results.filter((r) => r.closed).length, 1, 'the close already done is reported')
+  const skipped = report.results.filter((r) => !r.closed)
+  assert.equal(skipped.length, 2)
+  for (const s of skipped) assert.match(s.reason, /not tried.*broker closed the connection/)
+  assert.match(report.stopped, /broker closed the connection/)
+  assert.equal(report.after, null, 'the count after is unknown, not guessed')
+  assert.equal(broker.calls.filter((c) => c.op === OPS.CLOSE_TAB).length, 1, 'no close without its fresh check')
+  assert.equal(broker.calls.filter((c) => c.op === OPS.LIST_TABS).length, 3, 'nothing more is asked of a broker that stopped answering')
+  assert.equal(exitCodeFor(report), 1)
+  assert.match(renderReport(report), /1 of 3 copies closed; tabs before 4, after unknown\. Stopped: E_NO_BROKER: /)
+})
+
 test('nothing to close is a clean run with one listing', async () => {
   const broker = fakeBroker([tab(1, 'https://example.com/a'), tab(2, 'https://example.com/b')])
   const report = await closeDuplicates({ client: broker, profile: 'chrome-work' })

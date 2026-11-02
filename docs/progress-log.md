@@ -28,6 +28,21 @@ names, machine names or private paths.
   quick start with a first prompt, a scripts table and a link to
   `docs/agent-playbook.md`. `AGENTS.md` is the brief for a coding agent in
   the repository.
+- A fresh review before the merge found ten issues, all fixed in the same
+  release, each with a test seen failing against the code before the fix:
+  one bad percent escape left a whole path undecoded (segments are now
+  decoded one by one); `;` parameters and the sign-off and opt-out spellings
+  got past the refusal; the query check and the bare `oauth2` and `stories`
+  segments refused ordinary pages (search results, OAuth guides, news
+  stories); multicast, reserved, benchmarking and IPv4-carrying IPv6
+  addresses were not refused; `/login.php`, `/m/signin` and sign-in hosts
+  were not named as walls; a wall with no text exited 1, and `--comments`
+  scrolled a wall first; `maybeLeftOpen` stayed false on a dropped link or
+  an extension error (now only a refusal proves no tab was made); a listing
+  that failed partway through `close-duplicates` threw away the report of
+  what it had closed; the README claimed every script fixes its vocabulary
+  (four do); and one comment named a private caller. 25 mutations of the
+  fixes, each red.
 
 ## 2026-10-02
 

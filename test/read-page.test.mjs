@@ -342,6 +342,38 @@ test('maybeLeftOpen is true on every path that may leave a tab open, and false o
   assert.equal(clean.maybeLeftOpen, false)
 })
 
+test('an open that failed after it may have been sent counts as maybe left open; only a refusal does not', async () => {
+  // E_PANIC and E_PROFILE_STALE: the broker also fails requests already in flight with them
+  for (const code of ['E_NO_BROKER', 'E_EXT_ERROR', 'E_UNKNOWN', 'E_PANIC', 'E_PROFILE_STALE', 'E_A_CODE_FROM_A_NEWER_BROKER']) {
+    const r = await readPage({ client: fakeBroker({ openFails: code }), profile: 'p', url: 'https://example.com/a', ...fakeClock() })
+    assert.equal(r.maybeLeftOpen, true, `open failed with ${code}`)
+  }
+  for (const code of ['E_UNKNOWN_PROFILE', 'E_PROFILE_UNCLAIMED', 'E_RESTRICTED_URL', 'E_BAD_REQUEST', 'E_UNAUTHORIZED']) {
+    const r = await readPage({ client: fakeBroker({ openFails: code }), profile: 'p', url: 'https://example.com/a', ...fakeClock() })
+    assert.equal(r.maybeLeftOpen, false, `a ${code} refusal opened nothing`)
+  }
+})
+
+test('a wall that shows no readable text is still named, and exits 4', async () => {
+  const broker = fakeBroker({ url: 'https://example.com/login', texts: [''] })
+  const r = await readPage({ client: broker, profile: 'p', url: 'https://example.com/post', ...fakeClock() })
+  assert.equal(r.ok, false)
+  assert.equal(r.closed, true)
+  assert.equal(r.wall, 'login (/login)')
+  assert.match(r.message, /wall/)
+  assert.equal(exitCodeFor(r), 4)
+  assert.equal(exitCodeFor({ ok: false, closed: false, wall: 'login (/login)' }), 1, 'a tab left open is not a clean wall')
+})
+
+test('--comments does not scroll a page that landed on a wall', async () => {
+  const broker = fakeBroker({ url: 'https://example.com/checkpoint/x', texts: ['Confirm your identity'] })
+  const r = await readPage({ client: broker, profile: 'p', url: 'https://example.com/post', comments: true, ...fakeClock() })
+  assert.equal(r.wall, 'checkpoint (/checkpoint/x)')
+  assert.equal(r.scrolls, 0)
+  assert.equal(opsSent(broker).includes(OPS.SCROLL), false, 'nothing was scrolled in the signed-in profile')
+  assert.equal(exitCodeFor(r), 4)
+})
+
 test('the settle check compares the text, not only its length', async () => {
   const broker = fakeBroker({ texts: ['Loading 1/3', 'Loading 2/3', 'The whole post', 'The whole post'] })
   const r = await readPage({ client: broker, profile: 'p', url: 'https://example.com/', ...fakeClock() })

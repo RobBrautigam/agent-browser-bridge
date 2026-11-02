@@ -169,6 +169,8 @@ export async function closeDuplicates({ client, profile, dryRun = false, timeout
     addresses: plan.addresses,
     staying: plan.staying,
     results: [],
+    // set when a listing failed partway: the error, with every close after it not tried
+    stopped: null,
   }
   if (dryRun || plan.closes.length === 0) {
     report.results = plan.closes.map((e) => ({ ...e, closed: false, reason: dryRun ? 'dry run' : null }))
@@ -176,7 +178,20 @@ export async function closeDuplicates({ client, profile, dryRun = false, timeout
   }
   const closed = new Set()
   for (const entry of plan.closes) {
-    const reason = checkClose(entry, await list(), closed)
+    if (report.stopped) {
+      report.results.push({ ...entry, closed: false, reason: `not tried: the listing failed (${report.stopped})` })
+      continue
+    }
+    let fresh
+    try {
+      fresh = await list()
+    } catch (err) {
+      // No close without its fresh check: stop here, and keep the report of what is already closed.
+      report.stopped = brief(err)
+      report.results.push({ ...entry, closed: false, reason: `not tried: the listing failed (${report.stopped})` })
+      continue
+    }
+    const reason = checkClose(entry, fresh, closed)
     if (reason) {
       report.results.push({ ...entry, closed: false, reason })
       continue
@@ -187,11 +202,22 @@ export async function closeDuplicates({ client, profile, dryRun = false, timeout
       closed.add(entry.close)
       report.results.push({ ...entry, closed: true, reason: null })
     } catch (err) {
-      report.results.push({ ...entry, closed: false, reason: describeError(err) })
+      report.results.push({ ...entry, closed: false, reason: brief(err) })
     }
   }
-  report.after = (await list()).length
+  try {
+    report.after = report.stopped ? null : (await list()).length
+  } catch (err) {
+    report.after = null
+    report.stopped = brief(err)
+  }
   return report
+}
+
+/** One line for a report: the error's code and message, never the multi-line help text. */
+function brief(err) {
+  const message = String(err?.message || err).split('\n')[0]
+  return typeof err?.code === 'string' ? `${err.code}: ${message}` : message
 }
 
 /** The exit code for a finished run. */
@@ -240,7 +266,8 @@ export function renderReport(report) {
   lines.push(
     report.dryRun
       ? `${report.results.length} copies of ${report.addresses} addresses would be closed; ${report.before} tabs open.`
-      : `${done} of ${report.results.length} copies closed; tabs before ${report.before}, after ${report.after}.`
+      : `${done} of ${report.results.length} copies closed; tabs before ${report.before}, after ${report.after ?? 'unknown'}.` +
+          (report.stopped ? ` Stopped: ${report.stopped}` : '')
   )
   return lines.join('\n')
 }

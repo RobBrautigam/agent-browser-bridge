@@ -39,9 +39,11 @@ you mean to.
 - Every tool that touches a page takes a required `profile`; never add a default.
 - Tabs are addressed by opaque handles the broker mints; a caller's raw tab id
   is dropped (`bridged/routes.mjs`, `callerArgs`).
-- A script that talks to the broker fixes its vocabulary in code and refuses
-  any other operation before it is sent (see `scripts/read-page.mjs`,
-  `scripts/close-duplicates.mjs`, `scripts/snapshot-tabs.mjs`).
+- A new script that talks to the broker fixes its vocabulary in code and
+  refuses any other operation before it is sent (see `scripts/read-page.mjs`,
+  `scripts/close-duplicates.mjs`, `scripts/snapshot-tabs.mjs`,
+  `scripts/group-tabs.mjs`). The older ones (`claim`, `label`, `doctor`,
+  `reload-extension`, `open-or-focus`) call the client directly.
 - Tests run against fake broker clients that record what was SENT; a new
   behavior gets a test that fails without it.
 - One version across `package.json`, `package-lock.json` and

@@ -16,7 +16,8 @@ agent session  ->  MCP server  ->  broker  ->  host  ->  extension  ->  your act
 [Use cases](#use-cases) | [How it works](#how-it-works) | [Install](#install) |
 [The tools](#the-tools) | [Scripts](#scripts-for-a-shell-or-a-scheduled-job) |
 [Using it well](#using-it-well) | [Security](#security) |
-[Platforms](#platforms) | [Development](#development)
+[Platforms](#platforms) | [Development](#development) |
+[Getting help](#getting-help)
 
 ## Why your real browser
 
@@ -36,11 +37,12 @@ suite. It is the wrong one for work that lives behind your logins:
 
 ## What is new in 1.4.0
 
-- **`read-page` refuses links that act when opened.** Sign-out,
-  unsubscribe, OAuth authorize, delete, confirm and story links, downloads,
-  local and private network addresses, addresses carrying a user name, and
-  redirectors carrying any of those are refused before anything reaches the
-  browser, with the rule that refused them.
+- **`read-page` refuses links that act when opened.** Sign-out, opt-out,
+  unsubscribe, OAuth grant, delete and confirm links, stories on sites that
+  record their viewers, downloads, local, private and reserved network
+  addresses, addresses carrying a user name, and redirectors carrying any of
+  those are refused before anything reaches the browser, with the rule that
+  refused them.
 - **`read-page` names a wall.** A read that lands on a sign-in page, a
   checkpoint, a "verify you are human" interstitial or a rate limit says so in
   `wall` and exits 4, so a script reading many pages stops at the first one.
@@ -540,40 +542,57 @@ Exit codes: 0 the page landed and its tab closed; 1 it did not land or the
 address was refused (the reason is on stderr, so a caller can fall back to
 another reader); 2 a usage error; 3 the text was read but the tab could not be
 closed (a bridge reconnect, the panic switch), so a caller can use the text and
-stop reading; 4 the page was read and its tab closed, but it is a wall (a
+stop reading; 4 the page landed and its tab closed, but it is a wall (a
 sign-in page, a checkpoint, a "verify you are human" interstitial, a rate
 limit) rather than the content asked for. Text mode strips control characters,
 so a page cannot send escape sequences to the terminal; `--json` escapes them.
 
 `--json` also carries `wall` (the wall's name, or null), `refused` (the rule
 that refused the address, or null) and `maybeLeftOpen`, which is true whenever
-a background tab may still be open in the profile: an open that timed out, a
-bridge reconnect while the page loaded, or a close that failed. A loop that
+a background tab may still be open in the profile: an open that failed in any
+way other than a refusal (a timeout, a dropped broker link, an extension
+error), a bridge reconnect while the page loaded, or a close that failed. A loop that
 reads many pages should stop opening tabs when it is true.
 
 **Links that act are refused.** Before anything is sent, the address is judged
 the way the browser will read it (a backslash is a slash, `0x7f000001` is
-`127.0.0.1`, a percent-encoded path is decoded), and refused when it is:
+`127.0.0.1`, each path segment is percent-decoded on its own), and refused
+when it is:
 
 - a link that acts on the account by being opened: a whole path segment that
-  is `logout`, `sign-out`, `logoff`, `unsubscribe`, `oauth`, `authorize`,
-  `delete`, `deactivate`, `stories`, `confirm`, `activate` or `verify-email`
-  (in any of their spellings), or a query that signs out or unsubscribes;
+  is `logout`, `logoff`, `sign-out`, `sign-off`, `opt-out`, `unsubscribe`,
+  `authorize`, `consent`, `delete`, `deactivate`, `confirm`, `activate` or
+  `verify-email` (with or without the hyphen, or with an underscore, in any
+  case, with an extension or `;` parameters after it); an `oauth` or `oauth2`
+  segment followed by a grant segment (`auth`, `authorize`, `token`); a story
+  on Instagram or Facebook, where opening it records the viewer; or a query
+  parameter whose name or whole value signs out or unsubscribes
+  (`?action=logout`);
 - a download (`.exe`, `.zip`, `.dmg` and the like);
-- a local or private network address, or a host name with no domain;
+- a local, private or reserved network address (loopback, private ranges,
+  link-local, multicast, broadcast, and the IPv6 forms that carry an IPv4
+  address inside them), or a host name with no domain;
 - an address carrying a user name or password;
 - a redirector whose query carries any of the above.
 
-The rules are in `shared/visit-guard.mjs`. A post at `/blog/how-oauth-works`
-is not refused: the match is on whole segments.
+The rules are in `shared/visit-guard.mjs`. The match is on whole segments, so a
+post at `/blog/how-oauth-works`, a guide at `/docs/oauth2`, a news story at
+`/stories/2026/...` and a search for "how to log out" are read. A page that
+only documents an action at a bare `/delete` or `/confirm` segment is refused
+anyway: a refused read costs the caller another reader, and an opened action
+link cannot be taken back.
 
 **Walls are named.** After the read, the landed address and, on a short page
 only, its opening words are checked for a wall: a sign-in or checkpoint path
-on any site (`/login`, `/signin`, `/checkpoint`, a site's own sign-in flow), a
-"just a moment" or "verify you are human" interstitial, "unusual traffic", a
-rate limit, a "help us confirm it's you" checkpoint. A long page is never
-called a wall on its words, so an article that quotes those phrases is still
-the article.
+on any site (`/login`, `/login.php`, `/m/signin`, `/en-us/login`,
+`/checkpoint`, a site's own sign-in flow), a sign-in host (`login.`,
+`signin.`, `sso.`), a "just a moment" or "verify you are human" interstitial,
+"unusual traffic", a rate limit, a "help us confirm it's you" checkpoint. A
+sign-in path deeper in a site (`/docs/api/login`) is a page about signing in,
+and a long page is never called a wall on its words, so an article that quotes
+those phrases is still the article. A wall is named even when it shows no
+readable text (exit 4 all the same), and `--comments` never scrolls a page
+that landed on one.
 
 **Read-only by construction.** Every request it makes goes through a wrapper
 that passes five operations, open a tab, list tabs, read a page's text, scroll
@@ -670,8 +689,11 @@ reachable, because page operations work in the main frame only.
 ## Scripts, for a shell or a scheduled job
 
 Each script talks to the broker directly, with no MCP client, so a launcher, a
-hook or a scheduled job can use the bridge. Each one's vocabulary is fixed in
-code: an operation outside it is refused before it reaches the broker.
+hook or a scheduled job can use the bridge. `read-page`, `snapshot-tabs`,
+`close-duplicates` and `group-tabs` send through a wrapper that fixes their
+vocabulary in code: an operation outside it is refused before it reaches the
+broker. The others send the operations named in the table directly, with no
+such wrapper; the broker's own tiers and arming still apply to every request.
 
 | Script | What it does | What it can send |
 |---|---|---|
@@ -709,8 +731,10 @@ A copy that is active, pinned or playing sound is never closed. Before each
 close the profile is listed again, and the close is skipped (and said) when
 that copy moved to another address or was switched to, or when its kept copy
 closed or moved. Copies are found across every window of the profile, and
-anything typed into a closed copy is gone, so run `--dry-run` first. Exit 0
-when every planned close was done, 1 when one was skipped or failed.
+anything typed into a closed copy is gone, so run `--dry-run` first. If a
+listing fails partway, the run stops there and still reports each close it
+made, with every later one marked not tried. Exit 0 when every planned close
+was done, 1 when one was skipped, failed or not tried.
 
 ## Using it well
 
@@ -850,6 +874,16 @@ Two runtime dependencies (`zod` and `@modelcontextprotocol/server`), zero
 native modules, and the gate keeps it that way.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Getting help
+
+- `node scripts/doctor.mjs` checks every step of an install and prints the fix
+  for any that fails; it is the first thing to run.
+- A bug or a question: open an issue on GitHub with the platform, the browser
+  and its version, and what `doctor.mjs` printed.
+- Something that lets a web page or another local user reach the bridge: report
+  it privately, as [SECURITY.md](SECURITY.md#reporting-a-vulnerability) says,
+  never in a public issue.
 
 ## License
 

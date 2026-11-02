@@ -41,7 +41,7 @@ test('a link that acts on the account by being opened is refused, whatever its s
     'https://example.com/oauth2/v1/token',
     'https://example.com/account/delete',
     'https://example.com/settings/deactivate',
-    'https://social.example.com/stories/someone/123',
+    'https://instagram.com/stories/someone/123',
     'https://example.com/newsletter/confirm?t=abc',
     'https://example.com/account/activate/xyz',
     'https://example.com/verify-email?token=abc',
@@ -52,9 +52,78 @@ test('a link that acts on the account by being opened is refused, whatever its s
   }
 })
 
+test('each path segment is decoded on its own, so one bad escape cannot hide another segment', () => {
+  for (const url of [
+    'https://example.com/a%E0%A4%A/%6Cogout',
+    'https://example.com/%ZZ/logout',
+    'https://example.com/a%2Flogout',
+    'https://example.com/a%5Clogout',
+  ]) {
+    assert.match(visitRefusal(url) || '', /acts on the signed-in account/, url)
+  }
+})
+
+test('a segment is matched without its ; parameters, and the opt-out and sign-off spellings count', () => {
+  for (const url of [
+    'https://example.com/logout;jsessionid=1',
+    'https://example.com/logout.do;jsessionid=1',
+    'https://example.com/signoff',
+    'https://example.com/sign_off',
+    'https://example.com/optout',
+    'https://example.com/email/opt-out?u=1',
+  ]) {
+    assert.match(visitRefusal(url) || '', /acts on the signed-in account/, url)
+  }
+})
+
 test('a query that signs out or unsubscribes is refused', () => {
   assert.match(visitRefusal('https://example.com/?action=logout'), /signs out or unsubscribes/)
   assert.match(visitRefusal('https://example.com/list?do=Unsubscribe&id=1'), /signs out or unsubscribes/)
+  assert.match(visitRefusal('https://example.com/?logout=1'), /signs out or unsubscribes/)
+  assert.match(visitRefusal('https://example.com/?a=sign_out'), /signs out or unsubscribes/)
+})
+
+test('reading pages that only mention those words are not refused', () => {
+  for (const url of [
+    'https://www.google.com/search?q=how+to+logout+of+gmail',
+    'https://shop.example.com/list?catalog_output=1',
+    'https://developers.google.com/identity/protocols/oauth2',
+    'https://example.com/docs/oauth2/getting-started',
+    'https://news.example.com/stories/2026/11/02/headline',
+  ]) {
+    assert.equal(visitRefusal(url), null, url)
+  }
+})
+
+test('an OAuth grant, and a story on a site that records its viewers, are still refused', () => {
+  for (const url of [
+    'https://accounts.example.com/o/oauth2/v2/auth?client_id=x',
+    'https://example.com/oauth/authorize?client_id=x',
+    'https://example.com/consent?client_id=x',
+    'https://www.instagram.com/stories/someone/123/',
+    'https://www.facebook.com/stories/123',
+  ]) {
+    assert.match(visitRefusal(url) || '', /acts on the signed-in account/, url)
+  }
+})
+
+test('multicast, reserved, benchmarking and IPv4-embedding IPv6 addresses are refused too', () => {
+  for (const url of [
+    'http://224.0.0.1/',
+    'http://239.255.255.250/',
+    'http://240.0.0.1/',
+    'http://255.255.255.255/',
+    'http://198.18.0.1/',
+    'http://192.0.0.8/',
+    'http://[::7f00:1]/',
+    'http://[64:ff9b::7f00:1]/',
+    'http://[ff02::1]/',
+    'http://[2002:7f00:1::]/',
+    'http://[2001:0:4136:e378:8000:63bf:3fff:fdd2]/',
+    'http://[64:ff9b:1::a00:1]/',
+  ]) {
+    assert.match(visitRefusal(url) || '', /private or local network address/, url)
+  }
 })
 
 test('a download is refused', () => {
@@ -118,6 +187,17 @@ test('a sign-in or checkpoint address is a wall on any site', () => {
   assert.equal(detectWall('https://example.com/i/flow/login', ''), 'login (/i/flow/login)')
   assert.equal(detectWall('https://www.example.com/checkpoint/challenge/x', article), 'checkpoint (/checkpoint/challenge/x)')
   assert.equal(detectWall('https://example.com/users/sign_in', article), 'login (/users/sign_in)')
+})
+
+test('a sign-in path with an extension, ; parameters or a short prefix is a wall, and a sign-in host is one', () => {
+  assert.equal(detectWall('https://www.facebook.com/login.php?next=x', article), 'login (/login.php)')
+  assert.equal(detectWall('https://example.com/Login.aspx', article), 'login (/login.aspx)')
+  assert.equal(detectWall('https://example.com/login;jsessionid=1', article), 'login (/login;jsessionid=1)')
+  assert.equal(detectWall('https://medium.com/m/signin?redirect=x', article), 'login (/m/signin)')
+  assert.equal(detectWall('https://example.com/en-us/login', article), 'login (/en-us/login)')
+  assert.equal(detectWall('https://login.microsoftonline.com/common/oauth2/v2.0/authorize', article), 'login (login.microsoftonline.com)')
+  assert.equal(detectWall('https://example.com/docs/api/login', article), null, 'a page ABOUT signing in, deeper in a site, is a page')
+  assert.equal(detectWall('https://example.com/login-help', article), null)
 })
 
 test('a wall path known only on one site counts only there', () => {
