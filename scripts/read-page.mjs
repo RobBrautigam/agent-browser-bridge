@@ -20,15 +20,25 @@
  * would press one is not in its vocabulary. The same wrapper opens tabs in the
  * background only, and reads, scrolls and closes only the tab it opened.
  *
- * What it cannot stop: the visit itself is a real signed-in visit. A link that
- * does something when it is opened (sign out, unsubscribe, confirm, download)
- * does it, and the site records that the profile viewed or scrolled the page
- * (profile views, read receipts, story views). Do not point it at such links.
+ * The visit itself is a real signed-in visit, so the address is checked before
+ * anything is sent (shared/visit-guard.mjs): a link that acts by being opened
+ * (sign out, unsubscribe, OAuth authorize, delete, confirm, a story), a
+ * download, a local or private network address, an address carrying a user
+ * name, and a redirector carrying any of those are refused with the rule that
+ * refused them. What it still cannot stop: the site records that the profile
+ * viewed or scrolled the page (profile views, read receipts).
+ *
+ * A page it did open is checked for a wall (a sign-in page, a checkpoint, a
+ * "verify you are human" interstitial, a rate limit), named in `wall`, so a
+ * script that reads many pages can stop at the first one.
  *
  * Exit codes: 0 the page landed, its text was printed and its tab closed;
- * 1 it did not land (no tab, no text, a broker or profile error); 2 a usage
- * error; 3 the text was read but the tab could not be closed, so a caller can
- * use the text and stop reading. The reason is on stderr in every non-zero case.
+ * 1 it did not land (a refused address, no tab, no text, a broker or profile
+ * error); 2 a usage error; 3 the text was read but the tab could not be closed,
+ * so a caller can use the text and stop reading; 4 the page was read and its
+ * tab closed, but it is a wall, not the content asked for. The reason is on
+ * stderr in every non-zero case. `--json` also carries `maybeLeftOpen: true`
+ * whenever a background tab may still be open in the profile.
  *
  * Flags:
  *   --comments          scroll down, keeping each step's text, before returning
@@ -38,6 +48,7 @@
  */
 
 import { ERR, OPS, PRODUCT_NAME, parseTabHandle } from '../shared/protocol.mjs'
+import { detectWall, visitRefusal } from '../shared/visit-guard.mjs'
 import { describeError, isMain, withBroker } from './claim.mjs'
 
 /** The whole vocabulary of this command. Anything else is refused locally. */
@@ -45,9 +56,26 @@ export const READ_ONLY_OPS = Object.freeze([OPS.OPEN_TAB, OPS.LIST_TABS, OPS.REA
 
 export const DEFAULT_MAX_CHARS = 400_000
 
+/**
+ * The open failures that prove no tab was made: the broker refused the request
+ * before sending it on. Any other failure (a dropped link, an extension error,
+ * a timeout, a code this script does not know) may arrive after the tab was
+ * opened, so it sets `maybeLeftOpen`. E_PANIC and E_PROFILE_STALE are not here:
+ * the broker also fails requests already in flight with them.
+ */
+const OPEN_REFUSED = new Set([
+  ERR.UNAUTHORIZED,
+  ERR.BAD_REQUEST,
+  ERR.UNKNOWN_PROFILE,
+  ERR.PROFILE_UNCLAIMED,
+  ERR.NOT_ARMED,
+  ERR.RESTRICTED_URL,
+  ERR.UNSUPPORTED,
+])
+
 /** How long each phase may take. Injected in tests, so no test sleeps for real. */
 export const DEFAULT_TIMING = Object.freeze({
-  totalMs: 120_000, // the whole read, so a caller's own timeout (180 s in the research doors) never kills it first
+  totalMs: 120_000, // the whole read, so a caller's own timeout (often 180 s) never kills it first
   loadTimeoutMs: 30_000, // the tab reaching "complete"
   pollMs: 500, // how often the tab's status is re-read while loading
   settleMs: 1_500, // first pause after load, for a client-rendered page to draw
@@ -66,7 +94,7 @@ const RAW_TAB_KEYS = ['tabId', 'tabIds', 'tabs']
  *
  * The refusals happen here, before a frame is written, so a slip elsewhere in
  * this file (a dropped `tab`, a stray raw id) is refused instead of reaching
- * the active tab of Rob's window. `owns(handle)` is the only view of the tabs
+ * the active tab of the person's window. `owns(handle)` is the only view of the tabs
  * it opened; the set itself is private.
  *
  * @param {{request: Function}} client
@@ -293,7 +321,19 @@ export async function readPage({
     text: '',
     scrolls: 0,
     closed: false,
+    // true whenever a background tab may still be open in the profile, so a
+    // caller that loops over pages can stop opening more without parsing words
+    maybeLeftOpen: false,
+    refused: null,
+    wall: null,
     message: '',
+  }
+  // The address is judged before anything is sent: a refused one never reaches the broker.
+  const refused = visitRefusal(url)
+  if (refused) {
+    result.refused = refused
+    result.message = `read-page will not open this address in a signed-in profile: ${refused}.`
+    return result
   }
   let handle = null
   try {
@@ -301,7 +341,10 @@ export async function readPage({
     try {
       opened = await c.request({ op: OPS.OPEN_TAB, profile, args: { url, active: false }, timeoutMs: t.requestTimeoutMs })
     } catch (err) {
-      const maybeOpened = [ERR.TIMEOUT, ERR.NO_WORKER, ERR.NO_EXTENSION].includes(err?.code)
+      // Only a refusal proves no tab was made. A dropped link, an extension
+      // error or a timeout may land after the extension opened the tab.
+      const maybeOpened = !OPEN_REFUSED.has(err?.code)
+      result.maybeLeftOpen = maybeOpened
       result.message =
         cliError(err) +
         (maybeOpened ? ` A background tab at ${url} may have been opened and left; it cannot be closed without its handle.` : '')
@@ -321,6 +364,7 @@ export async function readPage({
     }
     if (load.reminted) {
       handle = null // still open, but under a handle this command did not mint
+      result.maybeLeftOpen = true
       result.closeError = 'the bridge reconnected while the page loaded'
       result.message = `The bridge reconnected while the page loaded; a background tab at ${load.row?.url || url} was left open.`
       return result
@@ -343,7 +387,9 @@ export async function readPage({
     }
 
     let text = page.text
-    if (comments) {
+    // A wall is never scrolled: judged on the first settled read, before --comments moves the page.
+    const landedWall = detectWall(page.url || url, page.text)
+    if (comments && !landedWall) {
       let quietAtBottom = 0
       while (result.scrolls < t.maxScrolls && remaining() > 0) {
         checkpoint()
@@ -367,7 +413,12 @@ export async function readPage({
     result.text = text
     result.chars = text.length
     result.ok = result.chars > 0
-    if (!result.ok) result.message = 'The page loaded no readable text.'
+    result.wall = landedWall || (result.ok ? detectWall(page.url || url, text) : null)
+    if (!result.ok) {
+      result.message = result.wall
+        ? `The page is a wall (${result.wall}) and showed no readable text.`
+        : 'The page loaded no readable text.'
+    }
     return result
   } catch (err) {
     result.message = cliError(err)
@@ -379,16 +430,18 @@ export async function readPage({
         result.closed = true
       } catch (err) {
         result.closed = false
+        result.maybeLeftOpen = true
         result.closeError = cliError(err)
       }
     }
   }
 }
 
-/** The exit code for a finished read. */
+/** The exit code for a finished read. A tab left open outranks a wall: the caller must stop either way. */
 export function exitCodeFor(r) {
-  if (r.ok && r.closed) return 0
+  if (r.ok && r.closed) return r.wall ? 4 : 0
   if (r.ok) return 3
+  if (r.wall && r.closed) return 4 // a wall that showed no text: stop reading the site, not fall back
   return 1
 }
 
@@ -402,14 +455,17 @@ const USAGE =
   '  node scripts/read-page.mjs <profile label> <url> [--comments] [--json]\n' +
   '\n' +
   '  --comments          scroll down first, keeping each step, so lazy threads load\n' +
-  '  --json              print one JSON object (url, title, chars, text, closed)\n' +
+  '  --json              print one JSON object (url, title, chars, text, closed, wall,\n' +
+  '                      refused, maybeLeftOpen)\n' +
   `  --max-chars <n>     stop reading after this many characters (default ${DEFAULT_MAX_CHARS})\n` +
   '  --socket <path>     dial a different broker endpoint\n' +
   '\n' +
   'Opens the page in a background tab, reads its text, closes the tab. It sends no click,\n' +
   'fill, key press, navigation or caller JavaScript, so it cannot press anything on the page.\n' +
-  'The visit itself is real: never point it at a sign-out, unsubscribe or download link.\n' +
-  'Exit: 0 read and closed, 1 not landed, 2 usage, 3 read but the tab was left open.'
+  'The visit itself is real, so sign-out, unsubscribe, authorize, delete and download links,\n' +
+  'local addresses and redirectors carrying them are refused before anything is opened.\n' +
+  'Exit: 0 read and closed, 1 not landed or refused, 2 usage, 3 read but the tab was left\n' +
+  'open, 4 read and closed but the page is a wall (a sign-in page, a challenge, a rate limit).'
 
 async function main(argv) {
   const parsed = parseArgs(argv)
@@ -450,6 +506,7 @@ async function main(argv) {
         console.log(stripControls(r.text))
       }
       if (r.ok && !r.closed) console.error(`The page was read, but its tab could not be closed: ${r.closeError || 'no detail'}`)
+      if (r.ok && r.wall) console.error(`The page is a wall (${r.wall}), not the content asked for: stop reading this site.`)
       if (!r.ok) console.error(r.message || 'The page did not land.')
       return exitCodeFor(r)
     },

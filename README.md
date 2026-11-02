@@ -11,6 +11,87 @@ with no port fights, and nothing in the system listens on the network.
 agent session  ->  MCP server  ->  broker  ->  host  ->  extension  ->  your actual browser
 ```
 
+**Contents:** [Why your real browser](#why-your-real-browser) |
+[What is new in 1.4.0](#what-is-new-in-140) | [Quick start](#quick-start) |
+[Use cases](#use-cases) | [How it works](#how-it-works) | [Install](#install) |
+[The tools](#the-tools) | [Scripts](#scripts-for-a-shell-or-a-scheduled-job) |
+[Using it well](#using-it-well) | [Security](#security) |
+[Platforms](#platforms) | [Development](#development) |
+[Getting help](#getting-help)
+
+## Why your real browser
+
+Most browser tools for agents launch a browser of their own (Playwright, or
+Chrome driven over the DevTools protocol). That is the right tool for a test
+suite. It is the wrong one for work that lives behind your logins:
+
+| | A browser the agent launches | This bridge |
+|---|---|---|
+| Your signed-in sessions | none; log in again, often per run | every profile you already use, as it is |
+| "Verify you are human", Cloudflare, SSO | an automated browser is often detected and refused | it is your browser: you pass the check, the agent carries on |
+| Several agent sessions at once | one browser per session, or port fights | one broker; every session sees every profile, nobody owns a port |
+| One profile per company or client | separate profile folders to manage | name the profile; the wrong one is refused, never guessed |
+| Network exposure | depends on the tool; some open a DevTools port on localhost | nothing listens on the network at all |
+| Cookies and passwords | the driver has full DevTools access, cookies included | the extension has no cookie permission; a password field needs your recorded yes |
+| Headless CI, or no browser open | yes | no: use Playwright there |
+
+## What is new in 1.4.0
+
+- **`read-page` refuses links that act when opened.** Sign-out, opt-out,
+  unsubscribe, OAuth grant, delete and confirm links, stories on sites that
+  record their viewers, downloads, local, private and reserved network
+  addresses, addresses carrying a user name, and redirectors carrying any of
+  those are refused before anything reaches the browser, with the rule that
+  refused them.
+- **`read-page` names a wall.** A read that lands on a sign-in page, a
+  checkpoint, a "verify you are human" interstitial or a rate limit says so in
+  `wall` and exits 4, so a script reading many pages stops at the first one.
+- **`maybeLeftOpen`** in `read-page --json`: true whenever a background tab
+  may still be open, so a loop knows to stop opening tabs.
+- **`scripts/close-duplicates.mjs`** closes the exact copies of a page in a
+  profile, keeping one, never an active, pinned or playing tab, and re-checks
+  each close against a fresh listing.
+- **`scripts/snapshot-tabs.mjs`** prints a profile's tabs and groups as one
+  JSON document, read only.
+- **[docs/agent-playbook.md](docs/agent-playbook.md)**: how an agent should
+  drive a real browser, learned from daily use.
+
+The full list is in [CHANGELOG.md](CHANGELOG.md).
+
+## Quick start
+
+Node 22 and Chrome or Brave. The full walk-through, with every platform's
+details, is [Install](#install) below.
+
+```bash
+git clone https://github.com/RobBrautigam/agent-browser-bridge.git
+cd agent-browser-bridge
+npm ci
+npm test                              # optional: the unit suite, no browser needed
+```
+
+1. Load `extension/` unpacked in each browser profile you want reachable
+   (`chrome://extensions`, Developer mode, Load unpacked). Keep the clone where
+   it is afterwards: the folder's path is the extension's ID.
+2. Register and start the pieces, once per machine:
+
+   ```bash
+   node scripts/install-host.mjs      # the native messaging host
+   node scripts/install-broker.mjs    # the always-on broker (no admin rights)
+   node scripts/install-mcp.mjs       # the MCP server, for Claude Code (--client cursor | codex)
+   node scripts/doctor.mjs            # every check, and the fix for any that fails
+   ```
+
+3. Start a new agent session and try a first prompt:
+
+   ```
+   List my browser profiles, then tell me the titles of the tabs open in one of them.
+   ```
+
+   The agent calls `browser_list_profiles` and `browser_list_tabs`. A Brave
+   profile shows as unclaimed until you pick who it is once, on the
+   extension's board ([step 6](#6-claim-brave-profiles-once)).
+
 ## Use cases
 
 - **Many AI conversations sharing the browsers on one machine.** Every agent
@@ -36,6 +117,12 @@ agent session  ->  MCP server  ->  broker  ->  host  ->  extension  ->  your act
 - **Verification walks of a logged-in web app.** Have the agent click through
   the real product as a real user, screenshot every state, and report what
   actually rendered, in the same session it just deployed from.
+- **Research behind a login.** `scripts/read-page.mjs` reads a post, a thread
+  or a dashboard that only a signed-in browser can see, refuses links that
+  would act on the account, and stops at the first login wall.
+- **Keeping a browser tidy.** Group tabs by a plan, gather a group from every
+  window into one, sort a window by age, close exact duplicates, and snapshot
+  what is open, from an agent or a scheduled job.
 
 ## How it works
 
@@ -451,12 +538,61 @@ first post. `--json` prints one object with the final URL, the title, the
 character count, the text and whether the tab was closed. The whole read has a
 two-minute deadline, and Ctrl+C ends it at the next step with the tab closed.
 
-Exit codes: 0 the page landed and its tab closed; 1 it did not land (the reason
-is on stderr, so a caller can fall back to another reader); 2 a usage error;
-3 the text was read but the tab could not be closed (a bridge reconnect, the
-panic switch), so a caller can use the text and stop reading. Text mode strips
-control characters, so a page cannot send escape sequences to the terminal;
-`--json` escapes them.
+Exit codes: 0 the page landed and its tab closed; 1 it did not land or the
+address was refused (the reason is on stderr, so a caller can fall back to
+another reader); 2 a usage error; 3 the text was read but the tab could not be
+closed (a bridge reconnect, the panic switch), so a caller can use the text and
+stop reading; 4 the page landed and its tab closed, but it is a wall (a
+sign-in page, a checkpoint, a "verify you are human" interstitial, a rate
+limit) rather than the content asked for. Text mode strips control characters,
+so a page cannot send escape sequences to the terminal; `--json` escapes them.
+
+`--json` also carries `wall` (the wall's name, or null), `refused` (the rule
+that refused the address, or null) and `maybeLeftOpen`, which is true whenever
+a background tab may still be open in the profile: an open that failed in any
+way other than a refusal (a timeout, a dropped broker link, an extension
+error), a bridge reconnect while the page loaded, or a close that failed. A loop that
+reads many pages should stop opening tabs when it is true.
+
+**Links that act are refused.** Before anything is sent, the address is judged
+the way the browser will read it (a backslash is a slash, `0x7f000001` is
+`127.0.0.1`, each path segment is percent-decoded on its own), and refused
+when it is:
+
+- a link that acts on the account by being opened: a whole path segment that
+  is `logout`, `logoff`, `sign-out`, `sign-off`, `opt-out`, `unsubscribe`,
+  `authorize`, `consent`, `delete`, `deactivate`, `confirm`, `activate` or
+  `verify-email` (with or without the hyphen, or with an underscore, in any
+  case, with an extension or `;` parameters after it); an `oauth` or `oauth2`
+  segment followed by a grant segment (`auth`, `authorize`, `token`); a story
+  on Instagram or Facebook, where opening it records the viewer; or a query
+  parameter whose name or whole value signs out or unsubscribes
+  (`?action=logout`);
+- a download (`.exe`, `.zip`, `.dmg` and the like);
+- a local, private or reserved network address (loopback, private ranges,
+  link-local, multicast, broadcast, and the IPv6 forms that carry an IPv4
+  address inside them), or a host name with no domain;
+- an address carrying a user name or password;
+- a redirector whose query carries any of the above.
+
+The rules are in `shared/visit-guard.mjs`. The match is on whole segments, so a
+post at `/blog/how-oauth-works`, a guide at `/docs/oauth2`, a news story at
+`/stories/2026/...` and a search for "how to log out" are read. A page that
+only documents an action at a bare `/delete` or `/confirm` segment is refused
+anyway: a refused read costs the caller another reader, and an opened action
+link cannot be taken back.
+
+**Walls are named.** After the read, the landed address and, on a short page
+only, its opening words are checked for a wall: a sign-in or checkpoint path
+on any site (`/login`, `/login.php`, `/m/signin`, `/en-us/login`,
+`/checkpoint`, a site's own sign-in flow), a sign-in host (`login.`,
+`signin.`, `sso.`), a "just a moment" or "verify you are human" interstitial,
+"unusual traffic", a rate limit, a "help us confirm it's you" checkpoint. A
+sign-in path deeper in a site (`/docs/api/login`) is a page about signing in,
+and a long page is never called a wall on its words, so an article that quotes
+those phrases is still the article. A wall is named even when it shows no
+readable text (exit 4 all the same), and `--comments` never scrolls a page
+that landed on one.
 
 **Read-only by construction.** Every request it makes goes through a wrapper
 that passes five operations, open a tab, list tabs, read a page's text, scroll
@@ -478,18 +614,16 @@ video page's comments did not load at all. So `--comments` helps where a page
 loads more on a scroll event the background tab still receives; it is not a
 promise of the whole thread.
 
-**The visit itself is real.** It presses nothing, but opening a page in a
-signed-in profile is a signed-in visit: a link that does something when it is
-opened (sign out, unsubscribe, confirm, download) does it, and a site records
-that the profile viewed or scrolled the page (profile views, read receipts,
-story views). Do not point it at such links. The tab appears in the profile's
-last-focused window while it is read.
+**The visit itself is real.** It presses nothing, and it refuses the links
+above, but opening a page in a signed-in profile is a signed-in visit: a site
+records that the profile viewed or scrolled the page (profile views, read
+receipts), and a link that acts in a way the rules do not recognize still acts.
+The tab appears in the profile's last-focused window while it is read.
 
 It reads through the browser's own session: it never reads, copies or exports a
 cookie, token or password, though the printed text is whatever the page shows.
 How often it is pointed at one site is the caller's job; a script that reads
-many pages should space them out and stop at the first login wall or challenge
-page.
+many pages should space them out and stop at the first wall (exit 4).
 
 ### Which version each profile is running
 
@@ -552,6 +686,65 @@ tool fills the input and fires the same `input` and `change` events a person's
 pick does; it does not submit the form. An upload box inside an iframe is not
 reachable, because page operations work in the main frame only.
 
+## Scripts, for a shell or a scheduled job
+
+Each script talks to the broker directly, with no MCP client, so a launcher, a
+hook or a scheduled job can use the bridge. `read-page`, `snapshot-tabs`,
+`close-duplicates` and `group-tabs` send through a wrapper that fixes their
+vocabulary in code: an operation outside it is refused before it reaches the
+broker. The others send the operations named in the table directly, with no
+such wrapper; the broker's own tiers and arming still apply to every request.
+
+| Script | What it does | What it can send |
+|---|---|---|
+| `read-page.mjs` | reads one page in a background tab and closes it ([above](#reading-a-page-in-a-signed-in-profile-from-a-script)) | open, list, read, scroll, and close its own tab |
+| `snapshot-tabs.mjs` | prints a profile's tabs and groups as JSON | list tabs, list groups |
+| `close-duplicates.mjs` | closes exact copies of a page, keeping one | list tabs, close a copy its plan named |
+| `group-tabs.mjs` | applies a tab group plan ([above](#tab-groups)) | list, group, update, move; gather only when the plan names a window |
+| `open-or-focus.mjs` | shows a page to the person at the machine ([above](#showing-a-page-to-the-human-at-the-machine)) | open or focus |
+| `claim.mjs`, `label.mjs` | claims a Brave profile, renames a profile's label | the board, a claim, a label |
+| `doctor.mjs`, `reload-extension.mjs` | checks an install, reloads profiles that are behind | read-only checks; a reload |
+
+### A snapshot of a profile's tabs
+
+```bash
+node scripts/snapshot-tabs.mjs chrome-work > tabs.json
+```
+
+One JSON document: every tab with its handle, window, position, title,
+address, its group's title and color, and whether it is pinned, active,
+playing sound or discarded, plus every window's groups. It lists and sends
+nothing else, so it is safe to run on a schedule as the base of a tab report,
+or as the starting point for a `group-tabs.mjs` plan.
+
+### Closing duplicate tabs
+
+```bash
+node scripts/close-duplicates.mjs chrome-work --dry-run   # the plan, nothing closed
+node scripts/close-duplicates.mjs chrome-work
+```
+
+A duplicate is the same http or https address, byte for byte (a different
+fragment or query is a different page). One copy of each is kept: the one
+shown in its window, then a pinned one, then the one shown most recently.
+A copy that is active, pinned or playing sound is never closed. Before each
+close the profile is listed again, and the close is skipped (and said) when
+that copy moved to another address or was switched to, or when its kept copy
+closed or moved. Copies are found across every window of the profile, and
+anything typed into a closed copy is gone, so run `--dry-run` first. If a
+listing fails partway, the run stops there and still reports each close it
+made, with every later one marked not tried. Exit 0 when every planned close
+was done, 1 when one was skipped, failed or not tried.
+
+## Using it well
+
+[docs/agent-playbook.md](docs/agent-playbook.md) is the practice that goes
+with the tools: say which profile you are about to drive, read text rather
+than screenshots, the two fill modes and how to check that a form took the
+value, one driver per browser, stopping at the first wall, pacing reads per
+site, and cleaning up what you opened. Point your agent at it, or paste the
+parts you want into its instructions.
+
 ## Security
 
 Stated plainly, because a security model nobody believes is worse than none.
@@ -605,6 +798,12 @@ Stated plainly, because a security model nobody believes is worse than none.
   call fails loudly instead of acting as the wrong person. Chrome carries the
   full check; Brave records no account, so there it falls back to the profile
   name.
+- **The read script refuses links that act.** `scripts/read-page.mjs` judges
+  every address before it opens a tab and refuses sign-out, unsubscribe,
+  authorize, delete and confirm links, downloads, local and private network
+  addresses and redirectors carrying them. The MCP tools do not apply this
+  list: `browser_navigate` goes where the agent asks, which is why the
+  playbook tells an agent to check a link it did not choose.
 - **The audit log records origin only.** Scheme, host and port of every write
   operation, never the path, query or fragment, because password-reset and
   magic-link tokens live in paths. `browser_open_or_focus` reads tab addresses
@@ -675,6 +874,16 @@ Two runtime dependencies (`zod` and `@modelcontextprotocol/server`), zero
 native modules, and the gate keeps it that way.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Getting help
+
+- `node scripts/doctor.mjs` checks every step of an install and prints the fix
+  for any that fails; it is the first thing to run.
+- A bug or a question: open an issue on GitHub with the platform, the browser
+  and its version, and what `doctor.mjs` printed.
+- Something that lets a web page or another local user reach the bridge: report
+  it privately, as [SECURITY.md](SECURITY.md#reporting-a-vulnerability) says,
+  never in a public issue.
 
 ## License
 

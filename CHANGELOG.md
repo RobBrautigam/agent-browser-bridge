@@ -11,6 +11,67 @@ replaces the one-time steps in the earlier entries.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-02
+
+Safer reading, two tab scripts, and a front door. `read-page` used to tell its
+callers not to open a sign-out link and to stop at the first login wall; it now
+refuses the first and names the second. Two read-and-tidy scripts join it, and
+the README opens with why a real browser, a quick start and a first prompt.
+
+### Added
+
+- **`shared/visit-guard.mjs`**: `visitRefusal(url)` names why an address must
+  not be opened in a signed-in profile (a whole path segment, each decoded on
+  its own and matched without its extension or `;` parameters, that signs out,
+  signs off, opts out, unsubscribes, authorizes, consents, deletes,
+  deactivates, confirms, activates or verifies an email; an OAuth segment
+  followed by a grant segment; a story on Instagram or Facebook; a query
+  parameter whose name or whole value signs out or unsubscribes; a download; a
+  local, private or reserved network address, IPv6 forms that carry an IPv4
+  address included, or a host with no domain; a user name or password in the
+  address; a redirector whose query carries any of those). Addresses are
+  judged as the browser reads them, by the WHATWG parser and Node's
+  `BlockList`. `detectWall(url, text)` names a sign-in, checkpoint,
+  locked-account, challenge, bot-check, rate-limit or blocked page by its
+  landed host and path, and on a short page only, by its opening words.
+- **`read-page` refuses those addresses before anything is sent** (exit 1,
+  `refused` in `--json`), names a wall after the read (`wall` in `--json`,
+  exit 4 when the page landed and its tab closed, also when the wall showed
+  no text; `--comments` never scrolls a wall), and carries
+  `maybeLeftOpen: true` whenever a background tab may still be open: an open
+  that failed in any way other than a refusal, a bridge reconnect while the
+  page loaded, or a close that failed.
+- **`scripts/close-duplicates.mjs <profile> [--dry-run] [--json]`**: closes
+  the exact copies of an http or https address, keeping one (shown, then
+  pinned, then shown most recently, then leftmost). Never an active, pinned or
+  playing copy. Each close is checked against a fresh listing first and
+  skipped, with the reason, when the copy or its kept copy moved or closed. A
+  listing that fails partway stops the run, which still reports what it
+  closed. Its vocabulary is list tabs and close a planned copy.
+- **`scripts/snapshot-tabs.mjs <profile>`**: every tab and group of a profile
+  as one JSON document. Its vocabulary is list tabs and list groups.
+- **`docs/agent-playbook.md`**: how an agent should drive a real browser.
+- **`AGENTS.md`** (and a `CLAUDE.md` that imports it): a brief for a coding
+  agent working in this repository.
+
+### Changed
+
+- **README**: a contents line, "Why your real browser" with a comparison
+  against a browser the agent launches, "What is new", a quick start with a
+  first prompt, a scripts table, the read guard and walls, the two new
+  scripts, "Using it well" and "Getting help".
+- **`read-page` exit codes**: 1 now also covers a refused address, and 4 is
+  new (read and closed, but a wall). A caller that treated every non-zero exit
+  as "did not land" should read 4 as "landed on a wall".
+
+### Upgrading
+
+1. `git pull`, then `npm ci`.
+2. Reload the extension in every profile (`npm run reload`) so each profile
+   reports 1.4.0. The extension's code did not change in this release; the
+   reload only clears the "behind" flag. The broker can be restarted at its
+   next login.
+
 ## [1.3.0] - 2026-10-08
 
 A guarded file upload. Until now there was deliberately no upload tool, because

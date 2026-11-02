@@ -296,6 +296,84 @@ test('a read whose tab could not be closed keeps the text and exits 3', async ()
   assert.equal(exitCodeFor({ ok: false, closed: true }), 1)
 })
 
+test('a refused address never reaches the broker, and says which rule refused it', async () => {
+  for (const url of ['https://example.com/logout', 'http://192.168.1.1/', 'https://example.com/setup.exe',
+    'https://search.example.com/url?q=https%3A%2F%2Fexample.com%2Funsubscribe']) {
+    const broker = fakeBroker()
+    const r = await readPage({ client: broker, profile: 'p', url, ...fakeClock() })
+    assert.equal(r.ok, false, url)
+    assert.equal(typeof r.refused, 'string', url)
+    assert.match(r.message, /will not open this address/, url)
+    assert.equal(broker.calls.length, 0, `nothing was sent for ${url}`)
+    assert.equal(r.maybeLeftOpen, false)
+    assert.equal(exitCodeFor(r), 1)
+  }
+})
+
+test('a page that lands on a sign-in wall is read, closed, named, and exits 4', async () => {
+  const broker = fakeBroker({ url: 'https://example.com/login?next=%2Fpost', texts: ['Email\nPassword\nLog in'] })
+  const r = await readPage({ client: broker, profile: 'p', url: 'https://example.com/post', ...fakeClock() })
+  assert.equal(r.ok, true)
+  assert.equal(r.closed, true)
+  assert.equal(r.wall, 'login (/login)')
+  assert.equal(exitCodeFor(r), 4)
+  assert.equal(exitCodeFor({ ok: true, closed: false, wall: 'login (/login)' }), 3, 'a tab left open outranks a wall')
+})
+
+test('an ordinary page carries no wall and exits 0', async () => {
+  const r = await readPage({ client: fakeBroker({ url: 'https://example.com/post' }), profile: 'p', url: 'https://example.com/post', ...fakeClock() })
+  assert.equal(r.wall, null)
+  assert.equal(r.refused, null)
+  assert.equal(exitCodeFor(r), 0)
+})
+
+test('maybeLeftOpen is true on every path that may leave a tab open, and false otherwise', async () => {
+  const timedOut = await readPage({ client: fakeBroker({ openFails: 'E_TIMEOUT' }), profile: 'p', url: 'https://example.com/a', ...fakeClock() })
+  assert.equal(timedOut.maybeLeftOpen, true)
+  const refusedOpen = await readPage({ client: fakeBroker({ openFails: 'E_UNKNOWN_PROFILE' }), profile: 'p', url: 'https://example.com/a', ...fakeClock() })
+  assert.equal(refusedOpen.maybeLeftOpen, false, 'a refused open made no tab')
+  const reminted = await readPage({ client: fakeBroker({ reminted: true }), profile: 'p', url: 'https://example.com/post', ...fakeClock() })
+  assert.equal(reminted.maybeLeftOpen, true)
+  const notClosed = await readPage({ client: fakeBroker({ closeFails: true }), profile: 'p', url: 'https://example.com/', ...fakeClock() })
+  assert.equal(notClosed.maybeLeftOpen, true)
+  const gone = await readPage({ client: fakeBroker({ tabGone: true }), profile: 'p', url: 'https://example.com/', ...fakeClock() })
+  assert.equal(gone.maybeLeftOpen, false, 'a tab closed by someone else is not left open')
+  const clean = await readPage({ client: fakeBroker(), profile: 'p', url: 'https://example.com/', ...fakeClock() })
+  assert.equal(clean.maybeLeftOpen, false)
+})
+
+test('an open that failed after it may have been sent counts as maybe left open; only a refusal does not', async () => {
+  // E_PANIC and E_PROFILE_STALE: the broker also fails requests already in flight with them
+  for (const code of ['E_NO_BROKER', 'E_EXT_ERROR', 'E_UNKNOWN', 'E_PANIC', 'E_PROFILE_STALE', 'E_A_CODE_FROM_A_NEWER_BROKER']) {
+    const r = await readPage({ client: fakeBroker({ openFails: code }), profile: 'p', url: 'https://example.com/a', ...fakeClock() })
+    assert.equal(r.maybeLeftOpen, true, `open failed with ${code}`)
+  }
+  for (const code of ['E_UNKNOWN_PROFILE', 'E_PROFILE_UNCLAIMED', 'E_RESTRICTED_URL', 'E_BAD_REQUEST', 'E_UNAUTHORIZED']) {
+    const r = await readPage({ client: fakeBroker({ openFails: code }), profile: 'p', url: 'https://example.com/a', ...fakeClock() })
+    assert.equal(r.maybeLeftOpen, false, `a ${code} refusal opened nothing`)
+  }
+})
+
+test('a wall that shows no readable text is still named, and exits 4', async () => {
+  const broker = fakeBroker({ url: 'https://example.com/login', texts: [''] })
+  const r = await readPage({ client: broker, profile: 'p', url: 'https://example.com/post', ...fakeClock() })
+  assert.equal(r.ok, false)
+  assert.equal(r.closed, true)
+  assert.equal(r.wall, 'login (/login)')
+  assert.match(r.message, /wall/)
+  assert.equal(exitCodeFor(r), 4)
+  assert.equal(exitCodeFor({ ok: false, closed: false, wall: 'login (/login)' }), 1, 'a tab left open is not a clean wall')
+})
+
+test('--comments does not scroll a page that landed on a wall', async () => {
+  const broker = fakeBroker({ url: 'https://example.com/checkpoint/x', texts: ['Confirm your identity'] })
+  const r = await readPage({ client: broker, profile: 'p', url: 'https://example.com/post', comments: true, ...fakeClock() })
+  assert.equal(r.wall, 'checkpoint (/checkpoint/x)')
+  assert.equal(r.scrolls, 0)
+  assert.equal(opsSent(broker).includes(OPS.SCROLL), false, 'nothing was scrolled in the signed-in profile')
+  assert.equal(exitCodeFor(r), 4)
+})
+
 test('the settle check compares the text, not only its length', async () => {
   const broker = fakeBroker({ texts: ['Loading 1/3', 'Loading 2/3', 'The whole post', 'The whole post'] })
   const r = await readPage({ client: broker, profile: 'p', url: 'https://example.com/', ...fakeClock() })

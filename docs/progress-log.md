@@ -5,6 +5,45 @@ The user-facing record is [CHANGELOG.md](../CHANGELOG.md); this file holds the
 working notes behind it. This repository is public: entries carry no account
 names, machine names or private paths.
 
+## 2026-11-02
+
+- Version 1.4.0: what daily use of the read script and the tab tools had
+  taught, brought into the repository. `read-page` documented "never point it
+  at a sign-out link" and "stop at the first wall"; both are now code
+  (`shared/visit-guard.mjs`), with the refusal and the wall in `--json` and a
+  new exit 4, and a `maybeLeftOpen` flag replaces matching on the message's
+  words. Two scripts with fixed two-operation vocabularies:
+  `close-duplicates.mjs` and `snapshot-tabs.mjs`.
+- The address checks use the platform rather than hand-written parsing: the
+  WHATWG URL parser (the one the browser uses, so `0x7f000001`, a backslash
+  and a full-width host read as the browser reads them) and Node's
+  `BlockList` for the private ranges. A first draft unwrapped IPv4-mapped IPv6
+  addresses by hand; a mutation that disabled it survived, because
+  `BlockList` already checks a mapped address against the IPv4 rules, so the
+  hand-written branch was removed.
+- Every new test was seen to fail first: 32 mutations of the new code, each
+  run against its own test file, each red (one more, against the removed
+  branch above, survived and led to its removal).
+- The README gained a comparison against a browser the agent launches, a
+  quick start with a first prompt, a scripts table and a link to
+  `docs/agent-playbook.md`. `AGENTS.md` is the brief for a coding agent in
+  the repository.
+- A fresh review before the merge found ten issues, all fixed in the same
+  release, each with a test seen failing against the code before the fix:
+  one bad percent escape left a whole path undecoded (segments are now
+  decoded one by one); `;` parameters and the sign-off and opt-out spellings
+  got past the refusal; the query check and the bare `oauth2` and `stories`
+  segments refused ordinary pages (search results, OAuth guides, news
+  stories); multicast, reserved, benchmarking and IPv4-carrying IPv6
+  addresses were not refused; `/login.php`, `/m/signin` and sign-in hosts
+  were not named as walls; a wall with no text exited 1, and `--comments`
+  scrolled a wall first; `maybeLeftOpen` stayed false on a dropped link or
+  an extension error (now only a refusal proves no tab was made); a listing
+  that failed partway through `close-duplicates` threw away the report of
+  what it had closed; the README claimed every script fixes its vocabulary
+  (four do); and one comment named a private caller. 25 mutations of the
+  fixes, each red.
+
 ## 2026-10-02
 
 - Version 1.1.1: a link that dropped every few seconds for hours on a
