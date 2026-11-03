@@ -22,6 +22,7 @@
  *       "header": "authorization",                      optional, the default
  *       "scheme": "Bearer",                             optional, the default
  *       "claims": { "user": 123 },                      optional, must all match
+ *       "maxLifetimeHours": 49,                         optional, the app's token life
  *       "sink": "C:/Users/me/.cache/tool/token.txt",    absolute; folder must exist
  *       "keepAlive": {                                  optional
  *         "url": "https://app.tracker.example/list",    on an initiator's origin
@@ -38,14 +39,21 @@
  *   - The extension is told which requests to watch and nothing else: never
  *     the file, never the expected claims.
  *   - The token is judged by what it says about itself (tokenVerdict in the
- *     contract): a JSON Web Token, alive, not implausibly long-lived, carrying
- *     every claim the operator named. Only one that lives longer than the token
- *     already in the file replaces it, so an old tab cannot undo a fresh one.
- *   - It is written to the named file and nowhere else, through a temporary
- *     file in the same folder that is renamed over it, so a reader never sees a
- *     half-written token. It is never logged, audited, echoed or returned.
+ *     contract): a JSON Web Token, alive, issued no later than now, living no
+ *     longer than the relay allows, carrying every claim the operator named.
+ *   - Tokens are ordered by when they were issued, never by when they expire:
+ *     only a token issued later than the one in the file replaces it. An old
+ *     tab cannot undo a fresh token, and a forged one (a script on the app's
+ *     own page can send any header it likes, and nobody here holds the key to
+ *     check a signature) is replaced by the next token the app really mints.
+ *   - It is written to the named file and nowhere else, one write at a time per
+ *     file, through a temporary file in the same folder that is renamed over
+ *     it, so a reader never sees a half-written token. The temporary file is
+ *     removed whatever happens. The token is never logged, audited, echoed or
+ *     returned.
  */
 
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -126,6 +134,12 @@ function checkRelay(entry) {
       if (typeof value !== 'string' && typeof value !== 'number') return 'a claim it expects is not a string or a number'
     }
   }
+  if (entry.maxLifetimeHours !== undefined) {
+    const hours = Number(entry.maxLifetimeHours)
+    if (!(Number.isFinite(hours) && hours >= 1 && hours * 3_600_000 <= TOKEN_RELAY.MAX_LIFETIME_MS)) {
+      return 'its maxLifetimeHours is out of range'
+    }
+  }
   if (typeof entry.sink !== 'string' || !path.isAbsolute(entry.sink)) return 'its sink is not an absolute path'
   if (entry.keepAlive !== undefined) {
     const k = entry.keepAlive
@@ -158,6 +172,8 @@ function normalize(entry) {
     header: (entry.header || 'authorization').toLowerCase(),
     scheme: entry.scheme === undefined ? 'Bearer' : entry.scheme,
     claims: entry.claims ? { ...entry.claims } : null,
+    maxLifetimeMs:
+      entry.maxLifetimeHours === undefined ? TOKEN_RELAY.MAX_LIFETIME_MS : Number(entry.maxLifetimeHours) * 3_600_000,
     sink: path.resolve(entry.sink),
     keepAlive: entry.keepAlive
       ? {
@@ -187,19 +203,43 @@ export function relaySpecsFor(relays, { label, claimed }) {
       initiators: [...r.initiators],
       header: r.header,
       scheme: r.scheme,
+      // The lifetime cap is no secret, and with it the extension can skip what
+      // the broker would refuse and pace its keep-alive to the app's tokens.
+      maxLifetimeHours: r.maxLifetimeMs / 3_600_000,
       keepAlive: r.keepAlive ? { ...r.keepAlive } : null,
     }))
+}
+
+/** One write at a time per file: the check against the held token and the write are one step. */
+const sinkQueues = new Map()
+
+function oneAtATime(file, fn) {
+  const before = sinkQueues.get(file) || Promise.resolve()
+  const run = before.then(fn, fn)
+  const settled = run.then(
+    () => undefined,
+    () => undefined
+  )
+  sinkQueues.set(file, settled)
+  settled.then(() => {
+    if (sinkQueues.get(file) === settled) sinkQueues.delete(file)
+  })
+  return run
 }
 
 /**
  * Judge one relayed token and, when it is better than the file's, write it.
  *
- * @returns {Promise<{ok: true, written: boolean, exp: number, note?: string} |
+ * @returns {Promise<{ok: true, written: boolean, exp: number, iat: number, note?: string} |
  *                   {ok: false, code: string, message: string}>}
  */
 export async function acceptRelayedToken({ relays, label, claimed, name, token, now = Date.now() }) {
   const relay = relays.find((r) => r.name === name)
   if (!relay) return refuse(ERR.BAD_REQUEST, `There is no token relay named "${String(name).slice(0, 40)}".`)
+  return oneAtATime(relay.sink, () => judgeAndWrite({ relay, label, claimed, token, now }))
+}
+
+async function judgeAndWrite({ relay, label, claimed, token, now }) {
   if (relay.profile !== label) {
     return refuse(ERR.UNAUTHORIZED, `The relay "${relay.name}" belongs to another profile, so this one may not supply it.`)
   }
@@ -207,16 +247,18 @@ export async function acceptRelayedToken({ relays, label, claimed, name, token, 
     return refuse(ERR.PROFILE_UNCLAIMED, `Profile "${label}" has not been claimed, so its session cannot supply a token.`)
   }
 
-  const verdict = tokenVerdict(token, { now, claims: relay.claims })
+  const judged = { now, claims: relay.claims, maxLifetimeMs: relay.maxLifetimeMs }
+  const verdict = tokenVerdict(token, judged)
   if (!verdict.ok) return refuse(ERR.BAD_REQUEST, `Not relayed: ${verdict.reason}.`)
 
-  // The token in the file stays when it is still good for this relay and lives
-  // at least as long: an older tab's token must never replace a fresher one.
+  // The token in the file stays when it is still good for this relay and was
+  // issued no earlier: an older tab's token never replaces a newer one, and
+  // the next token the app mints always replaces whatever came before it.
   const held = readHeld(relay.sink)
   if (held !== null) {
-    const kept = tokenVerdict(held, { now, claims: relay.claims })
-    if (kept.ok && kept.exp >= verdict.exp) {
-      return { ok: true, written: false, exp: kept.exp, note: 'the file already holds a token that lives as long or longer' }
+    const kept = tokenVerdict(held, judged)
+    if (kept.ok && kept.iat >= verdict.iat) {
+      return { ok: true, written: false, exp: kept.exp, iat: kept.iat, note: 'the file already holds a token issued as late or later' }
     }
   }
 
@@ -233,7 +275,7 @@ export async function acceptRelayedToken({ relays, label, claimed, name, token, 
     // The error names a path and a code, never the content.
     return refuse(ERR.UNSUPPORTED, `Writing relay "${relay.name}"'s file failed (${err && err.code ? err.code : 'unknown error'}).`)
   }
-  return { ok: true, written: true, exp: verdict.exp }
+  return { ok: true, written: true, exp: verdict.exp, iat: verdict.iat }
 }
 
 function refuse(code, message) {
@@ -260,9 +302,10 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
  * second file.
  */
 async function writeReplacing(file, token) {
-  const temp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`)
-  fs.writeFileSync(temp, token, { encoding: 'utf8', mode: 0o600, flag: 'wx' })
+  const temp = path.join(path.dirname(file), `.${path.basename(file)}.${crypto.randomBytes(8).toString('hex')}.tmp`)
   try {
+    // Inside the try, so a write that fails part-way still has its copy removed.
+    fs.writeFileSync(temp, token, { encoding: 'utf8', mode: 0o600, flag: 'wx' })
     for (let attempt = 0; ; attempt++) {
       try {
         fs.renameSync(temp, file)

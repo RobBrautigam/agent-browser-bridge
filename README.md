@@ -721,6 +721,7 @@ registers (reload the extension to hurry it).
       "urls": ["https://*.tracker.example/*"],
       "initiators": ["https://app.tracker.example"],
       "claims": { "user": 123 },
+      "maxLifetimeHours": 49,
       "sink": "C:/Users/me/.cache/tracker-tool/token.txt",
       "keepAlive": { "url": "https://app.tracker.example/home", "renewBeforeHours": 24 }
     }
@@ -733,8 +734,11 @@ registers (reload the extension to hurry it).
   `authorization` and `Bearer`.
 - `claims` are values the token must carry, so a token for another account is
   refused. Optional, and worth setting.
+- `maxLifetimeHours` is how long the app's tokens live, a little over. A token
+  claiming a longer life is refused. Optional (fourteen days), and worth
+  setting: it bounds what a forged token can do.
 - `sink` is the file the tool reads. Its folder must exist; the relay never
-  creates one, and only a token that lives longer than the one already there
+  creates one, and only a token issued later than the one already there
   replaces it.
 - `keepAlive` (optional) keeps one pinned background tab of the app open and
   reloads it when the newest token is inside `renewBeforeHours` of expiring,
@@ -742,7 +746,9 @@ registers (reload the extension to hurry it).
   is cheap to load and does not mark anything read.
 
 The broker's log records `Token relayed` with the relay's name, the profile
-and the expiry, and never the token. The limits are in
+and the token's issue and expiry times, and never the token; a relay the file
+got wrong is named there as `Token relay settings dropped a relay`. The limits
+are in
 [SECURITY.md](SECURITY.md#the-token-relay).
 
 ## Scripts, for a shell or a scheduled job

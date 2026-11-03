@@ -603,6 +603,10 @@ async function onRegisterAck(from, msg) {
     if (code === ERR.PANIC) {
       await setAttempt(0)
       if (from !== port) return
+      // Panic stops the token relay too: no request is watched and the
+      // keep-alive tab is left alone until a normal answer restores the relays.
+      await chrome.storage.local.set({ [RELAY_SPECS_KEY]: [] })
+      if (from !== port) return
       await chrome.storage.session.set({ [K_PANIC_HELD]: true })
       if (from !== port) return
       await setState(LINK.DOWN, { reason: 'held through panic', error: `${code}: ${detail}` })

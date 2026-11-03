@@ -6,24 +6,37 @@
  * machine needs that same token. This watches the app's OWN requests for the
  * header and hands each newer token to the broker, which writes it to the one
  * file the operator named (bridged/token-relay.mjs). It also keeps one pinned
- * background tab of the app alive and reloads it before the freshest token runs
+ * background tab of the app alive and reloads it before the newest token runs
  * out, because a page that is closed or discarded sends no requests to watch.
  *
  * Off by default, and off in every profile the operator did not name: the
  * broker sends a profile its relays in REGISTER_ACK, and a profile with none
- * registers no listener at all, so it never sees a request header.
+ * registers no listener at all, so it never sees a request header. Panic
+ * clears the list (link.js), which stops the watching and the keep-alive.
  *
  * What this never does:
  *
  *   - Store, log or print the token. It travels once, to the broker, inside the
- *     request that hands it over. What is stored is its expiry, so the next
- *     request carrying the same token is not sent again.
+ *     request that hands it over. What is stored is when it was issued and when
+ *     it expires, so the same token is not sent twice.
  *   - Read a request from any page but the app's own: the request's initiator
  *     must be one the relay names, exactly.
- *   - Open a window. The keep-alive tab goes into a window that is already
- *     open, in the background, and with no window open it waits.
- *   - Reload any tab but its own. It reloads the tab it opened, or after a
- *     browser restart the pinned tab still showing its address.
+ *   - Open a window, or more than one tab a day per relay. The keep-alive tab
+ *     goes into a window that is already open, in the background; with no
+ *     window open it waits, and when its tab is closed it waits a day.
+ *   - Reload any tab but its own, or any page it did not choose. Its tab is
+ *     the one it opened in this browser session (tab ids start again with each
+ *     session, so the id is kept in session storage), or after a restart the
+ *     pinned tab still showing its address. A tab of its own that drifted to
+ *     another page of the app is sent back to the keep-alive address instead of
+ *     reloaded; one that left the app (a sign-in page, say) is left alone; one
+ *     a person is looking at is left alone until the next check.
+ *
+ * What it cannot do: wake a stopped worker. The listener's filter comes from
+ * storage, so it is added after the worker starts rather than in its first
+ * turn, and requests made while the worker is stopped are not seen. The native
+ * port and the keep-alive alarm keep the worker running, and the next request
+ * after a restart is seen.
  */
 
 import { TOKEN_RELAY, tokenVerdict } from './protocol.js'
@@ -32,13 +45,16 @@ import { TOKEN_RELAY, tokenVerdict } from './protocol.js'
 export const RELAY_SPECS_KEY = 'tokenRelay.specs'
 
 /**
- * storage.local key: per relay, numbers only - the expiry of the token last
- * handed over, when, and the keep-alive tab and its last reload. Never a token.
+ * storage.local key: per relay, when the token last handed over was issued and
+ * when it expires, when the broker last refused one, the keep-alive's last
+ * reload and last new tab, and the address its tab landed on. Never a token.
  */
 export const RELAY_STATE_KEY = 'tokenRelay.state'
 
-/** How long a token the broker refused waits before it is offered again. */
-const REFUSAL_PAUSE_MS = 60 * 1000
+/** storage.session key: per relay, the keep-alive tab's id in this browser session. */
+export const RELAY_TABS_KEY = 'tokenRelay.tabs'
+
+const HOUR_MS = 3_600_000
 
 /**
  * The token in a request's headers, or null.
@@ -91,19 +107,24 @@ export function urlMatches(url, pattern) {
 function cleanSpecs(value) {
   if (!Array.isArray(value)) return []
   const strings = (list) => Array.isArray(list) && list.length > 0 && list.every((s) => typeof s === 'string')
+  const ceiling = TOKEN_RELAY.MAX_LIFETIME_MS / HOUR_MS
   return value
     .filter((s) => s && typeof s.name === 'string' && strings(s.urls) && strings(s.initiators))
-    .map((s) => ({
-      name: s.name,
-      urls: [...s.urls],
-      initiators: [...s.initiators],
-      header: typeof s.header === 'string' ? s.header : 'authorization',
-      scheme: typeof s.scheme === 'string' ? s.scheme : 'Bearer',
-      keepAlive:
-        s.keepAlive && typeof s.keepAlive.url === 'string' && Number(s.keepAlive.renewBeforeHours) >= 1
-          ? { url: s.keepAlive.url, renewBeforeHours: Number(s.keepAlive.renewBeforeHours) }
-          : null,
-    }))
+    .map((s) => {
+      const hours = Number(s.maxLifetimeHours)
+      return {
+        name: s.name,
+        urls: [...s.urls],
+        initiators: [...s.initiators],
+        header: typeof s.header === 'string' ? s.header : 'authorization',
+        scheme: typeof s.scheme === 'string' ? s.scheme : 'Bearer',
+        maxLifetimeMs: (Number.isFinite(hours) && hours >= 1 && hours <= ceiling ? hours : ceiling) * HOUR_MS,
+        keepAlive:
+          s.keepAlive && typeof s.keepAlive.url === 'string' && Number(s.keepAlive.renewBeforeHours) >= 1
+            ? { url: s.keepAlive.url, renewBeforeHours: Number(s.keepAlive.renewBeforeHours) }
+            : null,
+      }
+    })
 }
 
 /** The fixed word for a broker refusal, never its whole message. */
@@ -115,26 +136,30 @@ function codeOf(err) {
 /**
  * @param {object} deps
  * @param {object} [deps.chrome] the extension API (the real one in the worker)
- * @param {(args: {name: string, token: string}) => Promise<{written?: boolean, exp?: number}>} deps.send
+ * @param {(args: {name: string, token: string}) => Promise<{written?: boolean, exp?: number, iat?: number}>} deps.send
  *        hands one token to the broker (OPS.RELAY_TOKEN)
  * @param {() => number} [deps.now]
  */
 export function createTokenRelay({ chrome: api = globalThis.chrome, send, now = () => Date.now() } = {}) {
   let specs = []
   let listener = null
+  let appliedByBroker = false
   const inflight = new Map()
   const startedAt = now()
   let lastCheck = -Infinity
+  const memoryTabs = {}
 
-  async function readState() {
+  async function readBag(area, key) {
     try {
-      const bag = await api.storage.local.get(RELAY_STATE_KEY)
-      const value = bag ? bag[RELAY_STATE_KEY] : null
+      const bag = await area.get(key)
+      const value = bag ? bag[key] : null
       return value && typeof value === 'object' ? value : {}
     } catch {
       return {}
     }
   }
+
+  const readState = () => readBag(api.storage.local, RELAY_STATE_KEY)
 
   async function patchState(name, patch) {
     const all = await readState()
@@ -146,8 +171,33 @@ export function createTokenRelay({ chrome: api = globalThis.chrome, send, now = 
     }
   }
 
-  /** Watch exactly the relays this profile was given, and nothing when it was given none. */
-  function apply(next) {
+  async function readTabs() {
+    if (!api.storage.session) return { ...memoryTabs }
+    return readBag(api.storage.session, RELAY_TABS_KEY)
+  }
+
+  async function setTab(name, tabId) {
+    if (!api.storage.session) {
+      memoryTabs[name] = tabId
+      return
+    }
+    const all = await readTabs()
+    all[name] = tabId
+    try {
+      await api.storage.session.set({ [RELAY_TABS_KEY]: all })
+    } catch {
+      // Without it the tab is found again by its address.
+    }
+  }
+
+  /**
+   * Watch exactly the relays this profile was given, and nothing when it was
+   * given none. `initial` is the worker's own start reading the last list it
+   * was told: ignored once the broker's answer has applied one.
+   */
+  function apply(next, { initial = false } = {}) {
+    if (initial && appliedByBroker) return { watching: specs.length, skipped: true }
+    if (!initial) appliedByBroker = true
     const events = api && api.webRequest ? api.webRequest.onSendHeaders : null
     if (listener && events) events.removeListener(listener)
     listener = null
@@ -163,8 +213,8 @@ export function createTokenRelay({ chrome: api = globalThis.chrome, send, now = 
   }
 
   /**
-   * One request the app sent. Exported for tests through the returned object;
-   * the answer is a fixed phrase saying what happened, never the token.
+   * One request the app sent. The answer is a fixed phrase saying what
+   * happened, never the token.
    */
   async function consider(details) {
     try {
@@ -173,31 +223,33 @@ export function createTokenRelay({ chrome: api = globalThis.chrome, send, now = 
       if (!spec) return 'not watched'
       const token = headerToken(details.requestHeaders, spec)
       if (!token) return 'no token'
-      const verdict = tokenVerdict(token, { now: now() })
+      const verdict = tokenVerdict(token, { now: now(), maxLifetimeMs: spec.maxLifetimeMs })
       if (!verdict.ok) return 'not a usable token'
 
+      // Ordered by issue time, as the broker orders them: only a token issued
+      // later than the last one handed over is worth sending.
       const held = (await readState())[spec.name] || {}
-      if (Number.isFinite(held.exp) && held.exp >= verdict.exp) return 'already relayed'
-      if ((inflight.get(spec.name) || 0) >= verdict.exp) return 'in flight'
-      if (held.failExp === verdict.exp && Number.isFinite(held.failAt) && now() - held.failAt < REFUSAL_PAUSE_MS) {
-        return 'recently refused'
-      }
+      if (Number.isFinite(held.iat) && held.iat >= verdict.iat) return 'already relayed'
+      if ((inflight.has(spec.name) ? inflight.get(spec.name) : -Infinity) >= verdict.iat) return 'in flight'
+      // After a refusal the whole relay pauses, whichever token comes next, so
+      // two tokens taking turns cannot turn every request into a refusal.
+      if (Number.isFinite(held.failAt) && now() - held.failAt < TOKEN_RELAY.REFUSAL_PAUSE_MS) return 'recently refused'
 
-      inflight.set(spec.name, verdict.exp)
+      inflight.set(spec.name, verdict.iat)
       try {
         const result = await send({ name: spec.name, token })
-        // The broker answers with the expiry the file now holds, which is this
-        // token's, or a longer-lived one it kept. Either way nothing up to that
-        // expiry is worth sending again.
-        const exp = result && Number.isFinite(result.exp) ? Math.max(result.exp, verdict.exp) : verdict.exp
-        await patchState(spec.name, { exp, iat: verdict.iat, at: now(), failAt: null, failExp: null })
+        // The broker answers with the token the file now holds: this one, or a
+        // newer one it kept. Nothing issued up to then is worth sending again.
+        const iat = result && Number.isFinite(result.iat) ? Math.max(result.iat, verdict.iat) : verdict.iat
+        const exp = result && Number.isFinite(result.exp) && iat !== verdict.iat ? result.exp : verdict.exp
+        await patchState(spec.name, { exp, iat, at: now(), failAt: null })
         return result && result.written === false ? 'kept' : 'relayed'
       } catch (err) {
-        await patchState(spec.name, { failAt: now(), failExp: verdict.exp })
+        await patchState(spec.name, { failAt: now() })
         console.warn(`[bridge] token relay "${spec.name}" was refused: ${codeOf(err)}`)
         return 'refused'
       } finally {
-        if (inflight.get(spec.name) === verdict.exp) inflight.delete(spec.name)
+        if (inflight.get(spec.name) === verdict.iat) inflight.delete(spec.name)
       }
     } catch (_err) {
       return 'failed'
@@ -222,20 +274,49 @@ export function createTokenRelay({ chrome: api = globalThis.chrome, send, now = 
     return out
   }
 
+  const onApp = (spec, url) => spec.initiators.some((o) => url.startsWith(`${o}/`))
+  const addressOf = (tab) => (tab && (tab.url || tab.pendingUrl)) || ''
+
   async function keepAlive(spec, t) {
     const held = (await readState())[spec.name] || {}
     const left = Number.isFinite(held.exp) ? held.exp * 1000 - t : -Infinity
-    if (left > spec.keepAlive.renewBeforeHours * 3_600_000) return 'fresh'
+    // Renew inside the configured margin, but never earlier than halfway
+    // through the token's own life, so a short-lived token does not have its
+    // page reloaded every time the reload gap allows.
+    const life = Number.isFinite(held.exp) && Number.isFinite(held.iat) ? (held.exp - held.iat) * 1000 : 0
+    const margin = Math.min(spec.keepAlive.renewBeforeHours * HOUR_MS, life > 0 ? life / 2 : Infinity)
+    if (left > margin) {
+      await noteLanding(spec, held)
+      return 'fresh'
+    }
     if (Number.isFinite(held.reloadAt) && t - held.reloadAt < TOKEN_RELAY.RELOAD_GAP_MS) return 'waiting'
 
     let tab = await ownTab(spec, held)
-    let outcome = 'reloaded'
+    let outcome
     if (tab) {
-      await api.tabs.reload(tab.id)
+      const at = addressOf(tab)
+      // Off the app (signed out to a sign-in page, or taken somewhere else):
+      // still its one tab, so no second one opens, and nothing is reloaded.
+      if (!onApp(spec, at)) return 'away'
+      // Someone is looking at it: never pull a page out from under them.
+      if (tab.active) return 'in use'
+      if (at.startsWith(spec.keepAlive.url) || (held.tabUrl && at === held.tabUrl)) {
+        await api.tabs.reload(tab.id)
+        outcome = 'reloaded'
+      } else {
+        // It drifted to another page of the app; reloading that page could act
+        // on it (an inbox marks things read), so it goes back to the chosen one.
+        await api.tabs.update(tab.id, { url: spec.keepAlive.url })
+        outcome = 'returned'
+      }
     } else {
+      // Its tab was closed: a person did that, so wait a day before another.
+      if (Number.isFinite(held.openedAt) && t - held.openedAt < TOKEN_RELAY.OPEN_GAP_MS) return 'closed'
       const windowId = await normalWindow()
       if (windowId === null) return 'no window'
       tab = await api.tabs.create({ url: spec.keepAlive.url, active: false, pinned: true, windowId })
+      await setTab(spec.name, tab.id)
+      await patchState(spec.name, { openedAt: t, tabUrl: null })
       outcome = 'opened'
     }
     try {
@@ -244,23 +325,52 @@ export function createTokenRelay({ chrome: api = globalThis.chrome, send, now = 
     } catch {
       // Older browsers lack the flag; the reload before each renewal still wakes it.
     }
-    await patchState(spec.name, { reloadAt: t, tabId: tab.id })
+    await patchState(spec.name, { reloadAt: t })
     return outcome
   }
 
-  /** The keep-alive tab: the one it opened, else a pinned tab still showing its address. */
+  /**
+   * Its tab: the one it opened in this browser session, else (after a
+   * restart) a pinned tab at the keep-alive address or where it last landed.
+   */
   async function ownTab(spec, held) {
-    if (Number.isInteger(held.tabId)) {
+    const id = (await readTabs())[spec.name]
+    if (Number.isInteger(id)) {
       try {
-        const tab = await api.tabs.get(held.tabId)
-        const at = tab ? tab.url || tab.pendingUrl || '' : ''
-        if (tab && spec.initiators.some((o) => at.startsWith(`${o}/`))) return tab
+        const tab = await api.tabs.get(id)
+        if (tab) return tab
       } catch {
-        // Closed, or a tab id from an earlier browser session: look for it by address.
+        // Closed: forgotten below, and looked for by address.
       }
+      await setTab(spec.name, null)
     }
     const pinned = await api.tabs.query({ pinned: true })
-    return pinned.find((tab) => (tab.url || tab.pendingUrl || '').startsWith(spec.keepAlive.url)) || null
+    const tab =
+      pinned.find((p) => addressOf(p).startsWith(spec.keepAlive.url)) ||
+      (held.tabUrl ? pinned.find((p) => addressOf(p) === held.tabUrl) : null) ||
+      null
+    if (tab) await setTab(spec.name, tab.id)
+    return tab
+  }
+
+  /**
+   * Remember where its tab landed (the app may redirect the keep-alive
+   * address), so a browser restart can find it again by that address. Only the
+   * first landing after it opens, or the keep-alive address itself, is
+   * recorded: a page a person later browsed to is not.
+   */
+  async function noteLanding(spec, held) {
+    const id = (await readTabs())[spec.name]
+    if (!Number.isInteger(id)) return
+    try {
+      const tab = await api.tabs.get(id)
+      const at = tab && tab.pinned ? tab.url || '' : ''
+      if (!at || at === held.tabUrl || !onApp(spec, at)) return
+      if (held.tabUrl && !at.startsWith(spec.keepAlive.url)) return
+      await patchState(spec.name, { tabUrl: at })
+    } catch {
+      // Closed: nothing to remember.
+    }
   }
 
   async function normalWindow() {

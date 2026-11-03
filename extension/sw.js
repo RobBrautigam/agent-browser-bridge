@@ -26,7 +26,7 @@ import {
   requestBroker,
   setRequestHandler,
 } from './lib/link.js'
-import { OpError, detachForSignIn, noteDebuggerDetached, runOp, sweepDebuggees } from './lib/ops.js'
+import { OpError, detachForSignIn, forgetSignInTab, noteDebuggerDetached, runOp, sweepDebuggees } from './lib/ops.js'
 import { RELAY_SPECS_KEY, createTokenRelay } from './lib/token-relay.js'
 import { clearSnapshot } from './lib/snapshot.js'
 import {
@@ -111,7 +111,7 @@ if (chrome.debugger && chrome.debugger.onDetach) {
 if (chrome.webRequest && chrome.webRequest.onBeforeRequest) {
   chrome.webRequest.onBeforeRequest.addListener(
     (details) => {
-      void detachForSignIn(details.tabId, details.url)
+      detachForSignIn(details.tabId, details.url).catch(() => {})
     },
     { urls: signInUrlPatterns(), types: ['main_frame'] }
   )
@@ -119,6 +119,7 @@ if (chrome.webRequest && chrome.webRequest.onBeforeRequest) {
 
 /** A closed tab's refs can never resolve again, and its open time is forgotten. */
 chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
+  forgetSignInTab(tabId)
   void clearSnapshot(tabId)
   void onTabRemoved(tabId, removeInfo)
 })
@@ -126,7 +127,7 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
 /** So can a tab that navigated: same tab id, entirely different document. */
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo && changeInfo.url) {
-    void detachForSignIn(tabId, changeInfo.url)
+    detachForSignIn(tabId, changeInfo.url, { landed: true }).catch(() => {})
     void clearSnapshot(tabId)
     schedulePositionRefresh()
   }
@@ -173,7 +174,9 @@ async function boot(reason) {
     // The relays this profile was last told about, so watching resumes before
     // the broker answers; its answer replaces them (storage.onChanged above).
     const bag = await chrome.storage.local.get(RELAY_SPECS_KEY)
-    tokenRelay.apply(bag ? bag[RELAY_SPECS_KEY] : [])
+    // `initial`: ignored if the broker's answer already applied a newer list
+    // while this read was in flight, so a late read cannot bring an old one back.
+    tokenRelay.apply(bag ? bag[RELAY_SPECS_KEY] : [], { initial: true })
   } catch (err) {
     console.error('[bridge] token relay start failed:', err)
   }

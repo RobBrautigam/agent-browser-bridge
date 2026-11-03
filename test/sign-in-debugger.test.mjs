@@ -155,3 +155,29 @@ test('a tab heading for a sign-in page has the debugger detached at once', async
     assert.deepEqual(state.detached, [7])
   })
 })
+
+test('a tab a sign-in page started loading in is refused even before its address changes (a redirect)', async () => {
+  await withBrowser({ url: ORDINARY }, async (ops, state) => {
+    // The request for the sign-in page left (webRequest), but the tab still shows the page that redirected.
+    assert.equal(await ops.detachForSignIn(1, SIGN_IN), true)
+    const err = await refused(ops.runOp('click', { tab: 1, selector: '#next', trusted: true }))
+    assert.ok(err, 'the debugger attached during a redirect into a sign-in page')
+    assert.equal(err.code, ERR.UNSUPPORTED)
+    assert.deepEqual(state.attached, [])
+    // Once the tab lands on an ordinary page, the sign-in is over and the debugger may attach again.
+    assert.equal(await ops.detachForSignIn(1, ORDINARY, { landed: true }), false)
+    const result = await ops.runOp('click', { tab: 1, selector: '#next', trusted: true })
+    assert.equal(result.tier, 2)
+    assert.deepEqual(state.attached, [1])
+  })
+})
+
+test('a closed tab forgets that it was signing in', async () => {
+  await withBrowser({ url: ORDINARY }, async (ops, state) => {
+    await ops.detachForSignIn(1, SIGN_IN)
+    ops.forgetSignInTab(1)
+    const result = await ops.runOp('click', { tab: 1, selector: '#next', trusted: true })
+    assert.equal(result.tier, 2)
+    assert.deepEqual(state.attached, [1])
+  })
+})

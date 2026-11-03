@@ -1709,11 +1709,18 @@ export function signInUrlPatterns() {
 export const TOKEN_RELAY = Object.freeze({
   MAX_TOKEN_CHARS: 8192,
   MIN_REMAINING_MS: 10 * 60 * 1000,
+  /** The ceiling on a token's life from issue to expiry; a relay may set a lower one. */
   MAX_LIFETIME_MS: 14 * 24 * 60 * 60 * 1000,
+  /** How far ahead of this machine's clock an issue time may be, for clock skew. */
+  MAX_FUTURE_IAT_MS: 5 * 60 * 1000,
   RENEW_BEFORE_MS: 24 * 60 * 60 * 1000,
   RELOAD_GAP_MS: 30 * 60 * 1000,
   CHECK_EVERY_MS: 5 * 60 * 1000,
   SETTLE_MS: 2 * 60 * 1000,
+  /** After the broker refuses a relay, nothing more is offered for it for this long. */
+  REFUSAL_PAUSE_MS: 60 * 1000,
+  /** The keep-alive opens at most one new tab per relay in this long. */
+  OPEN_GAP_MS: 24 * 60 * 60 * 1000,
 })
 
 const JWT_SHAPE = /^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/
@@ -1739,23 +1746,35 @@ export function jwtClaims(token) {
 }
 
 /**
- * Whether a token is worth relaying: a JSON Web Token whose expiry is far
- * enough ahead to be useful and not so far ahead that it is implausible, and,
- * when `claims` is given, whose payload carries every one of those values.
+ * Whether a token is worth relaying: a JSON Web Token that says when it was
+ * issued (no later than a few minutes past this machine's clock) and when it
+ * expires (far enough ahead to be useful), whose life from issue to expiry is
+ * no longer than `maxLifetimeMs` (the relay's own cap, never above
+ * MAX_LIFETIME_MS), and, when `claims` is given, whose payload carries every
+ * one of those values.
+ *
+ * Nothing here checks the signature, because the key is the app's. What stops
+ * a forged token from sticking is the order the relay keeps, by issue time: the
+ * next token the app mints is newer and replaces it (bridged/token-relay.mjs).
  *
  * The answer never repeats the token: a reason is a fixed phrase, so it can be
  * logged and returned without carrying the secret anywhere.
  *
- * @returns {{ok: true, exp: number, iat: number|null} | {ok: false, reason: string}}
+ * @returns {{ok: true, exp: number, iat: number} | {ok: false, reason: string}}
  */
-export function tokenVerdict(token, { now = Date.now(), claims = null } = {}) {
+export function tokenVerdict(token, { now = Date.now(), claims = null, maxLifetimeMs = TOKEN_RELAY.MAX_LIFETIME_MS } = {}) {
   const payload = jwtClaims(token)
   if (!payload) return { ok: false, reason: 'not a JSON Web Token' }
   const exp = Number(payload.exp)
   if (!Number.isFinite(exp)) return { ok: false, reason: 'it carries no expiry' }
+  const iat = Number(payload.iat)
+  if (!Number.isFinite(iat)) return { ok: false, reason: 'it carries no issue time' }
+  if (iat * 1000 > now + TOKEN_RELAY.MAX_FUTURE_IAT_MS) return { ok: false, reason: 'it claims to be issued in the future' }
   const left = exp * 1000 - now
   if (left < TOKEN_RELAY.MIN_REMAINING_MS) return { ok: false, reason: 'it has expired or is about to' }
-  if (left > TOKEN_RELAY.MAX_LIFETIME_MS) return { ok: false, reason: 'its expiry is implausibly far ahead' }
+  const asked = Number(maxLifetimeMs)
+  const cap = Number.isFinite(asked) && asked > 0 ? Math.min(asked, TOKEN_RELAY.MAX_LIFETIME_MS) : TOKEN_RELAY.MAX_LIFETIME_MS
+  if (left > cap || (exp - iat) * 1000 > cap) return { ok: false, reason: 'its lifetime is implausibly long' }
   if (claims && typeof claims === 'object') {
     for (const [key, value] of Object.entries(claims)) {
       if (!Object.prototype.hasOwnProperty.call(payload, key) || String(payload[key]) !== String(value)) {
@@ -1763,6 +1782,5 @@ export function tokenVerdict(token, { now = Date.now(), claims = null } = {}) {
       }
     }
   }
-  const iat = Number(payload.iat)
-  return { ok: true, exp, iat: Number.isFinite(iat) ? iat : null }
+  return { ok: true, exp, iat }
 }

@@ -31,7 +31,11 @@ function jwt(payload) {
 
 const iat = Math.floor(NOW / 1000)
 const FRESH = jwt({ user: 42, workspace_id: 'w1', iat, exp: iat + 48 * HOUR })
-const FRESHER = jwt({ user: 42, workspace_id: 'w1', iat: iat + HOUR, exp: iat + 49 * HOUR })
+const FRESHER = jwt({ user: 42, workspace_id: 'w1', iat: iat + 60, exp: iat + 49 * HOUR })
+/** Expires later than any real token, inside the default cap: what a forgery would look like. */
+const FORGED_LONG = jwt({ user: 42, iat, exp: iat + 13 * 24 * HOUR })
+const NO_ISSUE_TIME = jwt({ user: 42, exp: iat + 48 * HOUR })
+const ISSUED_LATER_TODAY = jwt({ user: 42, iat: iat + 2 * HOUR, exp: iat + 42 * HOUR })
 const OTHER_USER = jwt({ user: 7, iat, exp: iat + 48 * HOUR })
 const EXPIRED = jwt({ user: 42, iat: iat - 50 * HOUR, exp: iat - 2 * HOUR })
 const FAR_FUTURE = jwt({ user: 42, iat, exp: iat + 400 * 24 * HOUR })
@@ -91,6 +95,9 @@ test('a relay that would watch everything, write a relative path or name no init
     { profile: 'Not A Label' },
     { claims: { user: { nested: true } } },
     { keepAlive: { url: 'https://elsewhere.example/', renewBeforeHours: 20 } },
+    { maxLifetimeHours: 0 },
+    { maxLifetimeHours: 24 * 15 },
+    { maxLifetimeHours: 'two days' },
   ]) {
     const { relays, problems } = load(dir, config(dir, bad))
     assert.equal(relays.length, 0, `accepted ${JSON.stringify(bad)}`)
@@ -107,6 +114,8 @@ test('an extension is told only its own relays, without the file or the claims',
   assert.equal(specs[0].name, 'tracker')
   assert.deepEqual(specs[0].urls, ['https://*.tracker.example/*'])
   assert.equal(specs[0].keepAlive.renewBeforeHours, 20)
+  // The lifetime cap is sent (no secret, and the extension paces itself by it): the default, 14 days.
+  assert.equal(specs[0].maxLifetimeHours, 14 * 24)
   assert.ok(!('sink' in specs[0]), 'the file path was sent to the extension')
   assert.ok(!('claims' in specs[0]), 'the expected claims were sent to the extension')
   // Another profile, or this one unclaimed, is told nothing.
@@ -127,7 +136,7 @@ test('a fresh token from the named profile is written to the file, and the answe
   assert.deepEqual(fs.readdirSync(dir).sort(), ['token-relay.json', 'token.txt'])
 })
 
-test('only a token that lives longer replaces the one in the file', async () => {
+test('only a token issued later replaces the one in the file', async () => {
   const dir = tempDir()
   const { relays } = load(dir, config(dir))
   await accept(relays, { token: FRESHER })
@@ -135,7 +144,39 @@ test('only a token that lives longer replaces the one in the file', async () => 
   assert.equal(older.ok, true)
   assert.equal(older.written, false)
   assert.equal(older.exp, iat + 49 * HOUR, 'the answer should name the expiry the file already holds')
+  assert.equal(older.iat, iat + 60, 'the answer should name when the held token was issued')
   assert.equal(fs.readFileSync(path.join(dir, 'token.txt'), 'utf8'), FRESHER)
+})
+
+test('a forged token that expires far ahead is replaced by the next real one', async () => {
+  const dir = tempDir()
+  const { relays } = load(dir, config(dir))
+  fs.writeFileSync(path.join(dir, 'token.txt'), FORGED_LONG)
+  const real = await accept(relays, { token: FRESHER })
+  assert.equal(real.written, true, 'the forgery shut out a later-issued real token')
+  assert.equal(fs.readFileSync(path.join(dir, 'token.txt'), 'utf8'), FRESHER)
+})
+
+test("a relay's own lifetime cap, a missing issue time and one in the future are refused", async () => {
+  const dir = tempDir()
+  const { relays } = load(dir, config(dir, { maxLifetimeHours: 49 }))
+  assert.equal(relays[0].maxLifetimeMs, 49 * HOUR * 1000)
+  for (const token of [FORGED_LONG, NO_ISSUE_TIME, ISSUED_LATER_TODAY]) {
+    const result = await accept(relays, { token })
+    assert.equal(result.ok, false, `accepted ${JSON.stringify(token.split('.')[1]).slice(0, 30)}`)
+    assert.equal(result.code, ERR.BAD_REQUEST)
+  }
+  assert.equal(fs.existsSync(path.join(dir, 'token.txt')), false)
+  assert.equal((await accept(relays, { token: FRESHER })).written, true)
+})
+
+test('two tokens handed over at once leave the later-issued one in the file', async () => {
+  const dir = tempDir()
+  const { relays } = load(dir, config(dir))
+  const [a, b] = await Promise.all([accept(relays, { token: FRESHER }), accept(relays, { token: FRESH })])
+  assert.equal(a.ok && b.ok, true)
+  assert.equal(fs.readFileSync(path.join(dir, 'token.txt'), 'utf8'), FRESHER)
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['token-relay.json', 'token.txt'])
 })
 
 test('a file holding a dead, foreign or implausible token is replaced by a good one', async () => {

@@ -74,6 +74,22 @@ import {
 
 import { AuditLog } from './audit.mjs'
 import { acceptRelayedToken, loadTokenRelays, relaySpecsFor } from './token-relay.mjs'
+
+/**
+ * The configured token relays, with any the settings file got wrong named in
+ * the broker's log once per distinct set of problems, so a typo that drops a
+ * relay says why instead of silently doing nothing.
+ */
+let lastRelayProblems = ''
+function relaysLogged() {
+  const { relays, problems } = loadTokenRelays()
+  const said = problems.join(' | ')
+  if (said !== lastRelayProblems) {
+    lastRelayProblems = said
+    if (said) log('warn', 'Token relay settings dropped a relay', { problems })
+  }
+  return relays
+}
 import { AUDIT_RAIL_REFUSAL, prepareUpload } from './upload.mjs'
 import { displayName } from '../shared/upload-folder.mjs'
 import {
@@ -1262,7 +1278,7 @@ function handleProfileMetaOp(conn, msg, route) {
       // acceptRelayedToken: it is never logged, audited or sent back.
       const name = typeof args.name === 'string' ? args.name.slice(0, 40) : ''
       acceptRelayedToken({
-        relays: loadTokenRelays().relays,
+        relays: relaysLogged(),
         label: route.label,
         claimed: route.claimed,
         name,
@@ -1274,8 +1290,8 @@ function handleProfileMetaOp(conn, msg, route) {
             reply(conn, msg, fail(id, result.code, result.message), { route })
             return
           }
-          log('info', 'Token relayed', { label: route.label, name, written: result.written, exp: result.exp })
-          reply(conn, msg, ok(id, { name, written: result.written, exp: result.exp }), { route })
+          log('info', 'Token relayed', { label: route.label, name, written: result.written, exp: result.exp, iat: result.iat })
+          reply(conn, msg, ok(id, { name, written: result.written, exp: result.exp, iat: result.iat }), { route })
         },
         (err) => {
           log('error', 'Token relay failed', { label: route.label, name, err: err && err.code ? err.code : 'error' })
@@ -1357,7 +1373,7 @@ function notifyIdentity(route) {
       heartbeatMs: TIMING.HEARTBEAT_INTERVAL,
       // The token relays the operator assigned this line (token-relay.json),
       // as watch rules only: never the file they write, never the claims.
-      relays: relaySpecsFor(loadTokenRelays().relays, { label: route.label, claimed: route.claimed }),
+      relays: relaySpecsFor(relaysLogged(), { label: route.label, claimed: route.claimed }),
     })
   )
 }

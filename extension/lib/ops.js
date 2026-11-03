@@ -338,13 +338,21 @@ export async function noteDebuggerDetached(source) {
  * stops an operation that was mid-flight when its tab navigated to a sign-in
  * page from quietly attaching again.
  */
+/**
+ * Tabs a sign-in page has started loading in, from the moment its request
+ * leaves until the tab lands on another address. A server redirect into a
+ * sign-in page leaves the tab's address and pending address on the page that
+ * redirected for a moment, so the address alone would let a re-attach through.
+ */
+const signingIn = new Set()
+
 async function assertNotSignIn(tabId) {
   const tab = await tryGetTab(tabId)
   const at = tab ? [tab.url, tab.pendingUrl].find((u) => isSignInUrl(u)) : null
-  if (!at) return
+  if (!at && !signingIn.has(tabId)) return
   throw new OpError(
     ERR.UNSUPPORTED,
-    `Tab ${tabId} is on a sign-in page (${originOf(at)}), and the bridge never attaches the debugger to one: ` +
+    `Tab ${tabId} is on a sign-in page (${at ? originOf(at) : 'one is loading'}), and the bridge never attaches the debugger to one: ` +
       'the sign-in refuses a browser with a debugger attached. Use the tier 1 path (no trusted:true, no ' +
       'fullPage, no mode "type"), or leave the sign-in to the person.'
   )
@@ -361,10 +369,21 @@ async function assertNotSignIn(tabId) {
  *
  * @returns {Promise<boolean>} true when the address was a sign-in page
  */
-export async function detachForSignIn(tabId, url) {
-  if (!Number.isInteger(tabId) || tabId < 0 || !isSignInUrl(url)) return false
+export async function detachForSignIn(tabId, url, { landed = false } = {}) {
+  if (!Number.isInteger(tabId) || tabId < 0) return false
+  if (!isSignInUrl(url)) {
+    // The tab is now showing an ordinary page: the sign-in is over.
+    if (landed) signingIn.delete(tabId)
+    return false
+  }
+  signingIn.add(tabId)
   if (debuggerAvailable()) await detachDebugger(tabId)
   return true
+}
+
+/** A closed tab is never signing in. */
+export function forgetSignInTab(tabId) {
+  signingIn.delete(tabId)
 }
 
 async function attachDebugger(tabId) {
