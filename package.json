@@ -31,7 +31,7 @@
     "hooks:install": "node scripts/install-hooks.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "2.1.0",
-    "zod": "4.6.5"
+    "@modelcontextprotocol/server": "2.4.0",
+    "zod": "4.6.7"
   }
 }
