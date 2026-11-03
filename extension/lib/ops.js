@@ -29,6 +29,7 @@ import {
   OPEN_OR_FOCUS_MODE,
   describeOpenOrFocus,
   isRestrictedUrl,
+  isSignInUrl,
   openOrFocusMatch,
   openOrFocusMode,
   originOf,
@@ -325,8 +326,69 @@ export async function noteDebuggerDetached(source) {
   if (source && Number.isInteger(source.tabId)) await noteAttached(source.tabId, false)
 }
 
+/**
+ * Refuse the debugger on a sign-in page (SIGN_IN_HOSTS in the contract).
+ *
+ * Google's sign-in refuses a browser with a DevTools protocol client attached,
+ * for the whole page load, so attaching even for one screenshot can leave a
+ * person unable to sign in until the page is loaded again. The tab's committed
+ * address AND the one it is loading are both checked: an attach that lands
+ * while the sign-in page is still arriving is the same failure. Every attach
+ * goes through here, including cdp()'s re-attach after a detach, which is what
+ * stops an operation that was mid-flight when its tab navigated to a sign-in
+ * page from quietly attaching again.
+ */
+/**
+ * Tabs a sign-in page has started loading in, from the moment its request
+ * leaves until the tab lands on another address. A server redirect into a
+ * sign-in page leaves the tab's address and pending address on the page that
+ * redirected for a moment, so the address alone would let a re-attach through.
+ */
+const signingIn = new Set()
+
+async function assertNotSignIn(tabId) {
+  const tab = await tryGetTab(tabId)
+  const at = tab ? [tab.url, tab.pendingUrl].find((u) => isSignInUrl(u)) : null
+  if (!at && !signingIn.has(tabId)) return
+  throw new OpError(
+    ERR.UNSUPPORTED,
+    `Tab ${tabId} is on a sign-in page (${at ? originOf(at) : 'one is loading'}), and the bridge never attaches the debugger to one: ` +
+      'the sign-in refuses a browser with a debugger attached. Use the tier 1 path (no trusted:true, no ' +
+      'fullPage, no mode "type"), or leave the sign-in to the person.'
+  )
+}
+
+/**
+ * Detach the debugger from a tab that is heading for a sign-in page.
+ *
+ * Called by the service worker the moment a tab starts loading one, before
+ * the page's own script runs. A detach on a tab this extension is not attached
+ * to fails harmlessly, so it is attempted whenever the address is a sign-in
+ * page rather than trusting the tracking list, which a worker restart can leave
+ * behind the truth.
+ *
+ * @returns {Promise<boolean>} true when the address was a sign-in page
+ */
+export async function detachForSignIn(tabId, url, { landed = false } = {}) {
+  if (!Number.isInteger(tabId) || tabId < 0) return false
+  if (!isSignInUrl(url)) {
+    // The tab is now showing an ordinary page: the sign-in is over.
+    if (landed) signingIn.delete(tabId)
+    return false
+  }
+  signingIn.add(tabId)
+  if (debuggerAvailable()) await detachDebugger(tabId)
+  return true
+}
+
+/** A closed tab is never signing in. */
+export function forgetSignInTab(tabId) {
+  signingIn.delete(tabId)
+}
+
 async function attachDebugger(tabId) {
   if (!debuggerAvailable()) throw unsupported('Escalation requested.')
+  await assertNotSignIn(tabId)
   try {
     await callbackApi(chrome.debugger.attach, chrome.debugger, { tabId }, DEBUGGER_PROTOCOL_VERSION)
   } catch (err) {

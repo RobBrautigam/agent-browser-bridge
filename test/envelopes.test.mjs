@@ -46,6 +46,7 @@ const REGISTER_ACK_KEYS = [
   'profileDir',
   'profileKey',
   'profileName',
+  'relays',
   'type',
   'v',
   'vendor',
@@ -149,6 +150,8 @@ test('registerAck emits every documented key from only the ok flag', () => {
   assert.strictEqual(ack.vendor, null)
   assert.strictEqual(ack.warning, null)
   assert.strictEqual(ack.version, null)
+  // No relay unless the broker assigns one: an empty list, never undefined.
+  assert.deepEqual(ack.relays, [])
 })
 
 test('registerAck defaults the heartbeat to the shared interval', () => {

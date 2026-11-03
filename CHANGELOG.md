@@ -11,6 +11,60 @@ replaces the one-time steps in the earlier entries.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-02
+
+Sign-in pages stay free of the debugger, and a local tool can have a web
+app's short-lived bearer token kept fresh with nobody copying it.
+
+### Added
+
+- **The token relay** (`bridged/token-relay.mjs`,
+  `extension/lib/token-relay.js`). Off unless `token-relay.json` exists in the
+  bridge's state folder. A relay names one claimed profile, the API addresses
+  to watch, the exact origins of the page that calls them, optional claims the
+  token must carry, the file to write and an optional keep-alive page. The
+  broker sends a profile only its own relays in `REGISTER_ACK` (new `relays`
+  key, an empty list by default), never the file or the claims. The extension
+  watches those requests with `chrome.webRequest.onSendHeaders` (no
+  `extraHeaders`, so no cookies), and hands a newer token to the broker in a
+  new host-only operation, `relayToken`. The broker writes it one at a time per
+  file, through a temporary file renamed over the target, only when it was
+  issued later than the token already there (so the next real token replaces
+  a forged one), and logs the relay, profile and times, never the token, plus
+  any relay the settings file got wrong. Panic clears a profile's relays.
+- **Keep-alive tab** per relay: one pinned background tab of the app, opened
+  in a window that is already open, marked not to be discarded, and reloaded
+  when the newest token is within the relay's renewal margin (24 hours by
+  default, never earlier than halfway through the token's life), at most
+  every 30 minutes. No window is ever opened, at most one new tab a day, a tab
+  that wandered elsewhere in the app is sent back rather than reloaded, and a
+  tab a person is looking at, or one that left the app, is left alone.
+- **`SIGN_IN_HOSTS`, `isSignInUrl` and `signInUrlPatterns`** in the contract,
+  and **`TOKEN_RELAY`, `jwtClaims` and `tokenVerdict`**: a token is a JSON Web
+  Token with an issue time no later than five minutes ahead, alive for at
+  least ten more minutes, living no longer than the relay's cap (at most
+  fourteen days), carrying every claim named.
+- The `webRequest` permission. It reads no header in a profile with no relay
+  and blocks nothing.
+
+### Changed
+
+- **The debugger never attaches to a sign-in page.** An operation that needs
+  it on a tab whose address or pending address is on a sign-in host is refused
+  with `E_UNSUPPORTED`, and a tab the bridge holds is detached as soon as a
+  main-frame request to one leaves and stays refused until it lands on
+  another address (so a redirect cannot slip a re-attach through), with a
+  second check on every address change. Google's sign-in refused a browser with a debugger attached, blaming
+  JavaScript.
+- `HOST_ONLY_OPS` is now `resume` and `relayToken`; an agent cannot originate
+  either.
+
+### Upgrading
+
+Pull, `npm ci`, restart the broker, then reload the extension in each profile
+(`node scripts/reload-extension.mjs --all`). Chrome asks nothing for the new
+permission. No relay runs until `token-relay.json` is written.
+
 ## [1.4.0] - 2026-11-02
 
 Safer reading, two tab scripts, and a front door. `read-page` used to tell its

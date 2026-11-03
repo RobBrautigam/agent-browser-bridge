@@ -180,9 +180,13 @@ test('an mcp connection may originate anything except the host-only ops', async 
 
 test('an mcp connection may NOT originate resume: the model cannot clear the panic switch', async () => {
   const { canOriginate } = await import(POLICY_MODULE)
-  assert.deepEqual([...HOST_ONLY_OPS], [OPS.RESUME])
+  assert.deepEqual([...HOST_ONLY_OPS], [OPS.RESUME, OPS.RELAY_TOKEN])
   assert.ok(Object.isFrozen(HOST_ONLY_OPS))
   assert.equal(canOriginate(ROLE.MCP, OPS.RESUME), false)
+  // Nor may the model hand the broker a session token to write: a token in the
+  // relay's file comes from the extension watching the site's own requests.
+  assert.equal(canOriginate(ROLE.MCP, OPS.RELAY_TOKEN), false)
+  assert.equal(canOriginate(ROLE.HOST, OPS.RELAY_TOKEN), true)
   // The popup's way out is a host request, so the host allowlist carries it.
   assert.equal(canOriginate(ROLE.HOST, OPS.RESUME), true)
   // And the ways panic is SEEN and TRIPPED stay open to the model.
@@ -403,7 +407,7 @@ test('BROWSER_OPS is exactly the twenty-three ops that cross into the extension'
   assert.ok(Object.isFrozen(BROWSER_OPS))
 })
 
-test('BROKER_OPS is exactly the eight ops the broker answers itself', () => {
+test('BROKER_OPS is exactly the nine ops the broker answers itself', () => {
   assert.deepEqual([...BROKER_OPS].sort(), [
     OPS.ARM,
     OPS.CLAIM_PROFILE,
@@ -413,8 +417,9 @@ test('BROKER_OPS is exactly the eight ops the broker answers itself', () => {
     OPS.RESUME,
     OPS.SET_LABEL,
     OPS.STATUS,
+    OPS.RELAY_TOKEN,
   ].sort())
-  assert.equal(BROKER_OPS.length, 8)
+  assert.equal(BROKER_OPS.length, 9)
   assert.ok(Object.isFrozen(BROKER_OPS))
 })
 

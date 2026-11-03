@@ -136,7 +136,7 @@ export function canOriginate(role, op) {
  * not on this list: the board is the operator's own UI and arming another line from it
  * is the point (see HOST_REQ_ALLOWED_OPS in shared/protocol.mjs).
  */
-const HOST_SELF_ONLY_OPS = new Set([OPS.CLAIM_PROFILE, OPS.SET_LABEL])
+const HOST_SELF_ONLY_OPS = new Set([OPS.CLAIM_PROFILE, OPS.SET_LABEL, OPS.RELAY_TOKEN])
 
 export function isHostSelfOnlyOp(op) {
   return HOST_SELF_ONLY_OPS.has(op)
@@ -184,7 +184,7 @@ export function isPanicExempt(op) {
 }
 
 /** Meta operations worth a permanent record even though they never touch a page. */
-const AUDITED_META = new Set([OPS.ARM, OPS.DISARM, OPS.PANIC, OPS.RESUME, OPS.CLAIM_PROFILE])
+const AUDITED_META = new Set([OPS.ARM, OPS.DISARM, OPS.PANIC, OPS.RESUME, OPS.CLAIM_PROFILE, OPS.RELAY_TOKEN])
 
 /**
  * Every operation that crosses into a browser, plus the state changes that

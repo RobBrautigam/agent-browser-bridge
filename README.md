@@ -35,6 +35,18 @@ suite. It is the wrong one for work that lives behind your logins:
 | Cookies and passwords | the driver has full DevTools access, cookies included | the extension has no cookie permission; a password field needs your recorded yes |
 | Headless CI, or no browser open | yes | no: use Playwright there |
 
+## What is new in 1.5.0
+
+- **Sign-in pages never see the debugger.** Google and some other sign-in
+  pages refuse a browser with a debugger attached. The bridge now refuses to
+  attach to one and lets go of a tab the moment it starts loading one, so a
+  person signing in is never blocked by an agent's earlier click.
+- **The token relay.** A tool on your own machine that needs a web app's
+  short-lived bearer token can now have it kept fresh with no copying: name
+  the app, one profile and one file in `token-relay.json`, and the extension
+  hands each newer token from the app's own requests to that file. Off unless
+  configured; the limits are in [SECURITY.md](SECURITY.md#the-token-relay).
+
 ## What is new in 1.4.0
 
 - **`read-page` refuses links that act when opened.** Sign-out, opt-out,
@@ -685,6 +697,59 @@ or as an absolute path inside it. At most 10 files and 20 MB together. The
 tool fills the input and fires the same `input` and `change` events a person's
 pick does; it does not submit the form. An upload box inside an iframe is not
 reachable, because page operations work in the main frame only.
+
+### Keeping a web app's token fresh for a local tool
+
+Some web apps sign their API calls with a bearer token that lives a day or two
+and is minted by the page from your signed-in session. A tool on your machine
+that talks to the same API breaks each time it expires. The token relay keeps
+the tool's copy fresh: the extension in one profile watches the app's own
+requests and hands each newer token to the broker, which writes it to the file
+the tool reads.
+
+Write `token-relay.json` in the bridge's state folder (on Windows
+`%LOCALAPPDATA%\agent-browser-bridge\token-relay.json`). The broker reads it on
+every use, so no restart is needed; the profile picks it up the next time it
+registers (reload the extension to hurry it).
+
+```json
+{
+  "relays": [
+    {
+      "name": "tracker",
+      "profile": "chrome-work",
+      "urls": ["https://*.tracker.example/*"],
+      "initiators": ["https://app.tracker.example"],
+      "claims": { "user": 123 },
+      "maxLifetimeHours": 49,
+      "sink": "C:/Users/me/.cache/tracker-tool/token.txt",
+      "keepAlive": { "url": "https://app.tracker.example/home", "renewBeforeHours": 24 }
+    }
+  ]
+}
+```
+
+- `urls` are the API requests worth watching, `initiators` the exact origins
+  of the page that sends them. `header` and `scheme` default to
+  `authorization` and `Bearer`.
+- `claims` are values the token must carry, so a token for another account is
+  refused. Optional, and worth setting.
+- `maxLifetimeHours` is how long the app's tokens live, a little over. A token
+  claiming a longer life is refused. Optional (fourteen days), and worth
+  setting: it bounds what a forged token can do.
+- `sink` is the file the tool reads. Its folder must exist; the relay never
+  creates one, and only a token issued later than the one already there
+  replaces it.
+- `keepAlive` (optional) keeps one pinned background tab of the app open and
+  reloads it when the newest token is inside `renewBeforeHours` of expiring,
+  so a token is minted even when you have not opened the app. Use a page that
+  is cheap to load and does not mark anything read.
+
+The broker's log records `Token relayed` with the relay's name, the profile
+and the token's issue and expiry times, and never the token; a relay the file
+got wrong is named there as `Token relay settings dropped a relay`. The limits
+are in
+[SECURITY.md](SECURITY.md#the-token-relay).
 
 ## Scripts, for a shell or a scheduled job
 
