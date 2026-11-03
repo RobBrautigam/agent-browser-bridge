@@ -156,6 +156,7 @@ export const OPS = Object.freeze({
   PANIC: 'panic',
   RESUME: 'resume',
   STATUS: 'status',
+  RELAY_TOKEN: 'relayToken',
 })
 
 export const TIER = Object.freeze({
@@ -215,6 +216,10 @@ export const OP_TIER = Object.freeze({
   [OPS.PANIC]: TIER.META,
   [OPS.RESUME]: TIER.META,
   [OPS.STATUS]: TIER.META,
+  // The extension handing the broker a site's own session token for the one
+  // file the operator named. META: it never touches a page and never leaves
+  // the broker, and only the extension may ask (HOST_ONLY_OPS).
+  [OPS.RELAY_TOKEN]: TIER.META,
 })
 
 /**
@@ -259,6 +264,7 @@ export const BROKER_OPS = Object.freeze([
   OPS.PANIC,
   OPS.RESUME,
   OPS.STATUS,
+  OPS.RELAY_TOKEN,
 ])
 
 /**
@@ -267,7 +273,7 @@ export const BROKER_OPS = Object.freeze([
  * RESUME clears the panic switch. Only this extension's popup asks for it,
  * behind a press-and-hold; the broker drops an MCP connection that sends it.
  */
-export const HOST_ONLY_OPS = Object.freeze([OPS.RESUME])
+export const HOST_ONLY_OPS = Object.freeze([OPS.RESUME, OPS.RELAY_TOKEN])
 
 /**
  * Operations a HOST-role connection is allowed to originate.
@@ -287,6 +293,7 @@ export const HOST_REQ_ALLOWED_OPS = Object.freeze([
   OPS.PANIC,
   OPS.RESUME,
   OPS.STATUS,
+  OPS.RELAY_TOKEN,
 ])
 
 /** Hard ceiling on an arm window, enforced by the broker and mirrored by the UI. */
@@ -1224,6 +1231,7 @@ export function registerAck({
   warning = null,
   version = null,
   heartbeatMs = TIMING.HEARTBEAT_INTERVAL,
+  relays = [],
 }) {
   return {
     v: PROTOCOL_VERSION,
@@ -1241,6 +1249,7 @@ export function registerAck({
     warning,
     version,
     heartbeatMs,
+    relays,
   }
 }
 
@@ -1316,4 +1325,141 @@ export function originOf(url) {
   } catch {
     return '(unparseable)'
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Sign-in pages: never under the debugger                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Hosts whose sign-in pages refuse a browser that has a debugger attached.
+ *
+ * Google's sign-in looks for an attached DevTools protocol client and, when it
+ * finds one, refuses to sign in ("This browser or app may not be secure", or
+ * "The browser you're using doesn't support JavaScript"), and the refusal sticks
+ * to that page load. Microsoft's and Apple's sign-in pages run similar checks.
+ * A sign-in is the one page a person has to finish themselves, so the bridge
+ * never attaches its debugger to one, and detaches the moment a tab it holds
+ * starts loading one (extension/sw.js, extension/lib/ops.js).
+ *
+ * Exact host names, compared without a port or a trailing dot. A subdomain is
+ * not a match: these are the sign-in hosts, not the companies behind them.
+ */
+export const SIGN_IN_HOSTS = Object.freeze([
+  'accounts.google.com',
+  'accounts.youtube.com',
+  'login.microsoftonline.com',
+  'login.microsoft.com',
+  'login.live.com',
+  'account.live.com',
+  'appleid.apple.com',
+  'idmsa.apple.com',
+])
+
+/** Is this address a page on one of SIGN_IN_HOSTS? Anything unparseable is not. */
+export function isSignInUrl(url) {
+  if (typeof url !== 'string' || url === '') return false
+  let host
+  try {
+    host = new URL(url).hostname.toLowerCase()
+  } catch {
+    return false
+  }
+  if (host.endsWith('.')) host = host.slice(0, -1)
+  return SIGN_IN_HOSTS.includes(host)
+}
+
+/** SIGN_IN_HOSTS as match patterns, for a webRequest filter. */
+export function signInUrlPatterns() {
+  return SIGN_IN_HOSTS.map((host) => `*://${host}/*`)
+}
+
+/* -------------------------------------------------------------------------- */
+/* Token relay: a site's own session token, kept fresh for a local tool         */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The limits on a relayed session token.
+ *
+ * The relay exists for one shape of problem: a web app signs its own API calls
+ * with a short-lived bearer token minted from the browser's session, and a tool
+ * on this machine needs that token to keep working. The extension watches the
+ * app's OWN requests for the header, and the broker writes the token to the one
+ * file the operator named (bridged/token-relay.mjs). Nothing else may ask for it:
+ * only the extension originates the request (HOST_ONLY_OPS).
+ *
+ *   MAX_TOKEN_CHARS   a header longer than this is not a session token.
+ *   MIN_REMAINING_MS  a token closer than this to its expiry is not worth
+ *                     relaying; the tool would read it and find it dead.
+ *   MAX_LIFETIME_MS   a token claiming to live longer than this is refused. The
+ *                     broker keeps the token that lives longest, so a forged
+ *                     far-future expiry would otherwise lock every real token
+ *                     after it out.
+ *   RENEW_BEFORE_MS   the keep-alive tab reloads once the freshest token seen
+ *                     has less than this left, unless the operator set another.
+ *   RELOAD_GAP_MS     and never more often than this, so a signed-out session
+ *                     cannot turn into a reload loop.
+ *   CHECK_EVERY_MS    how often the keep-alive check runs at all.
+ *   SETTLE_MS         how long after the worker starts before the first check,
+ *                     so the app's open tabs get the first chance to supply one.
+ */
+export const TOKEN_RELAY = Object.freeze({
+  MAX_TOKEN_CHARS: 8192,
+  MIN_REMAINING_MS: 10 * 60 * 1000,
+  MAX_LIFETIME_MS: 14 * 24 * 60 * 60 * 1000,
+  RENEW_BEFORE_MS: 24 * 60 * 60 * 1000,
+  RELOAD_GAP_MS: 30 * 60 * 1000,
+  CHECK_EVERY_MS: 5 * 60 * 1000,
+  SETTLE_MS: 2 * 60 * 1000,
+})
+
+const JWT_SHAPE = /^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/
+
+/**
+ * The claims of a JSON Web Token, or null when the value is not one.
+ *
+ * Decodes the payload and nothing more. The signature cannot be checked here
+ * (the key is the site's), which is why the broker also matches the claims the
+ * operator named and caps the lifetime: a value that merely LOOKS like a token
+ * is judged by what it says about itself, and refused when that is implausible.
+ */
+export function jwtClaims(token) {
+  if (typeof token !== 'string' || token.length > TOKEN_RELAY.MAX_TOKEN_CHARS || !JWT_SHAPE.test(token)) return null
+  try {
+    const part = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
+    const padded = part + '='.repeat((4 - (part.length % 4)) % 4)
+    const claims = JSON.parse(atob(padded))
+    return claims && typeof claims === 'object' && !Array.isArray(claims) ? claims : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Whether a token is worth relaying: a JSON Web Token whose expiry is far
+ * enough ahead to be useful and not so far ahead that it is implausible, and,
+ * when `claims` is given, whose payload carries every one of those values.
+ *
+ * The answer never repeats the token: a reason is a fixed phrase, so it can be
+ * logged and returned without carrying the secret anywhere.
+ *
+ * @returns {{ok: true, exp: number, iat: number|null} | {ok: false, reason: string}}
+ */
+export function tokenVerdict(token, { now = Date.now(), claims = null } = {}) {
+  const payload = jwtClaims(token)
+  if (!payload) return { ok: false, reason: 'not a JSON Web Token' }
+  const exp = Number(payload.exp)
+  if (!Number.isFinite(exp)) return { ok: false, reason: 'it carries no expiry' }
+  const left = exp * 1000 - now
+  if (left < TOKEN_RELAY.MIN_REMAINING_MS) return { ok: false, reason: 'it has expired or is about to' }
+  if (left > TOKEN_RELAY.MAX_LIFETIME_MS) return { ok: false, reason: 'its expiry is implausibly far ahead' }
+  if (claims && typeof claims === 'object') {
+    for (const [key, value] of Object.entries(claims)) {
+      if (!Object.prototype.hasOwnProperty.call(payload, key) || String(payload[key]) !== String(value)) {
+        return { ok: false, reason: `its "${key}" claim is not the one this relay expects` }
+      }
+    }
+  }
+  const iat = Number(payload.iat)
+  return { ok: true, exp, iat: Number.isFinite(iat) ? iat : null }
 }

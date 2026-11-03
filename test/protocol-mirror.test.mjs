@@ -41,6 +41,9 @@ const IDENTICAL = [
   'GROUP_TITLE_MAX',
   'UPLOAD_LIMITS',
   'UPLOAD_RAIL',
+  'SIGN_IN_HOSTS',
+  'TOKEN_RELAY',
+  'HOST_ONLY_OPS',
 ]
 
 test('every mirrored constant is identical to the shared contract', () => {
@@ -166,5 +169,20 @@ test('the extension reload sentence is the same on both sides', () => {
     {},
   ]) {
     assert.equal(mirror.describeExtensionReload(spec), shared.describeExtensionReload(spec), JSON.stringify(spec))
+  }
+})
+
+test('the sign-in check and the token checks judge the same on both sides', () => {
+  for (const url of ['https://accounts.google.com/x', 'https://mail.google.com/', 'https://LOGIN.LIVE.COM./', 'junk', '']) {
+    assert.equal(mirror.isSignInUrl(url), shared.isSignInUrl(url), url)
+  }
+  assert.deepEqual(mirror.signInUrlPatterns(), shared.signInUrlPatterns())
+  const now = Date.UTC(2026, 0, 1)
+  const b64 = (v) => Buffer.from(JSON.stringify(v)).toString('base64url')
+  const token = `${b64({ alg: 'HS256' })}.${b64({ exp: Math.floor(now / 1000) + 3600, user: 1 })}.c2ln`
+  for (const value of [token, 'eyJ.x', null, `${token}x y`]) {
+    assert.deepEqual(mirror.jwtClaims(value), shared.jwtClaims(value))
+    assert.deepEqual(mirror.tokenVerdict(value, { now }), shared.tokenVerdict(value, { now }))
+    assert.deepEqual(mirror.tokenVerdict(value, { now, claims: { user: 2 } }), shared.tokenVerdict(value, { now, claims: { user: 2 } }))
   }
 })

@@ -336,6 +336,68 @@ cannot ungroup, close or navigate even if the script itself were wrong. A plan
 that names a host window adds the gather to that list, and the client refuses
 a gather into any other window.
 
+## Sign-in pages never see the debugger
+
+Some sign-in pages, Google's among them, refuse a browser that has a debugger
+attached, for the whole page load, with a message that blames JavaScript. The
+bridge never attaches its debugger to a page on one of the hosts in
+`SIGN_IN_HOSTS` (the contract): a trusted click, a typed fill, a full-page
+screenshot or an evaluation that would need it is refused with
+`E_UNSUPPORTED`, and the tier 1 path still works. The check reads the tab's
+address and its pending address, so a navigation in flight counts.
+
+A tab the bridge already holds is let go the moment it starts loading one of
+those hosts: the extension watches main-frame requests to them
+(`chrome.webRequest.onBeforeRequest`, which reads no header and blocks
+nothing) and detaches, with a second check on every address change. Hosts are
+matched exactly, never by suffix, so a lookalike address is not exempted and
+an ordinary page on the same company's other hosts is not affected.
+
+## The token relay
+
+Some web apps sign their own API calls with a short-lived bearer token the
+page mints from the signed-in session. The relay lets a tool on the operator's
+own machine keep a copy of that token fresh with nobody copying it: the
+extension watches the app's own requests for the header and hands each newer
+token to the broker, which writes it to one file the operator named.
+
+It is off unless the operator writes `token-relay.json` in the bridge's state
+folder, and what it can do is bounded by the code, not by that file:
+
+- **One profile, claimed.** A relay names one profile. The broker tells only
+  that profile's extension, and only once the profile is claimed; every other
+  profile registers no request listener at all.
+- **Only the extension may hand over a token.** `relayToken` is a host-only
+  operation (`HOST_ONLY_OPS`), resolved to the connection's own profile; an
+  agent connected through the MCP server cannot originate it, so it cannot
+  write a token of its choosing into the file.
+- **Only the app's own requests.** The request must go to an address the relay
+  names and come from a page whose origin it names exactly. The listener asks
+  for request headers without `extraHeaders`, so cookies are not in what it
+  sees.
+- **Only a token that looks like one.** A JSON Web Token, alive for at least
+  ten more minutes and at most fourteen days, carrying every claim the
+  operator named (a user id, for example). A token for another account is
+  refused.
+- **Only a longer-lived one replaces the file.** An old tab cannot overwrite a
+  fresh token; a refused or expired token never empties the file.
+- **Written once, nowhere else.** The broker writes through a temporary file in
+  the same folder that is renamed over the target, never creates the folder,
+  and never logs, audits, echoes or returns the token. The extension keeps
+  only the token's expiry. The broker's log records the relay's name, the
+  profile, whether it wrote, and the expiry.
+
+The keep-alive is optional per relay: one pinned tab of the app, opened in the
+background in a window that is already open (never a new window), marked not
+to be discarded, and reloaded only when the freshest token is within the
+relay's renewal margin, at most every thirty minutes. With no window open it
+waits. It reloads only the tab it opened, or after a restart the pinned tab
+still showing its address.
+
+The token is a credential to whatever API it signs. Treat the file it is
+written to as you treat that credential, and name a relay only for an account
+whose own tool needs it.
+
 ## Reporting a vulnerability
 
 Open a private security advisory on the GitHub repository (Security tab,

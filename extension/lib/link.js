@@ -49,6 +49,7 @@ import {
   register,
   req,
 } from './protocol.js'
+import { RELAY_SPECS_KEY } from './token-relay.js'
 
 /* Session-scoped keys: meaningless once the browser restarts. */
 const K_STATE = 'link.state'
@@ -641,6 +642,10 @@ async function onRegisterAck(from, msg) {
   const patch = {}
   if (typeof msg.label === 'string' && msg.label) patch[K_LABEL] = msg.label
   if (typeof msg.vendor === 'string' && msg.vendor) patch[K_VENDOR] = msg.vendor
+  // The token relays the broker assigned THIS profile, usually none. Written on
+  // every answer, so a relay the operator removed stops being watched at the
+  // next one; the worker re-applies them when this key changes (sw.js).
+  patch[RELAY_SPECS_KEY] = Array.isArray(msg.relays) ? msg.relays : []
   if (Object.keys(patch).length > 0) {
     if (from !== port) return
     await chrome.storage.local.set(patch)

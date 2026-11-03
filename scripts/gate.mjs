@@ -84,6 +84,9 @@ const MIRRORED_CONSTANTS = [
   'OPEN_OR_FOCUS_MATCH',
   'GROUP_COLORS',
   'GROUP_TITLE_MAX',
+  'SIGN_IN_HOSTS',
+  'TOKEN_RELAY',
+  'HOST_ONLY_OPS',
 ]
 const SELF = path.resolve(fileURLToPath(import.meta.url))
 
