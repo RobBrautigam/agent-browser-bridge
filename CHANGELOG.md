@@ -11,6 +11,34 @@ replaces the one-time steps in the earlier entries.
 
 ## [Unreleased]
 
+### Changed
+
+- Internal cleanup, with no change in what any tool, script or installer
+  does. `scripts/lib/cli.mjs` now holds the scripts' one `isMain` entry-point
+  guard and one set of terminal color helpers, which six and five scripts
+  carried as identical copies. `scripts/claim.mjs` still exports `isMain`.
+- Names that no module imported are no longer exported. Each is still used
+  inside its own file:
+  `AUDIT_ROTATE_BYTES` (`bridged/audit.mjs`);
+  `matchProfileByEmail`, `IDENTITY_CHANGED_PREFIX` (`bridged/profiles.mjs`);
+  `routeKey`, `RAW_TAB_ARG_KEYS`, `COLLISION_PREFIX` (`bridged/routes.mjs`);
+  `TOKEN_RELAY_FILE` (`bridged/token-relay.mjs`);
+  `LEDGER_KEY`, `SESSION_KEY`, `pruneClosed` (`extension/lib/tab-ages.js`);
+  `ICONS` (`extension/ui/icons.js`);
+  `INLINE_SHOT_BUDGET_B64_CHARS`, `SHOTS_KEEP`, `jsonEcho`, `fmtAge`
+  (`mcp-server/shape.mjs`);
+  `schtasksExe`, `decodeMaybeUtf16` (`scripts/install-broker.mjs`);
+  `HOST_CMD_FILE`, `regExe`, `hostLauncherPath` (`scripts/install-host.mjs`);
+  `CLIENTS`, `portablePath`, `codexToml` (`scripts/install-mcp.mjs`);
+  `SLUG_RE` (`scripts/rename.mjs`);
+  `WALL_HEAD_CHARS` (`shared/visit-guard.mjs`).
+- `scripts/install-broker.mjs` no longer re-exports `TASK_NAME`; import it
+  from `shared/paths.mjs`, as every module here already does.
+
+### Removed
+
+- `IS_LINUX` from `shared/paths.mjs`, which nothing read.
+
 ## [1.5.0] - 2026-11-02
 
 Sign-in pages stay free of the debugger, and a local tool can have a web
