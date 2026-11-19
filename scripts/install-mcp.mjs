@@ -39,11 +39,12 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 
 import { MCP_SERVER_NAME } from '../shared/config.mjs'
 import { writeJsonAtomic } from '../shared/paths.mjs'
 import { PRODUCT_NAME } from '../shared/protocol.mjs'
+import { bold, dim, green, isMain, red, yellow } from './lib/cli.mjs'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -87,14 +88,6 @@ function codexToml() {
     '',
   ].join('\n')
 }
-
-const useColor = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR
-const paint = (code, s) => (useColor ? `\u001b[${code}m${s}\u001b[0m` : s)
-const bold = (s) => paint('1', s)
-const green = (s) => paint('32', s)
-const yellow = (s) => paint('33', s)
-const red = (s) => paint('31', s)
-const dim = (s) => paint('2', s)
 
 /* -------------------------------------------------------------------------- */
 
@@ -331,18 +324,6 @@ function reportShadows(shadows) {
 }
 
 /** Guard the entry point: doctor.mjs imports the constants above. */
-function isMain(metaUrl) {
-  try {
-    if (!process.argv[1]) return false
-    return (
-      fs.realpathSync(fileURLToPath(metaUrl)).toLowerCase() ===
-      fs.realpathSync(process.argv[1]).toLowerCase()
-    )
-  } catch {
-    return pathToFileURL(process.argv[1] || '').href === metaUrl
-  }
-}
-
 if (isMain(import.meta.url)) {
   process.exitCode = main(process.argv.slice(2))
 }

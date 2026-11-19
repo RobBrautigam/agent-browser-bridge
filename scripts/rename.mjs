@@ -21,10 +21,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { CONFIG_FILE, REPO_ROOT, loadConfig, validateConfig } from '../shared/config.mjs'
 import { writeJsonAtomic } from '../shared/paths.mjs'
+import { isMain } from './lib/cli.mjs'
 
 /**
  * 2 to 20 characters. The slug becomes the socket name and the state
@@ -111,18 +111,6 @@ checkout first, then run the installers again. Also rename the repo folder and
 the README title yourself; this script does not touch git or prose.
 `)
   return 0
-}
-
-function isMain(metaUrl) {
-  try {
-    if (!process.argv[1]) return false
-    return (
-      fs.realpathSync(fileURLToPath(metaUrl)).toLowerCase() ===
-      fs.realpathSync(process.argv[1]).toLowerCase()
-    )
-  } catch {
-    return pathToFileURL(process.argv[1] || '').href === metaUrl
-  }
 }
 
 if (isMain(import.meta.url)) {

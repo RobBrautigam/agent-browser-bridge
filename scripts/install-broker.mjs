@@ -61,17 +61,10 @@ import {
 } from '../shared/paths.mjs'
 import { LAUNCHD_LABEL, SYSTEMD_UNIT } from '../shared/config.mjs'
 import { PIPE_NAME, PRODUCT_NAME, PRODUCT_TAGLINE } from '../shared/protocol.mjs'
+import { bold, dim, green, isMain, red, yellow } from './lib/cli.mjs'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const BROKER_ENTRY = path.join(REPO_ROOT, 'bridged', 'index.mjs')
-
-const useColor = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR
-const paint = (code, s) => (useColor ? `\u001b[${code}m${s}\u001b[0m` : s)
-const bold = (s) => paint('1', s)
-const green = (s) => paint('32', s)
-const yellow = (s) => paint('33', s)
-const red = (s) => paint('31', s)
-const dim = (s) => paint('2', s)
 
 /* -------------------------------------------------------------------------- */
 /* schtasks helpers, exported for doctor.mjs                                   */
@@ -930,18 +923,6 @@ async function uninstallPosix() {
     console.log(yellow(`  a broker (pid ${runtime.pid}) is still answering; it was not started by the service, so it is left alone.`))
   }
   return 0
-}
-
-function isMain(metaUrl) {
-  try {
-    if (!process.argv[1]) return false
-    return (
-      fs.realpathSync(fileURLToPath(metaUrl)).toLowerCase() ===
-      fs.realpathSync(process.argv[1]).toLowerCase()
-    )
-  } catch {
-    return pathToFileURL(process.argv[1] || '').href === metaUrl
-  }
 }
 
 if (isMain(import.meta.url)) {

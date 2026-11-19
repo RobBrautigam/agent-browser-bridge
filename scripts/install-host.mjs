@@ -36,7 +36,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 
 import { idFromManifestKey, idFromPath, extensionOrigin } from '../shared/extid.mjs'
 import {
@@ -51,6 +51,7 @@ import {
   writeJsonAtomic,
 } from '../shared/paths.mjs'
 import { NATIVE_HOST_ID, PRODUCT_NAME, PRODUCT_TAGLINE } from '../shared/protocol.mjs'
+import { bold, dim, green, isMain, red, yellow } from './lib/cli.mjs'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 export const EXTENSION_DIR = path.join(REPO_ROOT, 'extension')
@@ -64,14 +65,6 @@ export const PLACEHOLDER = 'PLACEHOLDER_REPLACED_BY_KEYGEN'
 
 /** Full registry path of our one value (Windows). Chrome's key, which Brave falls back to. */
 export const HOST_REG_KEY = `${browserByVendor('chrome').registryKey}\\${NATIVE_HOST_ID}`
-
-const useColor = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR
-const paint = (code, s) => (useColor ? `\u001b[${code}m${s}\u001b[0m` : s)
-const bold = (s) => paint('1', s)
-const green = (s) => paint('32', s)
-const yellow = (s) => paint('33', s)
-const red = (s) => paint('31', s)
-const dim = (s) => paint('2', s)
 
 /* -------------------------------------------------------------------------- */
 /* Extension ID resolution, exported because doctor.mjs reports the same facts */
@@ -379,18 +372,6 @@ function main(argv) {
 }
 
 /** Guard the entry point: doctor.mjs imports the helpers above. */
-function isMain(metaUrl) {
-  try {
-    if (!process.argv[1]) return false
-    return (
-      fs.realpathSync(fileURLToPath(metaUrl)).toLowerCase() ===
-      fs.realpathSync(process.argv[1]).toLowerCase()
-    )
-  } catch {
-    return pathToFileURL(process.argv[1] || '').href === metaUrl
-  }
-}
-
 if (isMain(import.meta.url)) {
   process.exitCode = main(process.argv.slice(2))
 }
