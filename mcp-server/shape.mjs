@@ -42,7 +42,7 @@ import {
  * DESIGN.md section 9 calls this figure a starting estimate that session 2
  * must measure. Treat it as provisional until it has been.
  */
-export const INLINE_SHOT_BUDGET_B64_CHARS = 55_000
+const INLINE_SHOT_BUDGET_B64_CHARS = 55_000
 
 /** Default page-text page size. Roughly 5,000 tokens of prose. */
 export const DEFAULT_PAGE_MAX_CHARS = 20_000
@@ -799,7 +799,7 @@ export function renderScreenshot(result, { profile, tab, mode }) {
 }
 
 /** Screenshots kept on disk. Older ones are removed as new ones are written. */
-export const SHOTS_KEEP = 200
+const SHOTS_KEEP = 200
 
 function writeShot(b64, mime, profile, tab) {
   ensureBaseDir()
@@ -891,7 +891,7 @@ export function renderGroups(result, { profile } = {}) {
 }
 
 /** Compact JSON for a payload, or null when there is nothing worth showing. */
-export function jsonEcho(value) {
+function jsonEcho(value) {
   if (value == null) return null
   if (typeof value === 'string') return value.length ? value : null
   if (typeof value !== 'object') return String(value)
@@ -910,7 +910,7 @@ export function jsonEcho(value) {
 /* Small formatters                                                            */
 /* -------------------------------------------------------------------------- */
 
-export function fmtAge(ms) {
+function fmtAge(ms) {
   const n = Number(ms)
   if (!Number.isFinite(n) || n < 0) return 'unknown'
   const s = Math.round(n / 1000)

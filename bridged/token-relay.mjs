@@ -60,7 +60,7 @@ import path from 'node:path'
 import { BASE_DIR } from '../shared/paths.mjs'
 import { ERR, LABEL_PATTERN, TOKEN_RELAY, tokenVerdict } from '../shared/protocol.mjs'
 
-export const TOKEN_RELAY_FILE = path.join(BASE_DIR, 'token-relay.json')
+const TOKEN_RELAY_FILE = path.join(BASE_DIR, 'token-relay.json')
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/
 const HEADER_PATTERN = /^[A-Za-z0-9-]{1,64}$/

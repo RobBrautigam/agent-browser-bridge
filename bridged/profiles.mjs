@@ -403,7 +403,7 @@ function normalizeVendor(hint) {
  *
  * Anything other than exactly one hit means unclaimed.
  */
-export function matchProfileByEmail(candidates, email) {
+function matchProfileByEmail(candidates, email) {
   if (typeof email !== 'string' || !email.includes('@')) return null
   const needle = email.trim().toLowerCase()
   const hits = candidates.filter(
@@ -425,7 +425,7 @@ export function matchProfileByEmail(candidates, email) {
 export const SOURCE_IDENTITY_CHANGED = 'identity-changed'
 
 /** Prefix on every identity-drift warning, so the surfaces can find them. */
-export const IDENTITY_CHANGED_PREFIX = 'Identity changed: '
+const IDENTITY_CHANGED_PREFIX = 'Identity changed: '
 
 function clean(value) {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : null

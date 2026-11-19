@@ -31,7 +31,7 @@ import { writeJsonAtomic } from '../shared/paths.mjs'
  * directory name, and on macOS those two sit inside a Unix socket path that
  * is capped at about 104 bytes; see CONFIG_SHAPE in shared/config.mjs.
  */
-export const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,19}$/
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,19}$/
 
 /**
  * The config a rename produces, as a pure function so it can be tested.

@@ -54,7 +54,7 @@ export const MCP_ENTRY_NAME = MCP_SERVER_NAME
 export const MCP_SERVER_ENTRY = path.join(REPO_ROOT, 'mcp-server', 'index.mjs')
 
 /** Per-client config locations. Codex is TOML and is printed, never edited. */
-export const CLIENTS = Object.freeze({
+const CLIENTS = Object.freeze({
   claude: { label: 'Claude Code', file: path.join(os.homedir(), '.claude.json'), format: 'json' },
   cursor: { label: 'Cursor', file: path.join(os.homedir(), '.cursor', 'mcp.json'), format: 'json' },
   codex: { label: 'Codex', file: path.join(os.homedir(), '.codex', 'config.toml'), format: 'toml' },
@@ -64,7 +64,7 @@ export const CLIENTS = Object.freeze({
 export const CLAUDE_JSON = CLIENTS.claude.file
 
 /** Forward slashes, for a file humans hand-edit. */
-export function portablePath(p) {
+function portablePath(p) {
   return p.split(path.sep).join('/')
 }
 
@@ -79,7 +79,7 @@ export function desiredEntry() {
 }
 
 /** The Codex block, as TOML text. */
-export function codexToml() {
+function codexToml() {
   return [
     `[mcp_servers.${MCP_ENTRY_NAME}]`,
     'command = "node"',

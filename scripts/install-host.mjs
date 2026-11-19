@@ -58,7 +58,7 @@ const MANIFEST_FILE = path.join(EXTENSION_DIR, 'manifest.json')
 const HOST_ENTRY = path.join(REPO_ROOT, 'host', 'index.mjs')
 
 /** The browser-owned entry point on Windows. A .cmd shim because Node has no stable SEA yet. */
-export const HOST_CMD_FILE = path.join(REPO_ROOT, 'host', 'bridge-host.cmd')
+const HOST_CMD_FILE = path.join(REPO_ROOT, 'host', 'bridge-host.cmd')
 
 export const PLACEHOLDER = 'PLACEHOLDER_REPLACED_BY_KEYGEN'
 
@@ -124,7 +124,7 @@ export function resolveExtensionId({ manifest = null, extensionDir = EXTENSION_D
  * but an absolute path removes any chance of shadowing by something else named
  * `reg` earlier on PATH.
  */
-export function regExe() {
+function regExe() {
   const sysRoot = process.env.SystemRoot || process.env.windir
   if (sysRoot) {
     const abs = path.join(sysRoot, 'System32', 'reg.exe')
@@ -191,7 +191,7 @@ export function buildPosixShim({ node = process.execPath, hostEntry = HOST_ENTRY
 }
 
 /** The path the manifest points at on this platform. */
-export function hostLauncherPath() {
+function hostLauncherPath() {
   return IS_WINDOWS ? HOST_CMD_FILE : POSIX_HOST_SHIM_FILE
 }
 
