@@ -67,7 +67,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const BROKER_ENTRY = path.join(REPO_ROOT, 'bridged', 'index.mjs')
 
 /* -------------------------------------------------------------------------- */
-/* schtasks helpers, exported for doctor.mjs                                   */
+/* schtasks helpers; doctor.mjs and the tests import the exported ones        */
 /* -------------------------------------------------------------------------- */
 
 function schtasksExe() {

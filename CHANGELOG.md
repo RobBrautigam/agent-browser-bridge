@@ -16,13 +16,16 @@ replaces the one-time steps in the earlier entries.
 - Internal cleanup, with no change in what any tool, script or installer
   does. `scripts/lib/cli.mjs` now holds the scripts' one `isMain` entry-point
   guard and one set of terminal color helpers, which six and five scripts
-  carried as identical copies. `scripts/claim.mjs` still exports `isMain`.
+  carried as identical copies. `scripts/gate.mjs` and
+  `scripts/install-hooks.mjs` keep their own color helpers.
+  `scripts/claim.mjs` still exports `isMain`.
 - Names that no module imported are no longer exported. Each is still used
   inside its own file:
   `AUDIT_ROTATE_BYTES` (`bridged/audit.mjs`);
   `matchProfileByEmail`, `IDENTITY_CHANGED_PREFIX` (`bridged/profiles.mjs`);
   `routeKey`, `RAW_TAB_ARG_KEYS`, `COLLISION_PREFIX` (`bridged/routes.mjs`);
   `TOKEN_RELAY_FILE` (`bridged/token-relay.mjs`);
+  `countTabs` (`extension/lib/link.js`);
   `LEDGER_KEY`, `SESSION_KEY`, `pruneClosed` (`extension/lib/tab-ages.js`);
   `ICONS` (`extension/ui/icons.js`);
   `INLINE_SHOT_BUDGET_B64_CHARS`, `SHOTS_KEEP`, `jsonEcho`, `fmtAge`

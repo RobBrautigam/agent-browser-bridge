@@ -109,7 +109,7 @@ export function resolveExtensionId({ manifest = null, extensionDir = EXTENSION_D
 }
 
 /* -------------------------------------------------------------------------- */
-/* Registry helpers (Windows), exported because doctor.mjs asserts the same facts */
+/* Registry helpers (Windows); doctor.mjs imports the exported ones           */
 /* -------------------------------------------------------------------------- */
 
 /**
@@ -371,7 +371,7 @@ function main(argv) {
   return 0
 }
 
-/** Guard the entry point: doctor.mjs imports the helpers above. */
+// Guard the entry point: doctor.mjs imports the helpers above.
 if (isMain(import.meta.url)) {
   process.exitCode = main(process.argv.slice(2))
 }

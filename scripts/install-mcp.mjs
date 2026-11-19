@@ -323,7 +323,7 @@ function reportShadows(shadows) {
   )
 }
 
-/** Guard the entry point: doctor.mjs imports the constants above. */
+// Guard the entry point: doctor.mjs imports the constants above.
 if (isMain(import.meta.url)) {
   process.exitCode = main(process.argv.slice(2))
 }
