@@ -55,7 +55,7 @@ function shortHash(key) {
  * Windows paths are case-insensitive and two spellings of one directory must
  * not produce two routes.
  */
-export function routeKey(vendor, userDataDir, profileDir) {
+function routeKey(vendor, userDataDir, profileDir) {
   return `${vendor}|${String(userDataDir || '').toLowerCase()}|${profileDir}`
 }
 
@@ -72,7 +72,7 @@ export function unclaimedKey(installId) {
  * the route's profile and browser generation. A caller who sent them directly
  * would skip that check, so they are dropped before anything else is read.
  */
-export const RAW_TAB_ARG_KEYS = Object.freeze([RAW_TAB_ID_FIELD, 'tabIds'])
+const RAW_TAB_ARG_KEYS = Object.freeze([RAW_TAB_ID_FIELD, 'tabIds'])
 
 export function callerArgs(args) {
   const out = args && typeof args === 'object' && !Array.isArray(args) ? { ...args } : {}
@@ -456,7 +456,7 @@ export class RouteTable {
   }
 }
 
-export const COLLISION_PREFIX = 'Label collision: '
+const COLLISION_PREFIX = 'Label collision: '
 
 /**
  * The KNOWN BUT NOT CONNECTED profile holding a label, if any.

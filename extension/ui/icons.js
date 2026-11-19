@@ -24,7 +24,7 @@ const SVG_NS = 'http://www.w3.org/2000/svg'
  * Each icon is a list of [tagName, attributes] pairs applied verbatim.
  * Attributes not given inherit the stroke defaults set on the <svg> root.
  */
-export const ICONS = Object.freeze({
+const ICONS = Object.freeze({
   /* The mark. Faceplate, port ring, live center, patch cord to the corner. */
   jack: [
     ['rect', { x: 2.5, y: 2.5, width: 19, height: 19, rx: 5.5 }],

@@ -203,7 +203,7 @@ export function visitRefusal(url, depth = 0) {
 export const WALL_SHORT_CHARS = 3000
 
 /** Only the opening of a short page is read for wall wording. */
-export const WALL_HEAD_CHARS = 1500
+const WALL_HEAD_CHARS = 1500
 
 /**
  * Sign-in and checkpoint paths that mean the same thing on any site. Matched

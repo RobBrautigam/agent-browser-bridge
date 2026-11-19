@@ -28,7 +28,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import net from 'node:net'
 import { execFileSync } from 'node:child_process'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 
 import { idFromPath, extensionOrigin } from '../shared/extid.mjs'
 import { LAUNCHD_LABEL, SYSTEMD_UNIT } from '../shared/config.mjs'
@@ -87,6 +87,7 @@ import {
   taskHasRunningInstance,
 } from './install-broker.mjs'
 import { CLAUDE_JSON, MCP_ENTRY_NAME, MCP_SERVER_ENTRY, desiredEntry } from './install-mcp.mjs'
+import { bold, cyan, dim, green, isMain, red, yellow } from './lib/cli.mjs'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const EXTENSION_DIR = path.join(REPO_ROOT, 'extension')
@@ -94,15 +95,6 @@ const MANIFEST_FILE = path.join(EXTENSION_DIR, 'manifest.json')
 const NODE_MODULES = path.join(REPO_ROOT, 'node_modules')
 const PLACEHOLDER = 'PLACEHOLDER_REPLACED_BY_KEYGEN'
 const REQUIRED_NODE_MAJOR = 22
-
-const useColor = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR
-const paint = (code, s) => (useColor ? `\u001b[${code}m${s}\u001b[0m` : s)
-const bold = (s) => paint('1', s)
-const green = (s) => paint('32', s)
-const yellow = (s) => paint('33', s)
-const red = (s) => paint('31', s)
-const cyan = (s) => paint('36', s)
-const dim = (s) => paint('2', s)
 
 /* -------------------------------------------------------------------------- */
 /* Reporting                                                                   */
@@ -1085,18 +1077,6 @@ function samePath(a, b) {
 
 function firstLine(s) {
   return String(s).split('\n')[0].trim()
-}
-
-function isMain(metaUrl) {
-  try {
-    if (!process.argv[1]) return false
-    return (
-      fs.realpathSync(fileURLToPath(metaUrl)).toLowerCase() ===
-      fs.realpathSync(process.argv[1]).toLowerCase()
-    )
-  } catch {
-    return pathToFileURL(process.argv[1] || '').href === metaUrl
-  }
 }
 
 // Only as a script, so the tests can import the pure checks above without

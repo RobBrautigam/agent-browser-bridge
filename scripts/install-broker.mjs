@@ -61,34 +61,16 @@ import {
 } from '../shared/paths.mjs'
 import { LAUNCHD_LABEL, SYSTEMD_UNIT } from '../shared/config.mjs'
 import { PIPE_NAME, PRODUCT_NAME, PRODUCT_TAGLINE } from '../shared/protocol.mjs'
+import { bold, dim, green, isMain, red, yellow } from './lib/cli.mjs'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const BROKER_ENTRY = path.join(REPO_ROOT, 'bridged', 'index.mjs')
 
-/**
- * The scheduled task's name comes from the shared contract, never from a local
- * literal. Five call sites had independently typed this string and it already
- * disagreed with the docs, which is a class of bug where the installer creates
- * one task and the diagnostic looks for another.
- *
- * Re-exported so the existing import in doctor.mjs and anything else reaching
- * for it here keeps resolving to the same single value.
- */
-export { TASK_NAME }
-
-const useColor = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR
-const paint = (code, s) => (useColor ? `\u001b[${code}m${s}\u001b[0m` : s)
-const bold = (s) => paint('1', s)
-const green = (s) => paint('32', s)
-const yellow = (s) => paint('33', s)
-const red = (s) => paint('31', s)
-const dim = (s) => paint('2', s)
-
 /* -------------------------------------------------------------------------- */
-/* schtasks helpers, exported for doctor.mjs                                   */
+/* schtasks helpers; doctor.mjs and the tests import the exported ones        */
 /* -------------------------------------------------------------------------- */
 
-export function schtasksExe() {
+function schtasksExe() {
   const sysRoot = process.env.SystemRoot || process.env.windir
   if (sysRoot) {
     const abs = path.join(sysRoot, 'System32', 'schtasks.exe')
@@ -120,7 +102,7 @@ export function wscriptExe() {
  * healthy task into a "cannot parse" diagnostic, which is the opposite of the
  * point.
  */
-export function decodeMaybeUtf16(buf) {
+function decodeMaybeUtf16(buf) {
   if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) return buf.subarray(2).toString('utf16le')
   // Heuristic: ASCII text encoded UTF-16LE has a NUL in every odd position.
   if (buf.length >= 8 && buf[1] === 0x00 && buf[3] === 0x00 && buf[5] === 0x00) {
@@ -941,18 +923,6 @@ async function uninstallPosix() {
     console.log(yellow(`  a broker (pid ${runtime.pid}) is still answering; it was not started by the service, so it is left alone.`))
   }
   return 0
-}
-
-function isMain(metaUrl) {
-  try {
-    if (!process.argv[1]) return false
-    return (
-      fs.realpathSync(fileURLToPath(metaUrl)).toLowerCase() ===
-      fs.realpathSync(process.argv[1]).toLowerCase()
-    )
-  } catch {
-    return pathToFileURL(process.argv[1] || '').href === metaUrl
-  }
 }
 
 if (isMain(import.meta.url)) {

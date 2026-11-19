@@ -24,10 +24,10 @@
 import { describeWindowSort, planWindowSort } from './protocol.js'
 
 /** chrome.storage.local: tab id -> { at, w, i, u }. */
-export const LEDGER_KEY = 'ages.opened'
+const LEDGER_KEY = 'ages.opened'
 
 /** chrome.storage.session: set once the ledger has been re-keyed in this browser session. */
-export const SESSION_KEY = 'ages.sessionKeyed'
+const SESSION_KEY = 'ages.sessionKeyed'
 /** How long before its created event a tab may have been last shown and still count as new. */
 export const RESTORED_SLACK_MS = 60_000
 
@@ -101,7 +101,7 @@ export function refreshPositions(ledger, tabs) {
 }
 
 /** Drop entries for tabs that are not open. Only used past LEDGER_SOFT_CAP. */
-export function pruneClosed(ledger, tabs) {
+function pruneClosed(ledger, tabs) {
   const open = new Set(tabs.map((t) => String(t.id)))
   const next = {}
   for (const [key, entry] of Object.entries(ledger)) if (open.has(key)) next[key] = entry

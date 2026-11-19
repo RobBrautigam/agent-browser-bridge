@@ -311,7 +311,7 @@ export async function getInstallId() {
   return id
 }
 
-export async function countTabs() {
+async function countTabs() {
   try {
     const tabs = await chrome.tabs.query({})
     return tabs.length

@@ -34,6 +34,7 @@ import {
 } from '../shared/extid.mjs'
 import { BASE_DIR, ensureBaseDir, readJson, restrictToCurrentUser, writeJsonAtomic } from '../shared/paths.mjs'
 import { PRODUCT_NAME } from '../shared/protocol.mjs'
+import { bold, dim, green, red, yellow } from './lib/cli.mjs'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const EXTENSION_DIR = path.join(REPO_ROOT, 'extension')
@@ -44,14 +45,6 @@ const PLACEHOLDER = 'PLACEHOLDER_REPLACED_BY_KEYGEN'
 
 const KEY_PEM_FILE = path.join(BASE_DIR, 'extension-key.pem')
 const KEY_META_FILE = path.join(BASE_DIR, 'extension-key.json')
-
-const useColor = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR
-const paint = (code, s) => (useColor ? `\u001b[${code}m${s}\u001b[0m` : s)
-const bold = (s) => paint('1', s)
-const green = (s) => paint('32', s)
-const yellow = (s) => paint('33', s)
-const red = (s) => paint('31', s)
-const dim = (s) => paint('2', s)
 
 function usage() {
   console.log(`

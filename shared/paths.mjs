@@ -42,7 +42,6 @@ export const PLATFORM =
   process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux'
 export const IS_WINDOWS = PLATFORM === 'win32'
 export const IS_MAC = PLATFORM === 'darwin'
-export const IS_LINUX = PLATFORM === 'linux'
 
 const HOME = os.homedir()
 const LOCALAPPDATA = process.env.LOCALAPPDATA || path.join(HOME, 'AppData', 'Local')

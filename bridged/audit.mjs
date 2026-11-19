@@ -36,7 +36,7 @@ import { AUDIT_FILE } from '../shared/paths.mjs'
 import { originOf } from '../shared/protocol.mjs'
 
 /** Rotate at 5 MB into a single `.1` sibling. One generation is enough to cover a session. */
-export const AUDIT_ROTATE_BYTES = 5 * 1024 * 1024
+const AUDIT_ROTATE_BYTES = 5 * 1024 * 1024
 
 /**
  * The only shape an error may take in the log. Anything that is not a typed

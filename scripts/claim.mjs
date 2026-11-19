@@ -37,12 +37,10 @@
  * lets an agent connection originate it (shared/protocol.mjs).
  */
 
-import fs from 'node:fs'
-import { fileURLToPath, pathToFileURL } from 'node:url'
-
 import { BrokerClient } from '../mcp-server/client.mjs'
 import { explainError, renderBoard as renderLines } from '../mcp-server/shape.mjs'
 import { OPS, PRODUCT_NAME } from '../shared/protocol.mjs'
+import { isMain } from './lib/cli.mjs'
 
 /**
  * How long one broker request may take from a one-shot command. A local pipe
@@ -296,18 +294,8 @@ function describeCandidates(candidates) {
     .join('; ')
 }
 
-/** Is this module the process entry point? Shared with scripts/label.mjs. */
-export function isMain(metaUrl) {
-  try {
-    if (!process.argv[1]) return false
-    return (
-      fs.realpathSync(fileURLToPath(metaUrl)).toLowerCase() ===
-      fs.realpathSync(process.argv[1]).toLowerCase()
-    )
-  } catch {
-    return pathToFileURL(process.argv[1] || '').href === metaUrl
-  }
-}
+/** The entry-point guard lives in lib/cli.mjs; the scripts that import it from here still can. */
+export { isMain }
 
 /* -------------------------------------------------------------------------- */
 /* Entry point                                                                 */
