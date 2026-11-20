@@ -7,7 +7,7 @@
  *
  *   native modules   ABI-locked to one Node major. This is the exact defect
  *                    that made the incumbent break on a Node upgrade.
- *   dependencies     the same failure class one level up. Five dependencies is
+ *   dependencies     the same failure class one level up. Two dependencies is
  *                    a claim the README makes; an allowlist is what keeps it
  *                    true when someone reaches for a convenience package.
  *   chrome.cookies   the one API that would turn a browser bridge into a

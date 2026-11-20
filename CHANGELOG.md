@@ -42,6 +42,14 @@ replaces the one-time steps in the earlier entries.
 
 - `IS_LINUX` from `shared/paths.mjs`, which nothing read.
 
+### Documentation
+
+- The README, `AGENTS.md`, `CONTRIBUTING.md` and `docs/DESIGN.md` were
+  corrected where they no longer matched the code, among them the gate's
+  rule list, the host count, the OAuth grant words and what CI runs on
+  Linux. A new test, `test/contributing-gate-list.test.mjs`, fails when a
+  gate rule has no bullet in CONTRIBUTING.md's list.
+
 ## [1.5.0] - 2026-11-02
 
 Sign-in pages stay free of the debugger, and a local tool can have a web
