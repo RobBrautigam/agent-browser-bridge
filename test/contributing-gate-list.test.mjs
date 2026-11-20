@@ -41,14 +41,19 @@ const BULLET_FOR_RULE = {
   'debugger-permission': /`debugger` missing from the manifest's `permissions`/,
 }
 
-/** Every `id: '...'` the gate declares, in its line rules, file rules and checks. */
-function gateRuleIds(source) {
-  return [...source.matchAll(/^\s*id:\s*['"`]([^'"`]+)['"`]/gm)].map((m) => m[1])
-}
+/**
+ * An `id` key (bare or quoted) that opens a line or follows `{` or `,`, so a
+ * rule declared over several lines and one written on a single line both
+ * count. Every `id` key in gate.mjs is a rule's.
+ */
+const ID_KEY = /(?:^[ \t]*|[{,][ \t]*)['"]?id['"]?[ \t]*:\s*(['"`])([^'"`\n]+)\1/gm
+/** The same key with a value that is not a string literal, which text cannot read. */
+const ID_KEY_NOT_LITERAL = /(?:^[ \t]*|[{,][ \t]*)['"]?id['"]?[ \t]*:\s*(?![\s'"`]).*/gm
 
 /**
  * The bullets of the list that follows "It fails on:", each with its
- * continuation lines joined on, or null when there is no such list.
+ * continuation lines joined on, or null when there is no such line. Blank
+ * lines between bullets are skipped; the list ends at the first other line.
  */
 function failsOnBullets(markdown) {
   const lines = markdown.split(/\r?\n/)
@@ -56,24 +61,36 @@ function failsOnBullets(markdown) {
   if (start < 0) return null
   const bullets = []
   for (const line of lines.slice(start + 1)) {
-    if (line.startsWith('- ')) bullets.push(line.slice(2).trim())
+    const bullet = line.match(/^[-*+][ \t]+(\S.*)$/)
+    if (bullet) bullets.push(bullet[1].trim())
+    else if (line.trim() === '') continue
     else if (bullets.length > 0 && /^\s+\S/.test(line)) bullets[bullets.length - 1] += ` ${line.trim()}`
-    else if (bullets.length === 0 && line.trim() === '') continue
     else break
   }
   return bullets
 }
 
-const ids = gateRuleIds(fs.readFileSync(GATE_FILE, 'utf8'))
+const gateSource = fs.readFileSync(GATE_FILE, 'utf8')
+const ids = [...gateSource.matchAll(ID_KEY)].map((m) => m[2])
 const bullets = failsOnBullets(fs.readFileSync(CONTRIBUTING_FILE, 'utf8'))
 
 test('the gate declares its rules where this test can read them', () => {
-  assert.ok(ids.length > 0, 'no `id:` line found in scripts/gate.mjs; this test reads the rule ids from there')
+  assert.ok(ids.length > 0, 'no `id` key found in scripts/gate.mjs; this test reads the rule ids from there')
   assert.equal(new Set(ids).size, ids.length, `a rule id appears twice in scripts/gate.mjs: ${ids.join(', ')}`)
+  const unreadable = [...gateSource.matchAll(ID_KEY_NOT_LITERAL)].map((m) => m[0].trim())
+  assert.deepEqual(
+    unreadable,
+    [],
+    'scripts/gate.mjs has an `id` whose value is not a string literal; this test reads rule ids as text, ' +
+      'so write the id as a literal'
+  )
 })
 
 test('CONTRIBUTING.md has the "It fails on:" list', () => {
-  assert.ok(bullets && bullets.length > 0, 'CONTRIBUTING.md has no bullet list after a line ending "It fails on:"')
+  assert.ok(
+    bullets && bullets.length > 0,
+    'CONTRIBUTING.md has no bullet list (lines opening "- ", "* " or "+ ") after a line ending "It fails on:"'
+  )
 })
 
 test('every rule the gate runs has a bullet under "It fails on:"', () => {
