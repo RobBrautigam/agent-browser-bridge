@@ -934,7 +934,11 @@ afterwards.
 npm test                 # unit tests, node --test, no framework
 npm run gate             # the security rules, mechanically enforced
 npm run doctor           # diagnose an install
-npm run e2e              # the whole chain, against a real Brave and a throwaway profile
+npm run e2e              # the whole chain, against a real Brave and a throwaway profile;
+                         # it moves the broker's state.json aside and, on Windows,
+                         # disables and stops the installed broker's scheduled task for
+                         # the run; a finished run puts both back, but not under --keep
+                         # or when it is interrupted (Ctrl+C) or killed
 npm run reload           # reload the extension in every profile that is behind
 npm run hooks:install    # the gate before every commit, and the commit-message guard
 ```
