@@ -27,7 +27,11 @@ written down, so the fastest way to a merged change is to read them first.
 - a literal color outside `extension/ui/tokens.css`
 - inline scripts or `on*` handler attributes in extension HTML
 - an em dash character in any text file
-- `extension/lib/config.js` or the manifest drifting from `bridge.config.json`
+- `extension/lib/config.js`, the manifest or `package.json` drifting from
+  `bridge.config.json`
+- `extension/lib/protocol.js` drifting from `shared/protocol.mjs`
+- `debugger` missing from the manifest's `permissions`, or any
+  `optional_permissions` key in the manifest (Chromium refuses `debugger` there)
 
 Every one of those exists because the mistake it catches is invisible in
 review and expensive at runtime. Do not add an exception; fix the cause.

@@ -12,8 +12,10 @@ agent session  ->  MCP server  ->  broker  ->  host  ->  extension  ->  your act
 ```
 
 **Contents:** [Why your real browser](#why-your-real-browser) |
+[What is new in 1.5.0](#what-is-new-in-150) |
 [What is new in 1.4.0](#what-is-new-in-140) | [Quick start](#quick-start) |
 [Use cases](#use-cases) | [How it works](#how-it-works) | [Install](#install) |
+[Updating](#updating) |
 [The tools](#the-tools) | [Scripts](#scripts-for-a-shell-or-a-scheduled-job) |
 [Using it well](#using-it-well) | [Security](#security) |
 [Platforms](#platforms) | [Development](#development) |
@@ -576,7 +578,8 @@ when it is:
   `authorize`, `consent`, `delete`, `deactivate`, `confirm`, `activate` or
   `verify-email` (with or without the hyphen, or with an underscore, in any
   case, with an extension or `;` parameters after it); an `oauth` or `oauth2`
-  segment followed by a grant segment (`auth`, `authorize`, `token`); a story
+  segment followed by a grant segment (`auth`, `authorize`, `token`, `consent`,
+  `approve`); a story
   on Instagram or Facebook, where opening it records the viewer; or a query
   parameter whose name or whole value signs out or unsubscribes
   (`?action=logout`);
@@ -905,9 +908,11 @@ Stated plainly, because a security model nobody believes is worse than none.
 - **Windows** is the reference platform. The whole chain, including the
   end-to-end harness against a real browser, has been run there.
 - **macOS and Linux** follow Chromium's documented native messaging locations
-  and the platform's standard supervisor. The code paths are written and
-  unit-tested, but have not yet been exercised on a real Mac or Linux
-  machine. Reports and fixes are welcome; `--dry-run` on every installer shows
+  and the platform's standard supervisor. On Linux, CI runs the whole test
+  suite on every pull request, the real broker and host over a Unix socket
+  included; the installers' writes, the systemd supervisor and a real browser
+  have not yet been exercised there, and nothing has yet been exercised on a
+  real Mac. Reports and fixes are welcome; `--dry-run` on every installer shows
   exactly what would be written before anything is.
 
 ## Renaming it
