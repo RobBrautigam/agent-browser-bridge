@@ -35,6 +35,14 @@
  *                    on* handler attributes. The page loads, the handler never
  *                    fires, and the only evidence is a console message in a
  *                    window nobody has open.
+ *   config sync      the extension cannot read bridge.config.json, so its copy
+ *                    of the product identity is generated, as are the identity
+ *                    fields of the manifest and package.json. An edit that
+ *                    skips sync-config drifts silently: a drifted native host id
+ *                    is not the one the installer registers.
+ *   protocol mirror  the extension cannot import shared/protocol.mjs, so
+ *                    extension/lib/protocol.js mirrors it by hand. A drift is a
+ *                    silent wire incompatibility, not a load error.
  *
  * SELF-EXCLUSION: this file necessarily contains every forbidden string it
  * looks for, so it excludes itself from the text scans. Nothing else is
