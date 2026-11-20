@@ -1,13 +1,13 @@
 # AGENTS.md
 
 A brief for a coding agent working in this repository. People: start with
-[README.md](README.md) and [CONTRIBUTING.md](CONTRIBUTING.md); everything here
-is said at more length there.
+[README.md](README.md) and [CONTRIBUTING.md](CONTRIBUTING.md); most of what is
+here is said at more length there.
 
 ## What this is
 
 A bridge from AI agents to real, signed-in Chrome and Brave profiles: an MV3
-extension per profile, a native messaging host per browser, one always-on
+extension per profile, a native messaging host process per profile, one always-on
 broker, and a stdio MCP server per agent session. Pure ESM, Node 22, no build
 step. The reasoning behind the shape is [docs/DESIGN.md](docs/DESIGN.md); the
 threat model is [SECURITY.md](SECURITY.md).
@@ -31,7 +31,8 @@ you mean to.
 - No dependency beyond `zod` and `@modelcontextprotocol/server`, and no native module.
 - No `console.log` in `host/` or `mcp-server/`: stdout is protocol there.
 - No em dash in any text file.
-- The product's name lives only in `bridge.config.json`.
+- The product's name lives in `bridge.config.json`; `extension/lib/config.js`,
+  the manifest and `package.json` never drift from it (`npm run sync-config`).
 - `extension/lib/protocol.js` mirrors `shared/protocol.mjs`.
 
 ## Conventions
