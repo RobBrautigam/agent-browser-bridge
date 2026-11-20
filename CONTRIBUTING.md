@@ -62,7 +62,10 @@ npm ci
 npm test                 # unit tests, node --test, no framework
 npm run gate             # the rules above
 npm run doctor           # diagnose an install on this machine
-npm run e2e              # the whole chain against a real browser and a throwaway profile
+npm run e2e              # the whole chain against a real browser and a throwaway profile;
+                         # it moves the broker's state.json aside and, on Windows, stops
+                         # the installed broker's scheduled task for the run; a finished
+                         # run puts both back, but not under --keep or when it is killed
 ```
 
 `e2e` needs the host registered (`node scripts/install-host.mjs`) and a Brave

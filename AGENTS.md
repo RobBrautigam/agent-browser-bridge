@@ -21,8 +21,14 @@ npm run gate        # the mechanical rules below
 npm run hooks:install
 ```
 
-`npm run e2e` drives a real browser with a throwaway profile; run it only when
-you mean to.
+`npm run e2e` drives a real browser with a throwaway profile, against a broker
+of its own on the installed broker's endpoint and state folder; run it only
+when you mean to. On Windows it disables and ends the installed broker's
+scheduled task when that task is running, stopping that broker for the run; on
+macOS and Linux it refuses while an installed broker answers. It moves the state
+folder's `state.json` aside, and a run that finishes, pass or fail, puts it and
+the task back as it found them. `--keep`, or a kill before the end, restores
+neither; the copy stays at `state.json.e2e-backup`.
 
 ## Rules the gate enforces (do not add exceptions)
 
