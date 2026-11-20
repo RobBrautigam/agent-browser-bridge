@@ -31,7 +31,7 @@
  * exactly that. Chrome reading its OWN key is the least doubtful link in the
  * chain, and is confirmed by hand once the extension is loaded in a profile.
  *
- * Prerequisites: node scripts/keygen.mjs and node scripts/install-host.mjs.
+ * Prerequisites: node scripts/install-host.mjs and a Brave binary.
  * The broker is started by this script; the scheduled task is not needed.
  */
 
