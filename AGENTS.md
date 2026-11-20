@@ -49,6 +49,10 @@ you mean to.
   behavior gets a test that fails without it.
 - One version across `package.json`, `package-lock.json` and
   `extension/manifest.json`, with a CHANGELOG entry.
+- Never type the product's name into a source file (a test fixture aside); read
+  it from `shared/config.mjs` (Node side) or the generated
+  `extension/lib/config.js` (extension side). `npm run rename` rewrites only
+  `bridge.config.json` and what `npm run sync-config` writes from it.
 - Commit messages carry no `Co-Authored-By:` trailer and no tool attribution
   line; the `commit-msg` hook refuses both.
 
